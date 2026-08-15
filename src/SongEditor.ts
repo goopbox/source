@@ -58,6 +58,7 @@ import { OctaveScrollBar } from "./OctaveScrollBar.js";
 import { KeyboardLayout } from "./KeyboardLayout.js";
 import { Piano } from "./Piano.js";
 import { MoveNotesSidewaysPrompt } from "./MoveNotesSidewaysPrompt.js";
+import { BeatsPerBarPrompt } from "./BeatsPerBarPrompt.js";
 import { SustainPrompt } from "./SustainPrompt.js";
 import { ExportPrompt } from "./ExportPrompt.js";
 import { ImportFile } from "./Import.js";
@@ -640,6 +641,7 @@ export class SongEditor {
     option({ value: "transposeUp" }, "Move Notes Up (+ or ⇧+)"),
     option({ value: "transposeDown" }, "Move Notes Down (- or ⇧-)"),
     option({ value: "moveNotesSideways" }, "Move All Notes Sideways"),
+    option({ value: "beatsPerBar" }, "Change Beats Per Bar..."),
     option({ value: "assets" }, "Add Assets (⇧Q)"),
   );
   private readonly _preferencesButton: HTMLButtonElement = button(
@@ -2040,6 +2042,9 @@ export class SongEditor {
           break;
         case "moveNotesSideways":
           this.prompt = new MoveNotesSidewaysPrompt(this.doc);
+          break;
+        case "beatsPerBar":
+          this.prompt = new BeatsPerBarPrompt(this.doc);
           break;
         case "preferences":
           this.prompt = new PreferencesPrompt(this.doc);
@@ -3774,6 +3779,9 @@ export class SongEditor {
         break;
       case "moveNotesSideways":
         this._openPrompt("moveNotesSideways");
+        break;
+      case "beatsPerBar":
+        this._openPrompt("beatsPerBar");
         break;
       case "assets":
         this._openPrompt("assets");
