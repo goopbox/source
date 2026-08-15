@@ -5,7 +5,7 @@ import type { Prompt } from "./Prompt.js";
 import { SongDocument } from "./SongDocument.js";
 import { TabbedSearchablePrompt } from "./TabbedSearchablePrompt.js";
 
-const { a, div, h2, h3, p } = HTML;
+const { a, div, h2, p } = HTML;
 
 const goopboxFeatures: ReadonlyArray<string> = [
   "Interface redesign",
