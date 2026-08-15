@@ -1,0 +1,4 @@
+interface:
+  display_name: "Document goopbox features"
+  short_description: "Maintain the goopbox feature-title grid"
+  default_prompt: "Use $document-goopbox-features to document the completed feature from this turn."

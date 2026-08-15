@@ -1,0 +1,68 @@
+html:not([data-layout="tall"]) .app {
+    padding: 4px 4px 0;
+    grid-template-columns: minmax(0, 1fr) minmax(22rem, 0.4fr);
+    grid-template-rows: minmax(6rem, 1fr) minmax(9rem, 0.6fr);
+    grid-template-areas: "pattern-area settings-area" "track-area track-area";
+    gap: 4px;
+}
+
+html:not([data-layout="tall"]) .instrument-settings-area {
+    overflow-y: auto;
+    position: relative;
+}
+
+html:not([data-layout="tall"]) .song-settings-area {
+    overflow-y: auto;
+}
+
+html:not([data-layout="tall"]) .settings-area {
+    width: auto;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-rows: auto auto minmax(0, 1fr);
+    grid-column-gap: 4px;
+    grid-template-areas:
+        "instrument-settings-area play-pause-area"
+        "instrument-settings-area menu-area"
+        "instrument-settings-area song-settings-area";
+}
+
+html[data-layout="tall"] .app {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) var(--settings-area-width);
+    grid-template-rows: 1fr;
+    grid-template-areas: "track-area pattern-area settings-area";
+}
+
+html[data-layout="tall"] .track-area {
+    height: 100%;
+    justify-content: center;
+}
+
+html[data-layout="tall"] .trackAndMuteContainer {
+    flex: 0 1 auto;
+}
+
+html[data-layout="tall"] .settings-area {
+    position: relative;
+    overflow-y: auto;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto auto auto minmax(0, 1fr);
+    grid-template-areas:
+        "play-pause-area"
+        "menu-area"
+        "song-settings-area"
+        "instrument-settings-area";
+}
+
+html[data-layout="tall"] .play-pause-area {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    background: var(--background);
+}
+
+html[data-layout="tall"] .menu-area {
+    position: sticky;
+    top: 60px;
+    z-index: 1;
+    background: var(--background);
+}

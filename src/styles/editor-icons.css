@@ -1,0 +1,274 @@
+:where(
+    .playButton,
+    .pauseButton,
+    .recordButton,
+    .stopButton,
+    .prevBarButton,
+    .nextBarButton,
+    .cancelButton,
+    .okayButton,
+    .exportButton,
+    .remove-instrument,
+    .add-instrument,
+    .customize-instrument,
+    .copy-instrument,
+    .paste-instrument,
+    .effects-menu,
+    .zoomInButton,
+    .zoomOutButton,
+    .delete-envelope,
+    .menu.preferences
+)::before {
+    content: "";
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: var(--icon-width, var(--button-size));
+    height: var(--button-size);
+    pointer-events: none;
+    background: currentColor;
+    -webkit-mask: var(--icon) no-repeat center;
+    mask: var(--icon) no-repeat center;
+}
+
+:where(
+    .playButton,
+    .pauseButton,
+    .recordButton,
+    .stopButton,
+    .customize-instrument,
+    .copy-instrument,
+    .paste-instrument,
+    .menu.preferences
+)::before {
+    top: 50%;
+    transform: translateY(-50%);
+}
+
+:is(.prevBarButton, .nextBarButton)::before {
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+}
+
+.playButton {
+    --icon: var(--play-symbol);
+}
+.pauseButton {
+    --icon: var(--pause-symbol);
+}
+.recordButton {
+    --icon: var(--record-symbol);
+}
+.stopButton {
+    --icon: var(--stop-symbol);
+}
+.prevBarButton {
+    --icon: var(--prev-bar-symbol);
+}
+.nextBarButton {
+    --icon: var(--next-bar-symbol);
+}
+:is(.cancelButton, .remove-instrument, .delete-envelope) {
+    --icon: var(--close-symbol);
+}
+.okayButton {
+    --icon: var(--checkmark-symbol);
+}
+.exportButton {
+    --icon: var(--export-symbol);
+}
+.add-instrument {
+    --icon: var(--add-symbol);
+}
+:is(.remove-instrument, .add-instrument) {
+    --icon-width: 100%;
+}
+.customize-instrument {
+    --icon: var(--customize-dial-symbol);
+}
+.copy-instrument {
+    --icon: var(--instrument-copy-symbol);
+}
+.paste-instrument {
+    --icon: var(--instrument-paste-symbol);
+}
+.effects-menu {
+    --icon: var(--menu-down-symbol);
+}
+.zoomInButton {
+    --icon: var(--zoom-in-symbol);
+}
+.zoomOutButton {
+    --icon: var(--zoom-out-symbol);
+}
+.menu.preferences {
+    --icon: var(--preferences-gear-symbol);
+}
+
+.menu-icon {
+    position: relative;
+}
+
+.menu-icon::before {
+    content: "";
+    position: absolute;
+    z-index: 1;
+    left: 0;
+    top: 50%;
+    transform: translateY(-50%);
+    width: var(--button-size);
+    height: var(--button-size);
+    pointer-events: none;
+    background: currentColor;
+    -webkit-mask: var(--icon) no-repeat center;
+    mask: var(--icon) no-repeat center;
+}
+
+.menu-icon.file {
+    --icon: var(--file-page-symbol);
+}
+
+.menu-icon.edit {
+    --icon: var(--edit-pencil-symbol);
+}
+
+.pitch-button {
+    flex: 1;
+    align-items: center;
+    background-image: linear-gradient(90deg, rgb(0 0 0 / 10%), transparent);
+    box-shadow:
+        inset 0 1px rgb(255 255 255 / 40%),
+        inset -1px -1px rgb(0 0 0 / 70%);
+    margin: 0.25px 0;
+}
+
+.pitch-label {
+    position: absolute;
+    padding-left: 15px;
+    font: bold 11px sans-serif;
+    -webkit-text-stroke-width: 0;
+}
+
+.pitch-button.disabled::after {
+    content: "";
+    position: absolute;
+    top: 0;
+    height: 100%;
+    pointer-events: none;
+}
+.pitch-button.disabled::after {
+    right: 0;
+    width: 70%;
+    background: var(--background);
+    -webkit-mask: linear-gradient(90deg, transparent 0%, gray 70%, gray 100%)
+        no-repeat center;
+    mask: linear-gradient(90deg, transparent 0%, gray 70%, gray 100%) no-repeat
+        center;
+}
+
+.pitch-button.pressed {
+    filter: brightness(0.5);
+}
+
+.customize-instrument {
+    margin: 2px 0;
+}
+
+.instrumentActionRow {
+    gap: 2px;
+}
+
+.instrumentActionRow > button {
+    flex-grow: 1;
+}
+
+.envelope-row {
+    margin: 2px 0;
+    gap: 2px;
+    align-items: center;
+}
+
+.envelope-parameters {
+    margin: 2px 0 6px;
+}
+
+.envelope-parameter {
+    display: grid;
+    grid-template-columns: 3.5em minmax(0, 1fr) 4em;
+    gap: 6px;
+    align-items: center;
+    margin: 2px 0;
+}
+
+.envelope-parameter label {
+    color: var(--secondary-text);
+}
+
+.envelope-value-input {
+    min-width: 0;
+    width: 100%;
+}
+
+.effects-menu {
+    width: var(--button-size);
+}
+
+.zoomInButton,
+.zoomOutButton {
+    width: var(--button-size);
+    position: absolute;
+    right: 10px;
+}
+.zoomInButton {
+    top: 10px;
+}
+.zoomOutButton {
+    top: 50px;
+}
+
+.delete-envelope {
+    width: var(--button-size);
+    flex-shrink: 0;
+    flex-grow: 0;
+}
+.delete-envelope:disabled {
+    visibility: hidden;
+}
+
+.menu.about::before {
+    content: "?";
+    flex-shrink: 0;
+    position: absolute;
+    left: 0;
+    top: 50%;
+    transform: translateY(-50%);
+    pointer-events: none;
+    width: var(--button-size);
+    height: var(--button-size);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.2em;
+    font-weight: bold;
+}
+
+.mute-button::before,
+.instrument-volume-icon {
+    -webkit-mask: var(--unmuted-symbol) no-repeat center / contain;
+    mask: var(--unmuted-symbol) no-repeat center / contain;
+}
+
+.mute-button::before {
+    content: "";
+    pointer-events: none;
+    width: 100%;
+    height: 100%;
+    background: var(--text);
+    display: inline-block;
+}
+
+.mute-button.muted::before {
+    -webkit-mask-image: var(--muted-symbol);
+    mask-image: var(--muted-symbol);
+}

@@ -1,0 +1,42 @@
+// Copyright (c) John Nesky and contributing authors, distributed under the MIT license, see accompanying the LICENSE.md file.
+
+export {
+  type Dictionary,
+  type DictionaryArray,
+  EnvelopeType,
+  InstrumentType,
+  type Transition,
+  type Chord,
+  type Envelope,
+  Config,
+} from "../synth/SynthConfig.js";
+export { EditorConfig } from "./EditorConfig.js";
+export { ColorConfig } from "./ColorConfig.js";
+
+export { SongEditor } from "./SongEditor.js";
+export {
+  type NotePin,
+  Note,
+  Pattern,
+  Instrument,
+  Channel,
+  Song,
+  SynthEngine,
+} from "../synth/synth.js";
+export { SynthController as Synth } from "../synth/SynthController.js";
+export { SongDocument } from "./SongDocument.js";
+export { ExportPrompt } from "./ExportPrompt.js";
+export { ChangePreset } from "./changes.js";
+export {
+  fastFourierTransform,
+  forwardRealFourierTransform,
+  inverseRealFourierTransform,
+} from "../synth/FFT.js";
+export {
+  FilterCoefficients,
+  FrequencyResponse,
+  DynamicBiquadFilter,
+} from "../synth/filtering.js";
+
+// To initialize:
+// new app.SongEditor(document.getElementById("app"));

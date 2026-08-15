@@ -1,0 +1,125 @@
+canvas {
+    overflow: hidden;
+    position: absolute;
+    display: block;
+}
+
+.trackContainer {
+    flex-grow: 1;
+    overflow: visible;
+}
+
+.trackAndMuteContainer {
+    align-items: flex-start;
+    width: 100%;
+    min-height: 0;
+    flex: 1;
+    overflow: auto;
+    position: relative;
+}
+
+.barNumbers {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    height: 10px;
+    background: var(--background);
+}
+
+.trackCorner,
+.channelNumber,
+.barNumber {
+    color: var(--secondary-text);
+    font-family: sans-serif;
+    font-size: 8px;
+    font-weight: bold;
+}
+
+.trackCorner,
+.channelNumber {
+    position: sticky;
+    left: 32px;
+    z-index: 3;
+    width: 18px;
+    min-width: 18px;
+    background: var(--background);
+}
+
+.trackCorner {
+    z-index: 4;
+}
+
+.barNumber {
+    flex: 0 0 auto;
+    line-height: 10px;
+    text-align: center;
+}
+
+.channelNumber {
+    min-height: 28px;
+    line-height: 28px;
+    text-align: center;
+}
+
+.barNumber.selected,
+.channelNumber.selected {
+    color: var(--text);
+}
+
+.channelBox {
+    text-align: center;
+    align-items: center;
+    justify-content: center;
+    padding-top: 1px;
+}
+
+.channelBoxLabel {
+    font-size: 20px;
+    font-family: sans-serif;
+    font-weight: bold;
+}
+
+.channelBoxLabel.smaller-digits {
+    font-size: 18px;
+}
+
+.muteEditor {
+    width: 32px;
+    flex-shrink: 0;
+    align-items: stretch;
+    position: sticky;
+    left: 0;
+    z-index: 4;
+    background: var(--background);
+}
+
+.muteHeaderFiller {
+    height: 10px;
+    flex: 0 0 10px;
+}
+
+.mute-button,
+.mute-button:focus {
+    background: none;
+}
+
+.mute-button,
+.loop-toggle {
+    height: 24px;
+    margin: 2px;
+}
+
+.loop-toggle {
+    position: sticky;
+    bottom: 0;
+    left: 0;
+    flex: 0 0 24px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--background);
+}
+
+.barScrollBar {
+    display: none;
+}

@@ -1,0 +1,15 @@
+/*
+
+!/.agents/
+!/.agents/**
+!/src/
+!/synth/
+!/scripts/
+!/test/
+
+!/.gitignore
+!/AGENTS.md
+!/*.json
+!/UNLICENSE
+!/LICENSE-MIT
+!/README.md

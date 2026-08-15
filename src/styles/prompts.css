@@ -1,0 +1,325 @@
+.prompt::backdrop {
+    background: var(--background);
+    opacity: 0.5;
+}
+
+.prompt {
+    margin: auto;
+    text-align: center;
+    background: var(--background);
+    border-radius: 15px;
+    border: 4px solid var(--ui-widget-background);
+    color: var(--text);
+    padding: 20px;
+    position: relative;
+    box-shadow: 5px 5px 20px 10px rgba(0, 0, 0, 0.5);
+    max-width: calc(100vw - 24px);
+    max-height: calc(100vh - 24px);
+    overflow: auto;
+}
+
+dialog.prompt:not([open]) {
+    display: none;
+}
+
+.prompt > *:not(:first-child):not(.cancelButton) {
+    margin-top: 1.5em;
+}
+
+.prompt > .flush-top {
+    margin-top: 0;
+}
+
+.prompt h2 {
+    font-size: 2em;
+    margin: 0;
+    padding: 0;
+    font-weight: normal;
+    text-align: center;
+}
+
+.prompt p {
+    text-align: left;
+    margin: 1em 0;
+}
+
+.prompt label {
+    cursor: pointer;
+}
+
+.button-row {
+    display: flex;
+    gap: 4px;
+    margin-top: 4px;
+}
+
+.button-row > button {
+    flex: 1;
+}
+
+.prompt:is(.tabbedSearchablePrompt, .instrumentTypePrompt) {
+    width: min(975px, calc(100vw - 24px));
+}
+.prompt.tabbedSearchablePrompt {
+    display: flex;
+    flex-direction: column;
+    height: min(720px, calc(100vh - 24px));
+    text-align: left;
+    overflow: hidden;
+}
+.prompt.assetsPrompt {
+    display: flex;
+    flex-direction: column;
+    width: min(780px, calc(100vw - 24px));
+    height: min(720px, calc(100vh - 24px));
+    overflow: hidden;
+}
+.prompt.assetsPrompt:not(:has(.pinnedAssetsColumn)) {
+    width: min(540px, calc(100vw - 24px));
+}
+.prompt.flpInstrumentPrompt {
+    display: flex;
+    flex-direction: column;
+    width: min(920px, calc(100vw - 24px));
+    height: min(720px, calc(100vh - 24px));
+    overflow: hidden;
+}
+.flpInstrumentPrompt > .assetsPromptColumns {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    margin-top: 10px;
+}
+.assetsPromptSearch {
+    width: 100%;
+    height: var(--button-size);
+    border: 1px solid var(--ui-widget-background);
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    text-align: center;
+}
+.assetsPromptSearch:focus {
+    border-color: var(--ui-widget-focus);
+}
+.assetsPrompt > .assetsPromptSearch,
+.assetsPrompt > .assetsPromptColumns {
+    margin-top: 10px;
+}
+.assetsPromptColumns {
+    display: grid;
+    grid-template-columns: minmax(0, 540px) minmax(180px, 1fr);
+    gap: 10px;
+    min-height: 0;
+    flex: 1;
+}
+.assetsPromptColumns:not(:has(.pinnedAssetsColumn)) {
+    grid-template-columns: minmax(0, 540px);
+}
+.assetsPromptColumn {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    min-height: 0;
+}
+.assetsPromptColumn > h3 {
+    margin: 0 0 8px;
+    text-align: center;
+}
+.assetsPromptColumn > button {
+    margin-top: 8px;
+}
+.assetsPromptRows {
+    min-height: 0;
+    overflow-y: auto;
+}
+.assetCard {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 10px;
+    text-align: left;
+    border: 1px solid var(--ui-widget-background);
+}
+.assetName {
+    font-weight: bold;
+    overflow-wrap: anywhere;
+}
+.assetCard input {
+    width: 100%;
+}
+.assetControls {
+    display: flex;
+    justify-content: flex-end;
+    align-items: center;
+    gap: 4px;
+}
+.assetLoadProgress {
+    flex: 1;
+    min-width: 0;
+}
+.assetError {
+    min-width: 0;
+    margin-right: auto;
+    overflow-wrap: anywhere;
+}
+.assetControls > button {
+    min-width: var(--button-size);
+    height: var(--button-size);
+}
+.assetControls > button[aria-label] {
+    width: var(--button-size);
+    padding: 0;
+}
+.compactAssetCard {
+    gap: 8px;
+}
+.flpChannelCard {
+    gap: 8px;
+}
+.flpSourceDetails {
+    color: var(--secondary-text);
+    overflow-wrap: anywhere;
+}
+.flpSourceDetails:empty {
+    display: none;
+}
+.flpInstrumentControls {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+}
+.flpInstrumentControls > label {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    min-width: 0;
+}
+.flpInstrumentControls select {
+    width: 100%;
+}
+.assetCaching {
+    position: relative;
+    padding-left: 28px;
+}
+.assetCaching::before {
+    content: "";
+    position: absolute;
+    left: 8px;
+    top: calc(50% - 7px);
+    width: 14px;
+    height: 14px;
+    border: 3px solid rgba(255, 255, 255, 0.25);
+    border-top-color: currentColor;
+    border-radius: 50%;
+    animation: asset-loading-spin 1.15s linear infinite;
+}
+.prompt.tabbedSearchablePrompt > *:not(:first-child):not(.cancelButton) {
+    margin-top: 10px;
+}
+.tabbedSearchablePromptSearch {
+    width: 100%;
+    height: var(--button-size);
+    border: 1px solid var(--ui-widget-background);
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    text-align: center;
+}
+.tabbedSearchablePromptSearch:focus {
+    border-color: var(--ui-widget-focus);
+}
+.tabbedSearchablePromptBody {
+    display: grid;
+    grid-template-columns: 150px minmax(0, 1fr);
+    gap: 18px;
+    min-width: 0;
+    min-height: 0;
+    flex: 1;
+    overflow: hidden;
+}
+.tabbedSearchablePromptTabs {
+    align-items: stretch;
+    gap: 2px;
+    min-width: 0;
+    min-height: 0;
+    overflow-y: auto;
+}
+.tabbedSearchablePromptTabs button {
+    flex-shrink: 0;
+    padding: 0 8px;
+    background: transparent;
+    text-align: left;
+}
+.tabbedSearchablePromptTabs button.selected {
+    background: var(--ui-widget-focus);
+}
+.tabbedSearchablePromptPages {
+    min-width: 0;
+    min-height: 0;
+    overflow-y: auto;
+}
+.tabbedSearchablePromptPage h3 {
+    margin: 10px 0 6px;
+    border-bottom: 1px solid var(--ui-widget-background);
+    font-size: 1.5em;
+    font-weight: normal;
+}
+.tabbedSearchablePromptPage:first-child h3 {
+    margin-top: 0;
+}
+.promptGrid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 180px), 1fr));
+    gap: 4px;
+    margin-top: 10px;
+}
+.promptCard {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: var(--button-size);
+    padding: 8px;
+    border: 1px solid var(--ui-widget-background);
+    border-radius: 5px;
+    text-align: center;
+    overflow-wrap: anywhere;
+}
+.presetPromptItem {
+    min-height: var(--button-size);
+    height: auto;
+    padding: 4px 8px;
+    overflow-wrap: anywhere;
+}
+.preferenceRow {
+    min-height: var(--button-size);
+    align-items: center;
+    justify-content: space-between;
+    padding: 4px 8px;
+}
+.preferenceRow:nth-child(odd) {
+    background: color-mix(
+        in srgb,
+        var(--ui-widget-background) 42%,
+        transparent
+    );
+}
+.preferenceRow > button,
+.preferenceRow > select,
+.preferenceRow > input[type="range"] {
+    width: 42%;
+}
+.preferenceToggle {
+    font-weight: bold;
+}
+.layout-option {
+    flex: 1;
+    cursor: pointer;
+    color: var(--secondary-text);
+}
+
+.layout-option input {
+    display: none;
+}
+
+.layout-option input:checked ~ * {
+    color: var(--text);
+}

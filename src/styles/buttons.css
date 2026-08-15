@@ -1,0 +1,145 @@
+button {
+    color: inherit;
+}
+
+button.variableNameButton {
+    min-height: var(--button-size);
+    height: auto;
+    padding-block: 4px;
+    overflow-wrap: anywhere;
+}
+
+button.cancelButton {
+    float: right;
+    width: var(--button-size);
+    position: absolute;
+    top: 8px;
+    right: 8px;
+}
+
+button.reveal-arrow {
+    width: 12px;
+    height: 12px;
+    min-height: 0;
+    margin-left: 0;
+    margin-right: 6px;
+    padding: 0;
+    border-radius: 50%;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    font-size: 8px;
+    line-height: 1;
+    transform: translateY(-1px);
+}
+
+.playback-bar-controls {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-rows: min-content;
+    grid-column-gap: 4px;
+    margin: 0 0 2px;
+}
+
+button.playButton,
+button.pauseButton,
+button.recordButton,
+button.stopButton,
+button.okayButton,
+button.exportButton {
+    padding-left: var(--button-size);
+}
+button.playButton,
+button.pauseButton,
+button.recordButton {
+    grid-column: 1 / 3;
+}
+button.stopButton {
+    grid-column: 1 / 5;
+}
+button.prevBarButton {
+    grid-column: 3 / 4;
+}
+button.nextBarButton {
+    grid-column: 4 / 5;
+}
+
+button.playButton.shrunk,
+button.recordButton.shrunk {
+    padding: 0;
+}
+button.playButton.shrunk::before,
+button.recordButton.shrunk::before {
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+}
+button.playButton.shrunk span,
+button.recordButton.shrunk span {
+    display: none;
+}
+button.playButton.shrunk {
+    grid-column: 1 / 2;
+}
+button.recordButton.shrunk {
+    grid-column: 2 / 3;
+}
+
+.instrument-bar {
+    gap: 2px;
+    min-width: 0;
+}
+
+.instrument-buttons-scroller {
+    display: flex;
+    flex: 1 1 auto;
+    min-width: 0;
+    gap: 2px;
+    overflow-x: auto;
+    scrollbar-width: none;
+}
+
+.instrument-buttons-scroller::-webkit-scrollbar {
+    display: none;
+}
+
+.instrument-actions {
+    display: flex;
+    flex: none;
+    gap: 2px;
+}
+
+.instrument-bar button {
+    flex: none;
+    padding: 0;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-color-lit);
+}
+
+.instrument-buttons-scroller button {
+    flex: 1 0 calc(2 * var(--button-size));
+}
+
+.instrument-bar .remove-instrument,
+.instrument-bar .add-instrument {
+    width: var(--button-size);
+}
+
+.instrument-buttons-scroller > :not(:first-child),
+.instrument-actions > button {
+    border-top-left-radius: 0;
+    border-bottom-left-radius: 0;
+}
+
+.instrument-buttons-scroller > button,
+.instrument-actions > :not(.last-button) {
+    border-top-right-radius: 0;
+    border-bottom-right-radius: 0;
+}
+
+.instrument-bar .selected-instrument {
+    background: var(--background-color-lit);
+    color: var(--background);
+}

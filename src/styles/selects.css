@@ -1,0 +1,48 @@
+select {
+    /* Native pickers are often rendered outside .app; set this on the control
+	 * itself so the browser carries the dark scheme into that popup. */
+    color-scheme: dark;
+    padding: 0 4px;
+    display: block;
+    color: inherit;
+}
+select option,
+select optgroup {
+    background-color: var(--ui-widget-background, #444);
+    color: var(--text, white);
+}
+select.menu {
+    text-align: center;
+}
+.settings-area select {
+    width: 100%;
+}
+
+.asset-select-control {
+    position: relative;
+}
+
+.asset-select-control.asset-loading::before {
+    content: "";
+    position: absolute;
+    z-index: 1;
+    left: 6px;
+    top: calc(50% - 7px);
+    width: 14px;
+    height: 14px;
+    border: 3px solid rgba(255, 255, 255, 0.25);
+    border-top-color: currentColor;
+    border-radius: 50%;
+    animation: asset-loading-spin 1.15s linear infinite;
+    pointer-events: none;
+}
+
+.asset-select-control.asset-loading > select {
+    padding-left: 25px;
+}
+
+@keyframes asset-loading-spin {
+    to {
+        transform: rotate(360deg);
+    }
+}

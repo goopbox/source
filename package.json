@@ -1,0 +1,25 @@
+{
+  "name": "goopbox",
+  "license": "(MIT AND Unlicense)",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "test": "tsc && node --test ./test/*",
+    "build": "npm test && npm run dist",
+    "dist": "node scripts/build.mjs",
+    "start": "node scripts/start.mjs",
+    "deploy": "bash scripts/deploy.sh"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.1",
+    "html-minifier-next": "^7.5.0",
+    "typescript": "^7.0.2"
+  },
+  "dependencies": {
+    "fflate": "^0.8.3",
+    "imperative-html": "^0.1.2"
+  },
+  "allowScripts": {
+    "esbuild@0.28.1": true
+  }
+}

@@ -1,0 +1,298 @@
+*,
+*::before,
+*::after {
+    box-sizing: border-box;
+}
+
+* {
+    outline: none;
+}
+
+html {
+    background: var(--background, black);
+    color-scheme: dark;
+    overflow-x: hidden;
+    font-size: large;
+    font-family: "B612", sans-serif;
+    line-height: 1.3;
+    color: var(--text, white);
+}
+
+body {
+    margin: auto;
+    overflow-x: hidden;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    background: var(--background, black);
+}
+
+#app {
+    display: table;
+    height: 100dvh;
+    overflow: auto;
+    background: var(--background, black);
+}
+
+html,
+body,
+#app {
+    width: 100%;
+}
+*,
+*::before,
+*::after {
+    scrollbar-width: none;
+}
+
+.app {
+    color-scheme: dark;
+    display: grid;
+    width: 100%;
+    height: 100dvh;
+    gap: 6px;
+    position: relative;
+    touch-action: manipulation;
+    cursor: default;
+    font-size: 13px;
+    overflow: hidden;
+    color: var(--text);
+    background: var(--background);
+}
+
+.noSelection {
+    -webkit-touch-callout: none;
+    -webkit-user-select: none;
+    -moz-user-select: none;
+    -ms-user-select: none;
+    user-select: none;
+}
+
+div {
+    margin: 0;
+    padding: 0;
+}
+
+:is(button, select) {
+    margin: 0;
+    height: var(--button-size);
+    border: none;
+    border-radius: 5px;
+    font-size: inherit;
+    font-family: inherit;
+    font-weight: inherit;
+    cursor: pointer;
+    transition:
+        background-color 30ms,
+        color 30ms;
+}
+
+:is(button, select) {
+    background: var(--ui-widget-background);
+}
+
+button {
+    background: var(--button-background);
+}
+
+:is(button, select):hover:not(:disabled) {
+    background-color: var(--ui-widget-hover);
+}
+
+:is(button, select):focus-visible {
+    background-color: var(--ui-widget-hover);
+    box-shadow: 0 0 0 2px var(--accent);
+}
+
+button:hover:not(:disabled),
+button:focus-visible {
+    background-color: var(--button-hover);
+}
+
+:is(button, .pitch-button, .effects-menu) {
+    position: relative;
+}
+
+:where(
+    .pattern-area,
+    .instrument-bar,
+    .instrument-buttons-scroller,
+    .instrument-actions,
+    .instrument-bar button,
+    .pitch-button,
+    .envelope-row,
+    .selectRow,
+    .instrumentActionRow,
+    .instrument-pan-slider,
+    .trackAndMuteContainer,
+    .channelRow,
+    .channelBoxes,
+    .barNumbers,
+    .channelBox,
+    .preferenceRow
+) {
+    display: flex;
+}
+
+:where(
+    .track-area,
+    .play-pause-area,
+    .envelopeEditor,
+    .menu-area,
+    .song-settings-area,
+    .editor-controls,
+    .instrument-settings-area,
+    .settingsGroup,
+    .muteEditor,
+    .prompt,
+    .tabbedSearchablePromptTabs,
+    .layout-option
+) {
+    display: flex;
+    flex-direction: column;
+}
+
+.pattern-area {
+    grid-area: pattern-area;
+    width: 100%;
+    height: 100%;
+    position: relative;
+}
+
+.pattern-preview {
+    position: relative;
+    overflow: hidden;
+}
+
+.pattern-preview::after {
+    position: absolute;
+    inset: 0;
+    z-index: 1;
+    content: "";
+    pointer-events: none;
+    background: linear-gradient(to right, rgb(0 0 0 / 10%), rgb(0 0 0 / 70%));
+}
+
+.pattern-preview-blur {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+    filter: blur(8px);
+}
+
+.pattern-preview-previous .pattern-preview-blur {
+    mask-image: linear-gradient(
+        to right,
+        black 0%,
+        black 40%,
+        rgb(0 0 0 / 5%) 100%
+    );
+    -webkit-mask-image: linear-gradient(
+        to right,
+        black 0%,
+        black 40%,
+        rgb(0 0 0 / 5%) 100%
+    );
+}
+
+.pattern-preview-next .pattern-preview-blur {
+    mask-image: linear-gradient(
+        to left,
+        black 0%,
+        black 40%,
+        rgb(0 0 0 / 5%) 100%
+    );
+    -webkit-mask-image: linear-gradient(
+        to left,
+        black 0%,
+        black 40%,
+        rgb(0 0 0 / 5%) 100%
+    );
+}
+
+.pattern-preview-previous .pattern-preview-sharp {
+    mask-image: linear-gradient(to right, transparent, black);
+    -webkit-mask-image: linear-gradient(to right, transparent, black);
+}
+
+.pattern-preview-next .pattern-preview-sharp {
+    mask-image: linear-gradient(to left, transparent, black);
+    -webkit-mask-image: linear-gradient(to left, transparent, black);
+}
+
+.pattern-preview-previous::after {
+    background: linear-gradient(to right, rgb(0 0 0 / 70%), rgb(0 0 0 / 10%));
+}
+
+.overlay-button {
+    background: transparent;
+    isolation: isolate;
+    z-index: 2;
+}
+
+.overlay-button::after {
+    position: absolute;
+    inset: 0;
+    z-index: 0;
+    content: "";
+    border-radius: inherit;
+    background: color-mix(
+        in srgb,
+        var(--ui-widget-background) 50%,
+        transparent
+    );
+    backdrop-filter: blur(4px);
+    -webkit-backdrop-filter: blur(4px);
+}
+
+.overlay-button::before {
+    z-index: 1;
+}
+
+.track-area {
+    grid-area: track-area;
+    width: 100%;
+}
+
+.loopEditor {
+    display: flex;
+    align-items: center;
+    height: 28px;
+    position: sticky;
+    bottom: 0;
+    z-index: 3;
+    padding: 4px 0;
+    background-color: var(--background);
+}
+
+.loopEditor::before {
+    content: "";
+    position: absolute;
+    inset: 0 auto 0 0;
+    z-index: 1;
+    width: 18px;
+    transform: translateX(var(--track-scroll-left, 0));
+    background: var(--background);
+}
+
+.settings-area {
+    grid-area: settings-area;
+    width: var(--settings-area-width);
+    display: grid;
+    grid-column-gap: 6px;
+}
+
+.play-pause-area {
+    grid-area: play-pause-area;
+}
+.menu-area {
+    grid-area: menu-area;
+}
+.song-settings-area {
+    grid-area: song-settings-area;
+}
+.instrument-settings-area {
+    grid-area: instrument-settings-area;
+}

@@ -1,0 +1,224 @@
+.selectRow,
+.instrumentActionRow {
+    margin: 2px 0;
+    height: var(--button-size);
+    align-items: center;
+    justify-content: space-between;
+}
+
+.selectRow > label {
+    color: var(--secondary-text);
+}
+
+.selectRow > :last-child {
+    width: 62.5%;
+    flex-shrink: 0;
+}
+
+.reveal-control {
+    position: relative;
+}
+
+.reveal-control > .reveal-arrow {
+    position: absolute;
+    right: calc(100% + 6px);
+    top: 50%;
+    margin-right: 0;
+    transform: translateY(-50%);
+}
+
+.reveal-control > select {
+    width: 100%;
+}
+
+.selectRow.instrument-unlabeled-control > :last-child {
+    width: 100%;
+}
+
+.drumset-row > select {
+    width: 5em;
+    margin-right: 0.3em;
+}
+
+.drumset-row > .spectrum {
+    width: auto;
+    flex: 1;
+}
+
+.selectRow:is(.instrument-symbol-control, .fm-operator-row) > :last-child {
+    width: auto;
+    flex: 1;
+}
+
+.selectRow.instrument-symbol-control > :last-child {
+    margin-left: 0.5em;
+}
+
+.selectRow.instrument-symbol-control > span,
+.instrument-pan-slider {
+    flex: 1;
+    min-width: 0;
+}
+
+.instrument-value-input {
+    width: 4em;
+    min-width: 0;
+    flex: 0 0 4em !important;
+}
+
+.slider-with-input {
+    display: flex;
+    width: 100%;
+    gap: 0.4em;
+}
+
+.slider-with-input > :first-child {
+    flex: 1;
+    min-width: 0;
+}
+
+.instrument-volume-icon {
+    width: 1.25em;
+    height: 1.25em;
+    background-color: var(--secondary-text);
+}
+
+.instrument-pan-slider {
+    align-items: center;
+    gap: 0.25em;
+}
+
+.instrument-pan-slider > span:not(.pan-label) {
+    flex: 1;
+    min-width: 0;
+}
+
+.pan-label {
+    color: var(--secondary-text);
+    font-size: 0.75em;
+}
+
+.menu-area > * {
+    margin: 2px 0;
+}
+
+.song-settings-area {
+    margin-top: 2px;
+}
+.menu-area > button {
+    padding: 0 var(--button-size);
+    white-space: nowrap;
+}
+
+.editor-controls {
+    flex-shrink: 0;
+}
+
+.instrument-settings-area > .editor-controls {
+    position: absolute;
+    width: 100%;
+}
+
+.groupedSettings {
+    gap: 4px;
+}
+
+.groupedSettings > :is(.selectRow, .instrumentActionRow) {
+    margin: 0;
+}
+
+.settingsGroup {
+    gap: 2px;
+    padding: 5px;
+    border-radius: 7px;
+    background: var(--surface);
+}
+
+.settingsGroupTitle {
+    min-height: 1.25em;
+    display: grid;
+    grid-template-columns: 1fr auto 1fr;
+    align-items: center;
+    font-size: 0.85em;
+    color: var(--secondary-text);
+}
+
+.settingsGroupTitle > :first-child {
+    grid-column: 1 / -1;
+    grid-row: 1;
+    text-align: center;
+}
+
+.settingsGroupTitle.hasAction > :first-child {
+    grid-column: 2;
+}
+
+.settingsGroupTitle > :last-child:not(:first-child) {
+    grid-column: 3;
+    grid-row: 1;
+    justify-self: end;
+}
+
+.settingsGroupActions {
+    display: flex;
+    gap: 2px;
+}
+
+.settingsGroupActions > :is(button, .effects-menu),
+.instrumentSettingsAdd {
+    width: 1.25em;
+    min-width: 1.25em;
+    height: 1.25em;
+    padding: 0;
+}
+
+.settingsGroupTitle .effects-menu::before {
+    content: none;
+}
+
+.settingsGroupTitle .effects-menu select {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    opacity: 0;
+}
+
+.settingsGroupTitle .instrumentSettingsAdd:disabled {
+    visibility: hidden;
+}
+
+.groupedSettings :is(.fadeInOut, .filterEditor, .spectrum, .harmonics) > svg {
+    background-color: transparent !important;
+}
+
+.editor-right-side-top > *,
+.editor-right-side-bottom > * {
+    flex-shrink: 0;
+}
+
+.pitchShiftMarkerContainer {
+    display: flex;
+    height: 100%;
+    left: 3px;
+    right: calc(4em + 0.4em + 3px);
+    position: absolute;
+    align-items: center;
+    pointer-events: none;
+}
+
+.pitchShiftMarker {
+    width: 0;
+    height: 0;
+    position: absolute;
+}
+
+.pitchShiftMarker::before {
+    content: "";
+    width: 2px;
+    height: 20px;
+    transform: translate(-50%, -50%);
+    position: absolute;
+    background: currentColor;
+    border-radius: 3px;
+}

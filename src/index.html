@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>GoopBox</title>
+        <meta name="application-name" content="GoopBox" />
+        <meta
+            name="description"
+            content="An online tool for sketching and sharing instrumental music."
+        />
+        <meta
+            name="keywords"
+            content="music, composition, tool, synth, synthesizer, daw, tracker, instrument, song, melody, chiptune, free"
+        />
+        <meta name="theme-color" content="#444444" />
+        <meta name="msapplication-TileColor" content="#603cba" />
+        <meta name="msapplication-config" content="/browserconfig.xml" />
+        <meta name="format-detection" content="telephone=no" />
+        <link
+            rel="apple-touch-icon"
+            sizes="180x180"
+            href="/apple-touch-icon.png"
+        />
+        <link rel="icon" type="image/png" sizes="32x32" href="/icon_32.png" />
+        <link rel="manifest" href="/manifest.webmanifest" />
+        <link
+            href="https://fonts.googleapis.com/css?family=B612"
+            rel="stylesheet"
+        />
+        <!-- INLINE_EDITOR_STYLE -->
+    </head>
+
+    <body>
+        <div id="app">
+            <noscript>
+                Sorry, this app requires a JavaScript-enabled browser.
+            </noscript>
+        </div>
+        <script type="text/javascript">
+            let editor;
+
+            function browserHasRequiredFeatures() {
+                "use strict";
+                if (
+                    window.AudioContext == undefined ||
+                    window.AudioWorkletNode == undefined
+                ) {
+                    return false;
+                }
+
+                try {
+                    eval("class T {}");
+                    eval("const a = () => 0");
+                    eval("for (const a of []);");
+                } catch (error) {
+                    return false;
+                }
+
+                return true;
+            }
+
+            if (browserHasRequiredFeatures()) {
+                // Go ahead and load the editor interface:
+                <!-- INLINE_EDITOR_SCRIPT -->
+                editor = new app.SongEditor(document.getElementById("app"));
+            } else {
+                document.getElementById("app").innerHTML =
+                    "Sorry, this app doesn't support your browser. Try a recent version of Chrome, Firefox, Edge, Safari, or Opera.";
+            }
+        </script>
+    </body>
+</html>
