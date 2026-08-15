@@ -5,7 +5,7 @@ import type { Prompt } from "./Prompt.js";
 import { SongDocument } from "./SongDocument.js";
 import { TabbedSearchablePrompt } from "./TabbedSearchablePrompt.js";
 
-const { a, div, h2, p } = HTML;
+const { a, div, h2, h3, p } = HTML;
 
 const goopboxFeatures: ReadonlyArray<string> = [
   "Interface redesign",
@@ -34,6 +34,7 @@ export class AboutPrompt implements Prompt {
         div({ class: "promptCard" }, feature),
       ),
     );
+
     const license: HTMLElement = document.createElement("div");
     license.append(
       h2(
@@ -108,11 +109,15 @@ export class AboutPrompt implements Prompt {
       p("No external servers ever receive your songs."),
     );
 
+    const disclosure: HTMLElement = document.createElement("div");
+    disclosure.append(p("GoopBox code is mostly (99%) developed with AI."));
+
     this._prompt = new TabbedSearchablePrompt(
       "About",
       [
         { name: "GoopBox", content: goopbox },
         { name: "License", content: license },
+        { name: "AI Disclosure", content: disclosure },
       ],
       () => this._doc.closePrompt(),
     );
