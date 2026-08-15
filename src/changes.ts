@@ -59,15 +59,21 @@ function pickRandomInstrumentType(
   return bag.pick(types);
 }
 
+function pitchIsInScale(doc: SongDocument, pitch: number): boolean {
+  const compositionOffset = doc.song.composingKey - doc.song.key;
+  const scaleIndex =
+    (((Math.round(pitch) - compositionOffset) % Config.pitchesPerOctave) +
+      Config.pitchesPerOctave) %
+    Config.pitchesPerOctave;
+  return Config.scales[doc.song.scale].flags[scaleIndex];
+}
+
 /** Snaps a positive integer pitch to the octave scale, assuming it's in range. */
 function snapPitchToScale(doc: SongDocument, pitch: number) {
   if (doc.song.getChannelIsNoise(doc.channel) || doc.prefs.notesOutsideScale) {
     return Math.round(pitch); // skip
   }
-  const compositionOffset = doc.song.composingKey - doc.song.key;
-  const scaleIndex = (value: number) =>
-    (((Math.round(value) - compositionOffset) % 12) + 12) % 12;
-  if (Config.scales[doc.song.scale].flags[scaleIndex(pitch)]) {
+  if (pitchIsInScale(doc, pitch)) {
     return Math.round(pitch); // already on scale
   }
 
@@ -75,13 +81,13 @@ function snapPitchToScale(doc: SongDocument, pitch: number) {
   let distanceDown = Config.maxPitch;
 
   for (let i = pitch + 1; i < Config.maxPitch + 0.5; i++) {
-    if (Config.scales[doc.song.scale].flags[scaleIndex(i)]) {
+    if (pitchIsInScale(doc, i)) {
       distanceUp = i - pitch;
       break;
     }
   }
   for (let i = pitch - 1; i > -0.5; i--) {
-    if (Config.scales[doc.song.scale].flags[scaleIndex(i)]) {
+    if (pitchIsInScale(doc, i)) {
       distanceDown = pitch - i;
       break;
     }
@@ -3888,7 +3894,7 @@ class ChangeTransposeNote extends UndoableChange {
             if (
               isNoise ||
               ignoreScale ||
-              Config.scales[doc.song.scale].flags[j % 12]
+              pitchIsInScale(doc, j)
             ) {
               pitch = j;
               break;
@@ -3899,7 +3905,7 @@ class ChangeTransposeNote extends UndoableChange {
             if (
               isNoise ||
               ignoreScale ||
-              Config.scales[doc.song.scale].flags[j % 12]
+              pitchIsInScale(doc, j)
             ) {
               pitch = j;
               break;
@@ -3944,7 +3950,7 @@ class ChangeTransposeNote extends UndoableChange {
             if (
               isNoise ||
               ignoreScale ||
-              Config.scales[doc.song.scale].flags[i % 12]
+              pitchIsInScale(doc, i)
             ) {
               interval = i;
               break;
@@ -3955,7 +3961,7 @@ class ChangeTransposeNote extends UndoableChange {
             if (
               isNoise ||
               ignoreScale ||
-              Config.scales[doc.song.scale].flags[i % 12]
+              pitchIsInScale(doc, i)
             ) {
               interval = i;
               break;

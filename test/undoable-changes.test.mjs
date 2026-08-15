@@ -14,7 +14,7 @@ async function loadChanges() {
   await build({
     stdin: {
       contents: [
-        'export {ChangeDragSelectedNotes} from "./src/changes.ts";',
+        'export {ChangeDragSelectedNotes, ChangeTranspose} from "./src/changes.ts";',
         'export {Note, Pattern, Song, makeNotePin} from "./synth/synth.ts";',
       ].join("\n"),
       resolveDir: process.cwd(),
@@ -98,4 +98,46 @@ test("dragging a partial note can undo and redo without leaving split-note corru
   assert.deepEqual(snapshotNotes(pattern), before);
   assert.equal(pattern.notes[0], note);
   assert.equal(note.pins, originalPins);
+});
+
+test("scale transposition follows the composing key", async (context) => {
+  const { ChangeTranspose, Note, Pattern, Song, makeNotePin, cleanup } =
+    await loadChanges();
+  context.after(cleanup);
+
+  const song = new Song();
+  song.scale = 1; // Major.
+  song.key = 0; // Playback key C.
+  song.composingKey = 2; // Compose in D, so the stored scale is offset by two semitones.
+
+  const pattern = new Pattern();
+  const note = new Note(4, 0, 12, 4); // E in D major.
+  note.pins = [
+    makeNotePin(0, 0, 4),
+    makeNotePin(3, 6, 4), // G in D major.
+    makeNotePin(3, 12, 4),
+  ];
+  pattern.notes.push(note);
+
+  const doc = {
+    song,
+    channel: 0,
+    prefs: { notesOutsideScale: false },
+    selection: { patternSelectionActive: false },
+    notifier: { changed() {} },
+  };
+
+  const change = new ChangeTranspose(doc, 0, pattern, true);
+  assert.deepEqual(note.pitches, [6]); // F# in D major, not F from C major.
+  assert.deepEqual(
+    note.pins.map((pin) => pin.interval),
+    [0, 3, 3],
+  );
+
+  change.undo();
+  assert.deepEqual(note.pitches, [4]);
+  assert.deepEqual(
+    note.pins.map((pin) => pin.interval),
+    [0, 3, 3],
+  );
 });
