@@ -57,6 +57,7 @@ test("preferences use defaults when localStorage access throws", async (context)
   assert.equal(preferences.rememberScaleChoice, true);
   assert.equal(preferences.keyboardLayout, "wickiHayden");
   assert.equal(preferences.layout, "long");
+  assert.equal(preferences.colorTheme, Preferences.defaultColorTheme);
   assert.equal(preferences.masterVolume, Preferences.defaultMasterVolume);
   assert.equal(preferences.visibleOctaves, Preferences.defaultVisibleOctaves);
   assert.equal(preferences.defaultScale, 0);
@@ -84,13 +85,31 @@ test("one failed preference write does not prevent later settings from saving", 
   context.after(cleanup);
   const preferences = new Preferences();
   preferences.layout = "tall";
+  preferences.colorTheme = "BeepBox Dark";
   preferences.masterVolume = 41;
   preferences.visibleOctaves = 5;
 
   assert.doesNotThrow(() => preferences.save());
   assert.ok(writes.some(([name, value]) => name == "volume" && value == "41"));
-  assert.deepEqual(writes.at(-2), ["layout", "tall"]);
+  assert.deepEqual(writes.at(-3), ["layout", "tall"]);
+  assert.deepEqual(writes.at(-2), ["colorTheme", "BeepBox Dark"]);
   assert.deepEqual(writes.at(-1), ["visibleOctaves", "5"]);
+});
+
+test("preferences restore the selected color theme", async (context) => {
+  const previousWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
+  context.after(() => restoreWindow(previousWindow));
+  globalThis.window = {
+    localStorage: {
+      getItem(name) {
+        return name == "colorTheme" ? "BeepBox Dark" : null;
+      },
+    },
+  };
+  const { Preferences, cleanup } = await loadPreferences();
+  context.after(cleanup);
+
+  assert.equal(new Preferences().colorTheme, "BeepBox Dark");
 });
 
 test("master volume uses a perceptual curve from 5% to 1x", async (context) => {

@@ -7,12 +7,14 @@ export class Preferences {
   public static readonly defaultMasterVolume: number = 100;
   public static readonly maxMasterVolume: number = 100;
   public static readonly masterVolumeMinGain: number = 0.05;
+  public static readonly defaultColorTheme: string = "GoopBox Dark";
 
   public autoFollow!: boolean;
   public notesOutsideScale!: boolean;
   public rememberScaleChoice!: boolean;
   public defaultScale!: number;
   public layout!: string;
+  public colorTheme!: string;
   public masterVolume: number = Preferences.defaultMasterVolume;
   public visibleOctaves: number = Preferences.defaultVisibleOctaves;
   public pressControlForShortcuts!: boolean;
@@ -58,6 +60,8 @@ export class Preferences {
     this.keyboardLayout =
       this._getStorageItem("keyboardLayout") || "wickiHayden";
     this.layout = this._getStorageItem("layout") || "long";
+    this.colorTheme =
+      this._getStorageItem("colorTheme") || Preferences.defaultColorTheme;
     const storedMasterVolume: string | null = this._getStorageItem("volume");
     if (storedMasterVolume != null) {
       const parsedMasterVolume: number = Number(storedMasterVolume);
@@ -121,6 +125,7 @@ export class Preferences {
     this._setStorageItem("keyboardLayout", this.keyboardLayout);
     this._setStorageItem("volume", String(this.masterVolume));
     this._setStorageItem("layout", this.layout);
+    this._setStorageItem("colorTheme", this.colorTheme);
     this._setStorageItem("visibleOctaves", String(this.visibleOctaves));
   }
 

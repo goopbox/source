@@ -80,7 +80,7 @@ export class SongDocument {
   private _waitingToUpdateState: boolean = false;
 
   constructor() {
-    ColorConfig.setTheme("dark classic");
+    ColorConfig.setTheme(this.prefs.colorTheme);
     Layout.setLayout(this.prefs.layout);
 
     let historyWasCorrupt: boolean = false;

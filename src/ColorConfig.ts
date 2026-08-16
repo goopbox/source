@@ -154,7 +154,7 @@ const themeCss = (theme: Theme): { css: string; widgetBackground: string } => {
 
 export class ColorConfig {
   public static readonly themes: { readonly [name: string]: Theme } = {
-    "dark classic": {
+    "GoopBox Dark": {
       background: "#03040f",
       button: "#22334f",
       pitchRow: "#1c2433",
@@ -168,6 +168,33 @@ export class ColorConfig {
       thirdNote: "#2e3663",
       fifthNote: "#224f63",
       pitchChannels: ["#25f3ff", "#ff9752", "#50ffc9", "#ff98a4"],
+      noiseChannels: ["#aaa", "#da7", "#7ad", "#af82d2", "#a2bb77"],
+    },
+    "BeepBox Dark": {
+      background: "#000",
+      button: "#444",
+      pitchRow: "#444",
+      pianoWhiteKey: "#bbb",
+      pianoBlackKey: "#444",
+      accent: "#74f",
+      error: "#ff6b6b",
+      text: "#fff",
+      blackText: "#000",
+      tonic: "#864",
+      thirdNote: "#444",
+      fifthNote: "#468",
+      pitchChannels: [
+        "#25f3ff",
+        "#ffff25",
+        "#ff9752",
+        "#50ff50",
+        "#ff90ff",
+        "#a0a0ff",
+        "#deff25",
+        "#ff98a4",
+        "#50ffc9",
+        "#ce8bff",
+      ],
       noiseChannels: ["#aaa", "#da7", "#7ad", "#af82d2", "#a2bb77"],
     },
   };
@@ -227,7 +254,7 @@ export class ColorConfig {
 
   public static setTheme(name: string): void {
     let theme: Theme = this.themes[name];
-    if (theme == undefined) theme = this.themes["dark classic"];
+    if (theme == undefined) theme = this.themes["GoopBox Dark"];
     const { css, widgetBackground } = themeCss(theme);
 
     // Native select pickers may be rendered outside the DOM tree and, unlike

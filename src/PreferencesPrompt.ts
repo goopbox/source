@@ -28,6 +28,11 @@ export class PreferencesPrompt implements Prompt {
     option({ value: "long" }, "Long"),
     option({ value: "tall" }, "Tall"),
   );
+  private readonly _themeSelect: HTMLSelectElement = select(
+    ...Object.keys(ColorConfig.themes).map((name) =>
+      option({ value: name }, name),
+    ),
+  );
   private readonly _keyboardMode = select(
     option({ value: "notes" }, "Play notes, " + ctrlSymbol + "shortcuts"),
     option({ value: "shortcuts" }, "Simple shortcuts"),
@@ -87,6 +92,7 @@ export class PreferencesPrompt implements Prompt {
     const editorItems: HTMLElement[] = [
       this._makeRow("Master volume", this._masterVolume),
       this._makeRow("Layout", this._layoutSelect),
+      this._makeRow("Theme", this._themeSelect),
       this._makeRow("Cache", this._cacheButton),
     ];
     const recordingItems: HTMLElement[] = [
@@ -111,9 +117,11 @@ export class PreferencesPrompt implements Prompt {
 
     this._masterVolume.value = String(this._doc.prefs.masterVolume);
     this._layoutSelect.value = this._doc.prefs.layout;
+    this._themeSelect.value = this._doc.prefs.colorTheme;
     this._layoutSelect.disabled =
       window.screen.availWidth < 710 || window.screen.availHeight < 710;
     this._layoutSelect.addEventListener("change", this._whenLayoutChanged);
+    this._themeSelect.addEventListener("change", this._whenThemeChanged);
     this._keyboardMode.value = this._doc.prefs.pressControlForShortcuts
       ? "notes"
       : "shortcuts";
@@ -198,6 +206,13 @@ export class PreferencesPrompt implements Prompt {
     this._doc.notifier.changed();
   };
 
+  private _whenThemeChanged = (): void => {
+    this._doc.prefs.colorTheme = this._themeSelect.value;
+    this._doc.prefs.save();
+    ColorConfig.setTheme(this._doc.prefs.colorTheme);
+    this._doc.notifier.changed();
+  };
+
   private _whenMasterVolumeChanged = (): void => {
     this._doc.setMasterVolume(Number(this._masterVolume.value));
   };
@@ -253,6 +268,7 @@ export class PreferencesPrompt implements Prompt {
     for (const toggle of this._toggleListeners)
       toggle.button.removeEventListener("click", toggle.listener);
     this._layoutSelect.removeEventListener("change", this._whenLayoutChanged);
+    this._themeSelect.removeEventListener("change", this._whenThemeChanged);
     this._keyboardLayout.removeEventListener(
       "change",
       this._renderKeyboardPreview,
