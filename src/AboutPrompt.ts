@@ -104,6 +104,17 @@ export class AboutPrompt implements Prompt {
       ),
       p("GoopBox will NEVER be paid software or ask for contributions."),
       p("Any indication otherwise is an impersonator or a hack."),
+      p(
+        "The GoopBox logo is courtesy of ",
+        a(
+          {
+            href: "https://scratch.mit.edu/users/10HCoder/",
+            target: "_blank",
+            rel: "noopener",
+          },
+          "10HCoder.",
+        ),
+      ),
       h2("Creations"),
       p("GoopBox claims no rights to the songs you create with it."),
       p("No external servers ever receive your songs."),
