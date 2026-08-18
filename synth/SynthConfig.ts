@@ -1138,14 +1138,10 @@ export class Config {
   > = [
     { name: "Filters", effects: [EffectType.eqFilter, EffectType.noteFilter] },
     {
-      name: "Pitch & Notes",
-      effects: [
-        EffectType.pitchShift,
-        EffectType.detune,
-        EffectType.chord,
-        EffectType.transition,
-      ],
+      name: "Pitch",
+      effects: [EffectType.pitchShift, EffectType.detune],
     },
+    { name: "Notes", effects: [EffectType.chord, EffectType.transition] },
     { name: "Tone", effects: [EffectType.distortion, EffectType.bitcrusher] },
     {
       name: "Movement",

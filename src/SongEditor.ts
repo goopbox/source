@@ -100,6 +100,8 @@ import {
   ChangeOperatorAmplitude,
   ChangeOperatorFrequency,
   ChangeOperatorWave,
+  ChangeChipWavePitch,
+  ChangeChipWaveTempo,
   ChangeDrumsetEnvelope,
   ChangeDrumsetEnvelopeParameter,
   ChangePasteInstrument,
@@ -524,6 +526,98 @@ class EffectSlider {
 
   private static _format(value: number): string {
     return String(parseFloat(value.toFixed(6)));
+  }
+}
+
+class ChipWaveEditor {
+  public readonly select: HTMLSelectElement = select({ title: "Waveform" });
+  public readonly waveRow: HTMLDivElement;
+  public readonly container: HTMLDivElement;
+  private readonly _pitchSlider: EffectSlider;
+  private readonly _tempoSlider: EffectSlider;
+
+  constructor(
+    private readonly _doc: SongDocument,
+    private readonly _includeSine: boolean,
+    private readonly _operatorIndex: number | null,
+    getWaveChange: (newValue: number) => Change,
+    assetSelect: boolean = false,
+  ) {
+    this._pitchSlider = new EffectSlider(
+      _doc,
+      25,
+      400,
+      (oldValue: number, newValue: number) =>
+        new ChangeChipWavePitch(
+          _doc,
+          this._operatorIndex,
+          oldValue,
+          newValue,
+        ),
+      25,
+      400,
+    );
+    this._tempoSlider = new EffectSlider(
+      _doc,
+      25,
+      400,
+      (oldValue: number, newValue: number) =>
+        new ChangeChipWaveTempo(
+          _doc,
+          this._operatorIndex,
+          oldValue,
+          newValue,
+        ),
+      25,
+      400,
+    );
+    this.waveRow = div(
+      {
+        class:
+          "selectRow instrument-unlabeled-control" +
+          (assetSelect ? " asset-select-control" : ""),
+      },
+      this.select,
+    );
+    this.container = div(
+      this.waveRow,
+      div(
+        { class: "selectRow" },
+        label("Pitch %"),
+        this._pitchSlider.container,
+      ),
+      div(
+        { class: "selectRow" },
+        label("Tempo %"),
+        this._tempoSlider.container,
+      ),
+    );
+    this.syncOptions();
+    this.select.addEventListener("change", () => {
+      this._doc.record(getWaveChange(this.select.selectedIndex));
+    });
+  }
+
+  public syncOptions(): void {
+    const names: string[] = Config.chipWaves.map((wave) => wave.name);
+    if (this._includeSine) names.unshift("sine");
+    if (
+      this.select.options.length == names.length &&
+      names.every(
+        (name: string, index: number): boolean =>
+          this.select.options[index].textContent == name,
+      )
+    ) {
+      return;
+    }
+    this.select.replaceChildren();
+    buildOptions(this.select, names);
+  }
+
+  public render(wave: number, pitch: number, tempo: number): void {
+    setSelectedValue(this.select, wave);
+    this._pitchSlider.updateValue(pitch);
+    this._tempoSlider.updateValue(tempo);
   }
 }
 
@@ -960,17 +1054,18 @@ export class SongEditor {
     ),
     this._panInput.input,
   );
-  private readonly _chipWaveSelect: HTMLSelectElement = buildOptions(
-    select(),
-    Config.chipWaves.map((wave) => wave.name),
+  private readonly _chipWaveEditor: ChipWaveEditor = new ChipWaveEditor(
+    this.doc,
+    false,
+    null,
+    (newValue: number) => new ChangeChipWave(this.doc, newValue),
+    true,
   );
+  private readonly _chipWaveSelectRow: HTMLDivElement =
+    this._chipWaveEditor.waveRow;
   private readonly _chipNoiseSelect: HTMLSelectElement = buildOptions(
     select(),
     Config.chipNoises.map((wave) => wave.name),
-  );
-  private readonly _chipWaveSelectRow: HTMLDivElement = div(
-    { class: "selectRow instrument-unlabeled-control asset-select-control" },
-    this._chipWaveSelect,
   );
   private readonly _chipNoiseSelectRow: HTMLDivElement = div(
     { class: "selectRow" },
@@ -1341,7 +1436,7 @@ export class SongEditor {
       pan: this._panSliderRow,
       fade: this._fadeInOutRow,
       specific: [
-        this._chipWaveSelectRow,
+        this._chipWaveEditor.container,
         this._chipNoiseSelectRow,
         this._soundFontSelectRow,
         this._soundFontPresetSelectRow,
@@ -1557,6 +1652,7 @@ export class SongEditor {
   private readonly _operatorRows: HTMLDivElement[] = [];
   private readonly _operatorAmplitudeSliders: Slider[] = [];
   private readonly _operatorFrequencyInputs: NumberInput[] = [];
+  private readonly _operatorWaveEditors: ChipWaveEditor[] = [];
   private readonly _operatorWaveSelects: HTMLSelectElement[] = [];
   private readonly _operatorWaveRows: HTMLDivElement[] = [];
   private readonly _operatorWaveButtons: HTMLButtonElement[] = [];
@@ -1612,10 +1708,14 @@ export class SongEditor {
         (_oldValue: number, newValue: number) =>
           new ChangeOperatorFrequency(this.doc, operatorIndex, newValue),
       );
-      const waveSelect: HTMLSelectElement = buildOptions(
-        select({ title: "Waveform" }),
-        ["sine", ...Config.chipWaves.map((wave) => wave.name)],
+      const waveEditor: ChipWaveEditor = new ChipWaveEditor(
+        this.doc,
+        true,
+        operatorIndex,
+        (newValue: number) =>
+          new ChangeOperatorWave(this.doc, operatorIndex, newValue),
       );
+      const waveSelect: HTMLSelectElement = waveEditor.select;
       const amplitudeSlider: Slider = new Slider(
         input({
           type: "range",
@@ -1640,30 +1740,17 @@ export class SongEditor {
         frequencyInput.input,
         amplitudeSlider.container,
       );
-      const waveRow: HTMLDivElement = div(
-        {
-          class: "selectRow instrument-unlabeled-control",
-          style: "display: none;",
-        },
-        waveSelect,
-      );
+      const waveRow: HTMLDivElement = waveEditor.container;
+      waveRow.style.display = "none";
       this._phaseModGroup.append(row, waveRow);
       this._operatorRows[i] = row;
       this._operatorAmplitudeSliders[i] = amplitudeSlider;
       this._operatorFrequencyInputs[i] = frequencyInput;
+      this._operatorWaveEditors[i] = waveEditor;
       this._operatorWaveSelects[i] = waveSelect;
       this._operatorWaveRows[i] = waveRow;
       this._operatorWaveButtons[i] = waveButton;
 
-      waveSelect.addEventListener("change", () => {
-        this.doc.record(
-          new ChangeOperatorWave(
-            this.doc,
-            operatorIndex,
-            waveSelect.selectedIndex,
-          ),
-        );
-      });
       waveButton.addEventListener("click", () => {
         const showWave: boolean = waveRow.style.display == "none";
         waveRow.style.display = showWave ? "" : "none";
@@ -1805,7 +1892,6 @@ export class SongEditor {
       "change",
       this._whenSetFeedbackType,
     );
-    this._chipWaveSelect.addEventListener("change", this._whenSetChipWave);
     this._soundFontSelect.addEventListener("change", this._whenSetSoundFont);
     this._soundFontPresetSelect.addEventListener(
       "change",
@@ -1921,32 +2007,8 @@ export class SongEditor {
   };
 
   private _syncChipWaveOptions(): void {
-    let needsUpdate: boolean =
-      this._chipWaveSelect.options.length != Config.chipWaves.length;
-    if (!needsUpdate) {
-      for (let i: number = 0; i < Config.chipWaves.length; i++) {
-        if (
-          this._chipWaveSelect.options[i].textContent !=
-          Config.chipWaves[i].name
-        ) {
-          needsUpdate = true;
-          break;
-        }
-      }
-    }
-    if (!needsUpdate) return;
-    this._chipWaveSelect.replaceChildren();
-    buildOptions(
-      this._chipWaveSelect,
-      Config.chipWaves.map((wave) => wave.name),
-    );
-    for (const select of this._operatorWaveSelects) {
-      select.replaceChildren();
-      buildOptions(select, [
-        "sine",
-        ...Config.chipWaves.map((wave) => wave.name),
-      ]);
-    }
+    this._chipWaveEditor.syncOptions();
+    for (const editor of this._operatorWaveEditors) editor.syncOptions();
   }
 
   private _syncSoundFontOptions(): void {
@@ -2367,11 +2429,15 @@ export class SongEditor {
     this._syncChipWaveOptions();
     this._syncSoundFontOptions();
     if (instrument.type == InstrumentType.chip) {
-      this._chipWaveSelectRow.style.display = "";
-      setSelectedValue(this._chipWaveSelect, instrument.chipWave);
+      this._chipWaveEditor.container.style.display = "";
+      this._chipWaveEditor.render(
+        instrument.chipWave,
+        instrument.chipWaveSettings.pitch,
+        instrument.chipWaveSettings.tempo,
+      );
       this._updateAssetLoadingIndicator();
     } else {
-      this._chipWaveSelectRow.style.display = "none";
+      this._chipWaveEditor.container.style.display = "none";
       this._chipWaveSelectRow.classList.remove("asset-loading");
     }
     if (instrument.type == InstrumentType.soundFont) {
@@ -2396,9 +2462,10 @@ export class SongEditor {
         this._operatorFrequencyInputs[i].updateValue(
           instrument.operators[i].frequency,
         );
-        setSelectedValue(
-          this._operatorWaveSelects[i],
+        this._operatorWaveEditors[i].render(
           instrument.operators[i].wave,
+          instrument.operators[i].chipWaveSettings.pitch,
+          instrument.operators[i].chipWaveSettings.tempo,
         );
         this._operatorAmplitudeSliders[i].updateValue(
           instrument.operators[i].amplitude,
@@ -3635,12 +3702,6 @@ export class SongEditor {
       }
     }
     this._refocusStage();
-  };
-
-  private _whenSetChipWave = (): void => {
-    this.doc.record(
-      new ChangeChipWave(this.doc, this._chipWaveSelect.selectedIndex),
-    );
   };
 
   private _whenSetSoundFont = (): void => {

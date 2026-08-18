@@ -2327,6 +2327,42 @@ export class ChangeOperatorWave extends Change {
   }
 }
 
+export class ChangeChipWavePitch extends ChangeInstrumentSlider {
+  constructor(
+    doc: SongDocument,
+    operatorIndex: number | null,
+    oldValue: number,
+    newValue: number,
+  ) {
+    super(doc);
+    const settings =
+      operatorIndex == null
+        ? this._instrument.chipWaveSettings
+        : this._instrument.operators[operatorIndex].chipWaveSettings;
+    settings.pitch = newValue;
+    doc.notifier.changed();
+    if (oldValue != newValue) this._didSomething();
+  }
+}
+
+export class ChangeChipWaveTempo extends ChangeInstrumentSlider {
+  constructor(
+    doc: SongDocument,
+    operatorIndex: number | null,
+    oldValue: number,
+    newValue: number,
+  ) {
+    super(doc);
+    const settings =
+      operatorIndex == null
+        ? this._instrument.chipWaveSettings
+        : this._instrument.operators[operatorIndex].chipWaveSettings;
+    settings.tempo = newValue;
+    doc.notifier.changed();
+    if (oldValue != newValue) this._didSomething();
+  }
+}
+
 export class ChangeOperatorAmplitude extends ChangeInstrumentSlider {
   constructor(
     doc: SongDocument,

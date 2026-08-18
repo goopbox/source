@@ -28,7 +28,9 @@ const instrument = {
   volume: 80,
   pan: 10,
   algorithm: "1←(2 3 4)",
-  operators: [{ frequency: 1, amplitude: 12 }],
+  pitchPercent: 125.5,
+  tempoPercent: 80.25,
+  operators: [{ frequency: 1, amplitude: 12, pitchPercent: 90.5, tempoPercent: 110.25 }],
   effects: ["reverb"],
   eqFilter: [],
   reverb: 50,
@@ -44,7 +46,11 @@ test("instrument settings category copies contain only their category", async (c
     settings: {
       type: "FM",
       algorithm: "1←(2 3 4)",
-      operators: [{ frequency: 1, amplitude: 12 }],
+      pitchPercent: 125.5,
+      tempoPercent: 80.25,
+      operators: [
+        { frequency: 1, amplitude: 12, pitchPercent: 90.5, tempoPercent: 110.25 },
+      ],
     },
   });
   assert.deepEqual(

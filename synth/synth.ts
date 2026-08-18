@@ -107,6 +107,8 @@ const compactInstrumentFields: ReadonlyArray<string> = [
   "drumsetEnvelopeAs",
   "drumsetEnvelopeBs",
   "drumsetSpectra",
+  "chipWavePitch",
+  "chipWaveTempo",
 ];
 const compactInstrumentFieldSet: ReadonlySet<string> = new Set(
   compactInstrumentFields,
@@ -675,10 +677,35 @@ export class Pattern {
   }
 }
 
+export class ChipWaveSettings {
+  public pitch: number = 100;
+  public tempo: number = 100;
+
+  public reset(): void {
+    this.pitch = 100;
+    this.tempo = 100;
+  }
+
+  public toSettingsObject(): Object {
+    return {
+      pitchPercent: this.pitch,
+      tempoPercent: this.tempo,
+    };
+  }
+
+  public fromSettingsObject(settingsObject: any): void {
+    const pitch: number = Number(settingsObject?.["pitchPercent"]);
+    const tempo: number = Number(settingsObject?.["tempoPercent"]);
+    this.pitch = Number.isFinite(pitch) ? pitch : 100;
+    this.tempo = Number.isFinite(tempo) ? tempo : 100;
+  }
+}
+
 export class Operator {
   public frequency: number = 1;
   public amplitude: number = 0;
   public wave: number = 0;
+  public readonly chipWaveSettings: ChipWaveSettings = new ChipWaveSettings();
 
   constructor(index: number) {
     this.reset(index);
@@ -688,6 +715,7 @@ export class Operator {
     this.frequency = 1;
     this.amplitude = index <= 1 ? Config.operatorAmplitudeMax : 0;
     this.wave = 0;
+    this.chipWaveSettings.reset();
   }
 }
 
@@ -1225,6 +1253,7 @@ export class Instrument {
   public type: InstrumentType = InstrumentType.chip;
   public preset: number = 0;
   public chipWave: number = 2;
+  public readonly chipWaveSettings: ChipWaveSettings = new ChipWaveSettings();
   public chipNoise: number = 1;
   public eqFilter: FilterSettings = new FilterSettings();
   public noteFilter: FilterSettings = new FilterSettings();
@@ -1301,6 +1330,7 @@ export class Instrument {
     );
     this.pan = Config.panCenter;
     this.pitchShift = Config.pitchShiftCenter;
+    this.chipWaveSettings.reset();
     this.detune = Config.detuneCenter;
     this.vibrato = 0;
     this.unison = 0;
@@ -1503,6 +1533,7 @@ export class Instrument {
       instrumentObject["wave"] = chipWave.name;
       if (chipWave.sampleId != undefined)
         instrumentObject["sampleId"] = chipWave.sampleId;
+      Object.assign(instrumentObject, this.chipWaveSettings.toSettingsObject());
     } else if (this.type == InstrumentType.pwm) {
       instrumentObject["pulseWidth"] =
         Math.round(getPulseWidthRatio(this.pulseWidth) * 100 * 100000) / 100000;
@@ -1542,6 +1573,7 @@ export class Instrument {
           ...(chipWave?.sampleId == undefined
             ? {}
             : { sampleId: chipWave.sampleId }),
+          ...operator.chipWaveSettings.toSettingsObject(),
         });
       }
       instrumentObject["algorithm"] = Config.algorithms[this.algorithm].name;
@@ -1882,6 +1914,7 @@ export class Instrument {
               (wave) => wave.name == instrumentObject["wave"],
             );
       if (this.chipWave == -1) this.chipWave = 1;
+      this.chipWaveSettings.fromSettingsObject(instrumentObject);
     }
 
     if (this.type == InstrumentType.fm) {
@@ -1937,6 +1970,7 @@ export class Instrument {
                 (wave) => wave.name == operatorObject["wave"],
               );
         operator.wave = chipWave == -1 ? 0 : chipWave + 1;
+        operator.chipWaveSettings.fromSettingsObject(operatorObject);
       }
     }
 
@@ -2072,6 +2106,8 @@ export class Instrument {
       type: this.type,
       preset: this.preset,
       chipWave: this.chipWave,
+      chipWavePitch: this.chipWaveSettings.pitch,
+      chipWaveTempo: this.chipWaveSettings.tempo,
       chipNoise: this.chipNoise,
       fadeIn: this.fadeIn,
       fadeOut: this.fadeOut,
@@ -2118,6 +2154,8 @@ export class Instrument {
         frequency: operator.frequency,
         amplitude: operator.amplitude,
         wave: operator.wave,
+        pitch: operator.chipWaveSettings.pitch,
+        tempo: operator.chipWaveSettings.tempo,
       })),
       spectrum: this.spectrumWave.spectrum.concat(),
       harmonics: this.harmonicsWave.harmonics.concat(),
@@ -2214,6 +2252,8 @@ export class Instrument {
     const scalarValues: { [name: string]: number } = {};
     for (const name of scalarNames)
       scalarValues[name] = numberValue(binaryState[name]);
+    const chipWavePitch: number = numberValue(binaryState.chipWavePitch);
+    const chipWaveTempo: number = numberValue(binaryState.chipWaveTempo);
 
     // These settings index fixed configuration arrays, even when their instrument
     // type or effect is currently disabled. Validate dormant settings too so a
@@ -2371,6 +2411,8 @@ export class Instrument {
       frequency: number;
       amplitude: number;
       wave: number;
+      pitch: number;
+      tempo: number;
     }> = [];
     for (let i: number = 0; i < this.operators.length; i++) {
       const candidate: any = binaryState.operators[i];
@@ -2392,6 +2434,8 @@ export class Instrument {
           Config.operatorAmplitudeMax,
         ),
         wave: indexValue(candidate.wave, Config.chipWaves.length + 1),
+        pitch: candidate.pitch == undefined ? 100 : numberValue(candidate.pitch),
+        tempo: candidate.tempo == undefined ? 100 : numberValue(candidate.tempo),
       });
     }
 
@@ -2452,6 +2496,8 @@ export class Instrument {
     // All validation is complete. Apply the state only after every nested field
     // has been checked so direct callers cannot observe a half-restored instrument.
     for (const name of scalarNames) (<any>this)[name] = scalarValues[name];
+    this.chipWaveSettings.pitch = chipWavePitch;
+    this.chipWaveSettings.tempo = chipWaveTempo;
     this.soundFontId = binaryState.soundFontId;
     const restoreFilter = (
       filter: FilterSettings,
@@ -2480,6 +2526,8 @@ export class Instrument {
       this.operators[i].frequency = operatorStates[i].frequency;
       this.operators[i].amplitude = operatorStates[i].amplitude;
       this.operators[i].wave = operatorStates[i].wave;
+      this.operators[i].chipWaveSettings.pitch = operatorStates[i].pitch;
+      this.operators[i].chipWaveSettings.tempo = operatorStates[i].tempo;
     }
     this.spectrumWave.spectrum = spectrumState;
     this.spectrumWave.markCustomWaveDirty();
@@ -4578,6 +4626,7 @@ class Tone {
   public readonly phases: number[] = [];
   public readonly phaseDeltas: number[] = [];
   public readonly phaseDeltaScales: number[] = [];
+  public readonly chipWaveGrainPhases: number[] = [];
   public expression: number = 0.0;
   public expressionDelta: number = 0.0;
   public readonly operatorExpressions: number[] = [];
@@ -4639,6 +4688,7 @@ class Tone {
       i++
     ) {
       this.phases[i] = 0.0;
+      this.chipWaveGrainPhases[i] = 0.0;
       if (i < Config.operatorCount * 2) this.feedbackOutputs[i] = 0.0;
       if (i < Config.maxPitchOrOperatorCount)
         this.prevPitchExpressions[i] = null;
@@ -4703,6 +4753,10 @@ class InstrumentState {
   public usesUnison: boolean = false;
   public chord: Chord | null = null;
   public effects: number = 0;
+  public chipWavePitchFactor: number = 1.0;
+  public chipWaveTempoFactor: number = 1.0;
+  public readonly operatorChipWavePitchFactors: number[] = [];
+  public readonly operatorChipWaveTempoFactors: number[] = [];
   public soundFontBankId: string | null = null;
   public soundFontPresetIndex: number = -1;
 
@@ -4797,6 +4851,10 @@ class InstrumentState {
   public readonly drumsetSpectrumWaves: SpectrumWaveState[] = [];
 
   constructor() {
+    for (let i: number = 0; i < Config.operatorCount; i++) {
+      this.operatorChipWavePitchFactors[i] = 1.0;
+      this.operatorChipWaveTempoFactors[i] = 1.0;
+    }
     for (let i: number = 0; i < Config.drumCount; i++) {
       this.drumsetSpectrumWaves[i] = new SpectrumWaveState();
     }
@@ -4961,6 +5019,20 @@ class InstrumentState {
     this.soundFontPresetIndex = instrument.soundFontPreset;
     this.noisePitchFilterMult =
       Config.chipNoises[instrument.chipNoise].pitchFilterMult;
+    this.chipWavePitchFactor = Synth.chipWavePercentToFactor(
+      instrument.chipWaveSettings.pitch,
+    );
+    this.chipWaveTempoFactor = Synth.chipWavePercentToFactor(
+      instrument.chipWaveSettings.tempo,
+    );
+    for (let i: number = 0; i < Config.operatorCount; i++) {
+      this.operatorChipWavePitchFactors[i] = Synth.chipWavePercentToFactor(
+        instrument.operators[i].chipWaveSettings.pitch,
+      );
+      this.operatorChipWaveTempoFactors[i] = Synth.chipWavePercentToFactor(
+        instrument.operators[i].chipWaveSettings.tempo,
+      );
+    }
 
     // Force effects to be disabled if the corresponding slider is at zero (and automation isn't involved).
     let effects: number = instrument.effects;
@@ -7991,6 +8063,54 @@ export class Synth {
     return effect;
   }
 
+  public static chipWavePercentToFactor(percent: number): number {
+    return percent / 100.0;
+  }
+
+  public static chipWaveGrainLength(samplesPerSecond: number): number {
+    return Math.max(64, samplesPerSecond * 0.04);
+  }
+
+  public static interpolateChipWaveSample(
+    wave: Float32Array,
+    phase: number,
+  ): number {
+    const waveLength: number = wave.length;
+    if (waveLength == 0) return 0.0;
+    const phaseFloor: number = Math.floor(phase);
+    const index: number =
+      ((phaseFloor % waveLength) + waveLength) % waveLength;
+    const nextIndex: number = (index + 1) % waveLength;
+    const ratio: number = phase - phaseFloor;
+    return wave[index] + (wave[nextIndex] - wave[index]) * ratio;
+  }
+
+  public static sampleChipWave(
+    wave: Float32Array,
+    phase: number,
+    pitchPhaseDelta: number,
+    sourcePhaseDelta: number,
+    grainPhase: number,
+    grainLength: number,
+  ): number {
+    if (pitchPhaseDelta == sourcePhaseDelta) {
+      return Synth.interpolateChipWaveSample(wave, phase);
+    }
+    const phaseDifference: number = pitchPhaseDelta - sourcePhaseDelta;
+    const secondGrainPhase: number = (grainPhase + 0.5) % 1.0;
+    const firstWeight: number =
+      0.5 - 0.5 * Math.cos(Math.PI * 2.0 * grainPhase);
+    const firstSample: number = Synth.interpolateChipWaveSample(
+      wave,
+      phase + grainPhase * grainLength * phaseDifference,
+    );
+    const secondSample: number = Synth.interpolateChipWaveSample(
+      wave,
+      phase + secondGrainPhase * grainLength * phaseDifference,
+    );
+    return firstSample * firstWeight + secondSample * (1.0 - firstWeight);
+  }
+
   public static getInstrumentSynthFunction(instrument: Instrument): Function {
     if (instrument.type == InstrumentType.fm) {
       const usesUnison: boolean = effectsIncludeUnison(instrument.effects);
@@ -8043,6 +8163,7 @@ export class Synth {
                 for (const operatorLine of asset
                   ? Synth.sampleOperatorSourceTemplate
                   : Synth.operatorSourceTemplate) {
+                  let renderedLine: string = operatorLine;
                   if (operatorLine.indexOf("/* + operator@Scaled*/") != -1) {
                     let modulators = "";
                     for (const modulatorNumber of Config.algorithms[
@@ -8073,19 +8194,16 @@ export class Synth {
                         voice +
                         j +
                         "PhaseModScale";
-                    synthSource.push(
-                      operatorLine
-                        .replace(/operator#/g, "operator" + voice + j)
-                        .replace("/* + operator@Scaled*/", modulators),
-                    );
-                  } else {
-                    synthSource.push(
-                      operatorLine.replace(
-                        /operator#/g,
-                        "operator" + voice + j,
-                      ),
+                    renderedLine = renderedLine.replace(
+                      "/* + operator@Scaled*/",
+                      modulators,
                     );
                   }
+                  synthSource.push(
+                    renderedLine
+                      .replaceAll("/*operatorIndex*/", String(j))
+                      .replace(/operator#/g, "operator" + voice + j),
+                  );
                 }
               }
             }
@@ -8095,7 +8213,7 @@ export class Synth {
                 const stateIndex: number =
                   j + (voice == "B" ? Config.operatorCount : 0);
                 let voiceLine: string = line.replace(
-                  /tone\.(phases|phaseDeltas|phaseDeltaScales|feedbackOutputs)\[#\]/g,
+                  /tone\.(phases|phaseDeltas|phaseDeltaScales|chipWaveGrainPhases|feedbackOutputs)\[#\]/g,
                   (_match, arrayName) =>
                     "tone." + arrayName + "[" + stateIndex + "]",
                 );
@@ -8127,16 +8245,23 @@ export class Synth {
                       "\t\tconst operator#PhaseModScale = operator#PhaseScale / " +
                       Config.sineWaveLength +
                       ";";
-                  } else if (line.indexOf("let operator#Phase       =") != -1) {
+                  } else if (line.indexOf("let operator#Phase =") != -1) {
                     voiceLine =
                       "\t\tlet operator#Phase = +((tone.phases[" +
                       stateIndex +
                       "] % 1) + 1000) * operator#WaveLength;";
-                  } else if (line.indexOf("let operator#PhaseDelta  =") != -1) {
+                  } else if (
+                    line.indexOf("let operator#BasePhaseDelta =") != -1
+                  ) {
                     voiceLine =
-                      "\t\tlet operator#PhaseDelta = +tone.phaseDeltas[" +
+                      "\t\tlet operator#BasePhaseDelta = +tone.phaseDeltas[" +
                       stateIndex +
                       "] * operator#PhaseScale;";
+                  } else if (line.indexOf("let operator#PhaseDelta =") != -1) {
+                    voiceLine =
+                      "\t\tlet operator#PhaseDelta = operator#BasePhaseDelta * instrument.operatorChipWaveTempoFactors[" +
+                      j +
+                      "];";
                   } else if (line.indexOf("tone.phases[#] =") != -1) {
                     voiceLine =
                       "\t\ttone.phases[" +
@@ -8146,13 +8271,12 @@ export class Synth {
                     voiceLine =
                       "\t\ttone.phaseDeltas[" +
                       stateIndex +
-                      "] = operator#PhaseDelta / operator#PhaseScale;";
+                      "] = operator#BasePhaseDelta / operator#PhaseScale;";
                   }
                 }
-                voiceLine = voiceLine.replace(
-                  "/*operatorWave*/",
-                  String(operatorWaveIndex),
-                );
+                voiceLine = voiceLine
+                  .replace("/*operatorWave*/", String(operatorWaveIndex))
+                  .replaceAll("/*operatorIndex*/", String(j));
                 voiceLine = voiceLine.replace(
                   /operator#/g,
                   "operator" + voice + j,
@@ -8425,8 +8549,12 @@ export class Synth {
       !instrumentState.chord!.customInterval
     )
       tone.phases[1] = tone.phases[0];
-    let phaseDeltaA: number = tone.phaseDeltas[0] * waveLength;
-    let phaseDeltaB: number = tone.phaseDeltas[1] * waveLength;
+    let basePhaseDeltaA: number = tone.phaseDeltas[0] * waveLength;
+    let basePhaseDeltaB: number = tone.phaseDeltas[1] * waveLength;
+    let phaseDeltaA: number =
+      basePhaseDeltaA * instrumentState.chipWavePitchFactor;
+    let phaseDeltaB: number =
+      basePhaseDeltaB * instrumentState.chipWavePitchFactor;
     const phaseDeltaScaleA: number = +tone.phaseDeltaScales[0];
     const phaseDeltaScaleB: number = +tone.phaseDeltaScales[1];
     let expression: number = +tone.expression;
@@ -8440,16 +8568,16 @@ export class Synth {
     let initialFilterInput2: number = +tone.initialNoteFilterInput2;
     const applyFilters: Function = Synth.applyFilters;
 
-    const phaseAInt: number = phaseA | 0;
-    const phaseBInt: number = phaseB | 0;
-    const indexA: number = phaseAInt % waveLength;
-    const indexB: number = phaseBInt % waveLength;
-    const phaseRatioA: number = phaseA - phaseAInt;
-    const phaseRatioB: number = phaseB - phaseBInt;
-    let prevWaveIntegralA: number = +wave[indexA];
-    let prevWaveIntegralB: number = +wave[indexB];
-    prevWaveIntegralA += (wave[indexA + 1] - prevWaveIntegralA) * phaseRatioA;
-    prevWaveIntegralB += (wave[indexB + 1] - prevWaveIntegralB) * phaseRatioB;
+    const interpolateIntegral = (phase: number): number => {
+      const phaseFloor: number = Math.floor(phase);
+      const index: number =
+        ((phaseFloor % waveLength) + waveLength) % waveLength;
+      const ratio: number = phase - phaseFloor;
+      const value: number = wave[index];
+      return value + (wave[index + 1] - value) * ratio;
+    };
+    let prevWaveIntegralA: number = interpolateIntegral(phaseA);
+    let prevWaveIntegralB: number = interpolateIntegral(phaseB);
 
     const stopIndex: number = bufferIndex + runLength;
     for (
@@ -8460,20 +8588,16 @@ export class Synth {
       phaseA += phaseDeltaA;
       phaseB += phaseDeltaB;
 
-      const phaseAInt: number = phaseA | 0;
-      const phaseBInt: number = phaseB | 0;
-      const indexA: number = phaseAInt % waveLength;
-      const indexB: number = phaseBInt % waveLength;
-      let nextWaveIntegralA: number = wave[indexA];
-      let nextWaveIntegralB: number = wave[indexB];
-      const phaseRatioA: number = phaseA - phaseAInt;
-      const phaseRatioB: number = phaseB - phaseBInt;
-      nextWaveIntegralA += (wave[indexA + 1] - nextWaveIntegralA) * phaseRatioA;
-      nextWaveIntegralB += (wave[indexB + 1] - nextWaveIntegralB) * phaseRatioB;
+      const nextWaveIntegralA: number = interpolateIntegral(phaseA);
+      const nextWaveIntegralB: number = interpolateIntegral(phaseB);
       const waveA: number =
-        (nextWaveIntegralA - prevWaveIntegralA) / phaseDeltaA;
+        phaseDeltaA == 0.0
+          ? 0.0
+          : (nextWaveIntegralA - prevWaveIntegralA) / phaseDeltaA;
       const waveB: number =
-        (nextWaveIntegralB - prevWaveIntegralB) / phaseDeltaB;
+        phaseDeltaB == 0.0
+          ? 0.0
+          : (nextWaveIntegralB - prevWaveIntegralB) / phaseDeltaB;
       prevWaveIntegralA = nextWaveIntegralA;
       prevWaveIntegralB = nextWaveIntegralB;
 
@@ -8488,6 +8612,8 @@ export class Synth {
       initialFilterInput2 = initialFilterInput1;
       initialFilterInput1 = inputSample;
 
+      basePhaseDeltaA *= phaseDeltaScaleA;
+      basePhaseDeltaB *= phaseDeltaScaleB;
       phaseDeltaA *= phaseDeltaScaleA;
       phaseDeltaB *= phaseDeltaScaleB;
 
@@ -8499,8 +8625,8 @@ export class Synth {
 
     tone.phases[0] = phaseA / waveLength;
     tone.phases[1] = phaseB / waveLength;
-    tone.phaseDeltas[0] = phaseDeltaA / waveLength;
-    tone.phaseDeltas[1] = phaseDeltaB / waveLength;
+    tone.phaseDeltas[0] = basePhaseDeltaA / waveLength;
+    tone.phaseDeltas[1] = basePhaseDeltaB / waveLength;
     tone.expression = expression;
 
     synth.sanitizeFilters(filters);
@@ -8527,6 +8653,13 @@ export class Synth {
       instrumentState.assetRootKey,
     );
     const samplePhaseScale: number = sampleData.sampleRate / rootFrequency;
+    const pitchFactor: number = instrumentState.chipWavePitchFactor;
+    const tempoFactor: number = instrumentState.chipWaveTempoFactor;
+    const grainLength: number = Synth.chipWaveGrainLength(
+      synth.samplesPerSecond,
+    );
+    const grainPhaseDelta: number = 1.0 / grainLength;
+    let grainPhase: number = tone.chipWaveGrainPhases[0];
 
     const unisonSign: number = instrumentState.usesUnison
       ? tone.specialIntervalExpressionMult * instrumentState.unison!.sign
@@ -8536,8 +8669,8 @@ export class Synth {
       !instrumentState.chord!.customInterval
     )
       tone.phases[1] = tone.phases[0];
-    let phaseDeltaA: number = tone.phaseDeltas[0] * samplePhaseScale;
-    let phaseDeltaB: number = tone.phaseDeltas[1] * samplePhaseScale;
+    let basePhaseDeltaA: number = tone.phaseDeltas[0] * samplePhaseScale;
+    let basePhaseDeltaB: number = tone.phaseDeltas[1] * samplePhaseScale;
     const phaseDeltaScaleA: number = +tone.phaseDeltaScales[0];
     const phaseDeltaScaleB: number = +tone.phaseDeltaScales[1];
     let expression: number = +tone.expression;
@@ -8557,20 +8690,26 @@ export class Synth {
       sampleIndex < stopIndex;
       sampleIndex++
     ) {
-      const phaseAInt: number = Math.floor(phaseA);
-      const phaseBInt: number = Math.floor(phaseB);
-      const indexA: number =
-        ((phaseAInt % waveLength) + waveLength) % waveLength;
-      const indexB: number =
-        ((phaseBInt % waveLength) + waveLength) % waveLength;
-      const nextIndexA: number = (indexA + 1) % waveLength;
-      const nextIndexB: number = (indexB + 1) % waveLength;
-      const phaseRatioA: number = phaseA - phaseAInt;
-      const phaseRatioB: number = phaseB - phaseBInt;
-      const waveA: number =
-        wave[indexA] + (wave[nextIndexA] - wave[indexA]) * phaseRatioA;
-      const waveB: number =
-        wave[indexB] + (wave[nextIndexB] - wave[indexB]) * phaseRatioB;
+      const pitchPhaseDeltaA: number = basePhaseDeltaA * pitchFactor;
+      const pitchPhaseDeltaB: number = basePhaseDeltaB * pitchFactor;
+      const sourcePhaseDeltaA: number = basePhaseDeltaA * tempoFactor;
+      const sourcePhaseDeltaB: number = basePhaseDeltaB * tempoFactor;
+      const waveA: number = Synth.sampleChipWave(
+        wave,
+        phaseA,
+        pitchPhaseDeltaA,
+        sourcePhaseDeltaA,
+        grainPhase,
+        grainLength,
+      );
+      const waveB: number = Synth.sampleChipWave(
+        wave,
+        phaseB,
+        pitchPhaseDeltaB,
+        sourcePhaseDeltaB,
+        grainPhase,
+        grainLength,
+      );
 
       const inputSample: number = waveA + waveB * unisonSign;
       const filteredSample: number = applyFilters(
@@ -8587,16 +8726,19 @@ export class Synth {
       expression += expressionDelta;
       data[sampleIndex] += output;
 
-      phaseA += phaseDeltaA;
-      phaseB += phaseDeltaB;
-      phaseDeltaA *= phaseDeltaScaleA;
-      phaseDeltaB *= phaseDeltaScaleB;
+      phaseA += sourcePhaseDeltaA;
+      phaseB += sourcePhaseDeltaB;
+      basePhaseDeltaA *= phaseDeltaScaleA;
+      basePhaseDeltaB *= phaseDeltaScaleB;
+      grainPhase += grainPhaseDelta;
+      if (grainPhase >= 1.0) grainPhase -= 1.0;
     }
 
     tone.phases[0] = (phaseA / waveLength) % 1.0;
     tone.phases[1] = (phaseB / waveLength) % 1.0;
-    tone.phaseDeltas[0] = phaseDeltaA / samplePhaseScale;
-    tone.phaseDeltas[1] = phaseDeltaB / samplePhaseScale;
+    tone.phaseDeltas[0] = basePhaseDeltaA / samplePhaseScale;
+    tone.phaseDeltas[1] = basePhaseDeltaB / samplePhaseScale;
+    tone.chipWaveGrainPhases[0] = grainPhase;
     tone.expression = expression;
 
     synth.sanitizeFilters(filters);
@@ -9702,21 +9844,25 @@ export class Synth {
     `
 		const data = synth.tempMonoInstrumentSampleBuffer;
 		const sineWave = Config.sineWave;
+		const chipWaveGrainLength = Synth.chipWaveGrainLength(synth.samplesPerSecond);
+		const chipWaveGrainPhaseDelta = 1.0 / chipWaveGrainLength;
 		const operator#Wave = Config.getFmWave(/*operatorWave*/);
 
 		// I'm adding 1000 to the phase to ensure that it's never negative even when modulated by other waves because negative numbers don't work with the modulus operator very well.
-		let operator#Phase       = +((tone.phases[#] % 1) + 1000) * ` +
+		let operator#Phase = +((tone.phases[#] % 1) + 1000) * ` +
     Config.sineWaveLength +
     `;
-		let operator#PhaseDelta  = +tone.phaseDeltas[#] * ` +
+		let operator#BasePhaseDelta = +tone.phaseDeltas[#] * ` +
     Config.sineWaveLength +
     `;
+		let operator#PhaseDelta = operator#BasePhaseDelta * instrument.operatorChipWavePitchFactors[/*operatorIndex*/];
 		let operator#PhaseDeltaScale = +tone.phaseDeltaScales[#];
-		let operator#OutputMult  = +tone.operatorExpressions[#];
+		let operator#GrainPhase = +tone.chipWaveGrainPhases[#];
+		let operator#OutputMult = +tone.operatorExpressions[#];
 		const operator#OutputDelta = +tone.operatorExpressionDeltas[#];
-		let operator#Output      = +tone.feedbackOutputs[#];
-		let feedbackMult         = +tone.feedbackMult;
-		const feedbackDelta      = +tone.feedbackDelta;
+		let operator#Output = +tone.feedbackOutputs[#];
+		let feedbackMult = +tone.feedbackMult;
+		const feedbackDelta = +tone.feedbackDelta;
 		let expression = +tone.expression;
 		const expressionDelta = +tone.expressionDelta;
 
@@ -9739,6 +9885,7 @@ export class Synth {
 			feedbackMult += feedbackDelta;
 			operator#OutputMult += operator#OutputDelta;
 			operator#Phase += operator#PhaseDelta;
+			operator#BasePhaseDelta *= operator#PhaseDeltaScale;
 			operator#PhaseDelta *= operator#PhaseDeltaScale;
 
 			const output = sample * expression;
@@ -9750,9 +9897,10 @@ export class Synth {
 		tone.phases[#] = operator#Phase / ` +
     Config.sineWaveLength +
     `;
-		tone.phaseDeltas[#] = operator#PhaseDelta / ` +
+		tone.phaseDeltas[#] = operator#BasePhaseDelta / ` +
     Config.sineWaveLength +
     `;
+		tone.chipWaveGrainPhases[#] = operator#GrainPhase;
 		tone.operatorExpressions[#] = operator#OutputMult;
 		tone.feedbackOutputs[#] = operator#Output;
 		tone.feedbackMult = feedbackMult;
@@ -9767,23 +9915,28 @@ export class Synth {
   private static operatorSourceTemplate: string[] = (
     `
 			const operator#PhaseMix = operator#Phase/* + operator@Scaled*/;
-			const operator#PhaseInt = operator#PhaseMix|0;
-			const operator#Index    = operator#PhaseInt & ` +
+			const operator#PhaseInt = Math.floor(operator#PhaseMix);
+			const operator#Index = operator#PhaseInt & ` +
     Config.sineWaveMask +
     `;
-			const operator#Sample   = operator#Wave[operator#Index];
-			operator#Output         = operator#Sample + (operator#Wave[operator#Index + 1] - operator#Sample) * (operator#PhaseMix - operator#PhaseInt);
-			const operator#Scaled   = operator#OutputMult * operator#Output;
+			const operator#Sample = operator#Wave[operator#Index];
+			operator#Output = operator#Sample + (operator#Wave[operator#Index + 1] - operator#Sample) * (operator#PhaseMix - operator#PhaseInt);
+			const operator#Scaled = operator#OutputMult * operator#Output;
 	`
   ).split("\n");
 
   private static sampleOperatorSourceTemplate: string[] = `
 			const operator#PhaseMix = operator#Phase/* + operator@Scaled*/;
-			const operator#PhaseFloor = Math.floor(operator#PhaseMix);
-			const operator#Index = ((operator#PhaseFloor % operator#WaveLength) + operator#WaveLength) % operator#WaveLength;
-			const operator#NextIndex = (operator#Index + 1) % operator#WaveLength;
-			const operator#Sample = operator#Wave[operator#Index];
-			operator#Output = (operator#Sample + (operator#Wave[operator#NextIndex] - operator#Sample) * (operator#PhaseMix - operator#PhaseFloor)) * operator#SampleGain;
+			operator#Output = Synth.sampleChipWave(
+				operator#Wave,
+				operator#PhaseMix,
+				operator#BasePhaseDelta * instrument.operatorChipWavePitchFactors[/*operatorIndex*/],
+				operator#PhaseDelta,
+				operator#GrainPhase,
+				chipWaveGrainLength,
+			) * operator#SampleGain;
+			operator#GrainPhase += chipWaveGrainPhaseDelta;
+			if (operator#GrainPhase >= 1.0) operator#GrainPhase -= 1.0;
 			const operator#Scaled = operator#OutputMult * operator#Output;
 	`.split("\n");
 
