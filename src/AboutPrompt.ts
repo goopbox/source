@@ -102,8 +102,9 @@ export class AboutPrompt implements Prompt {
         ),
         ". This dedication does not apply to BeepBox-derived code or third-party software.",
       ),
-      p("GoopBox will NEVER be paid software or ask for contributions."),
-      p("Any indication otherwise is an impersonator or a hack."),
+      p(
+        "GoopBox will NEVER be paid software or ask for contributions. Any indication otherwise is an impersonator or a hack.",
+      ),
       p(
         "The GoopBox logo is courtesy of ",
         a(
