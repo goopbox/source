@@ -121,7 +121,10 @@ export class AboutPrompt implements Prompt {
     );
 
     const disclosure: HTMLElement = document.createElement("div");
-    disclosure.append(p("GoopBox code is mostly (99%) developed with AI."));
+    disclosure.append(
+      p("GoopBox code is mostly (99%) developed with AI."),
+      p("It is not, and will never be, an AI soundtrack generator."),
+    );
 
     this._prompt = new TabbedSearchablePrompt(
       "About",
