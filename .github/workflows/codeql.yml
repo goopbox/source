@@ -27,39 +27,4 @@ jobs:
           languages: javascript-typescript
 
       - name: Analyze
-        id: analyze
         uses: github/codeql-action/analyze@v4
-        with:
-          output: codeql-sarif
-          upload: never
-
-      - name: Print CodeQL findings
-        shell: bash
-        run: |
-          set -euo pipefail
-          while IFS= read -r -d '' file; do
-            jq -r '
-              .runs[] as $run
-              | $run.results[]?
-              | . as $result
-              | (first($run.tool.driver.rules[]? | select(.id == $result.ruleId)) // {}) as $rule
-              | [
-                  "CODEQL",
-                  ($result.ruleId // ""),
-                  ($rule.defaultConfiguration.level // ""),
-                  ($rule.properties["security-severity"] // ""),
-                  ($rule.shortDescription.text // $rule.name // ""),
-                  ($result.message.text // ""),
-                  ($result.locations[0].physicalLocation.artifactLocation.uri // ""),
-                  (($result.locations[0].physicalLocation.region.startLine // 0) | tostring),
-                  (($result.locations[0].physicalLocation.region.startColumn // 0) | tostring)
-                ]
-              | @tsv
-            ' "$file"
-          done < <(find "${{ steps.analyze.outputs.sarif-output }}" -type f -name '*.sarif' -print0)
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Build
-        run: npm run build
