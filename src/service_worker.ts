@@ -26,6 +26,11 @@ interface ServiceWorkerScope {
 const worker: ServiceWorkerScope = self as unknown as ServiceWorkerScope;
 const applicationCachePrefix: string = "goopbox-audio-worklet-";
 const applicationCacheName: string = `${applicationCachePrefix}2`;
+const permanentExternalResourceOrigins: ReadonlySet<string> = new Set([
+  "https://fonts.googleapis.com",
+  "https://fonts.gstatic.com",
+  "https://cdn.jsdelivr.net",
+]);
 
 worker.addEventListener("install", (event: ExtendableEvent): void => {
   event.waitUntil(
@@ -65,10 +70,9 @@ worker.addEventListener("activate", (event: ExtendableEvent): void => {
 worker.addEventListener("fetch", (event: WorkerFetchEvent): void => {
   if (event.request.method != "GET") return;
 
+  const requestOrigin: string = new URL(event.request.url).origin;
   const isPermanentExternalResource: boolean =
-    event.request.url.startsWith("https://fonts.googleapis.com") ||
-    event.request.url.startsWith("https://fonts.gstatic.com") ||
-    event.request.url.startsWith("https://cdn.jsdelivr.net");
+    permanentExternalResourceOrigins.has(requestOrigin);
 
   event.respondWith(
     (async (): Promise<Response> => {
@@ -89,7 +93,7 @@ worker.addEventListener("fetch", (event: WorkerFetchEvent): void => {
 
       try {
         const response: Response = await fetch(event.request);
-        if (event.request.url.startsWith(worker.location.origin))
+        if (requestOrigin == worker.location.origin)
           await applicationCache.put(event.request, response.clone());
         return response;
       } catch (error: unknown) {
