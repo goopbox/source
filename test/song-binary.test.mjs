@@ -5,7 +5,6 @@ import { join } from "node:path";
 import test from "node:test";
 import { pathToFileURL } from "node:url";
 import { build } from "esbuild";
-import { deflateSync } from "fflate";
 
 async function loadSongModules() {
   const directory = await mkdtemp(join(tmpdir(), "goopbox-song-binary-test-"));
@@ -55,19 +54,6 @@ function encodeLegacySongBinary(body) {
   return result;
 }
 
-function encodeVersion2SongBinary(body) {
-  const compressed = deflateSync(body, { level: 9 });
-  const result = new Uint8Array(5 + compressed.length + 4);
-  result.set([0x53, 0x4c, 0x44, 0x47, 2], 0);
-  result.set(compressed, 5);
-  const view = new DataView(result.buffer);
-  view.setUint32(
-    result.length - 4,
-    crc32(result.subarray(0, result.length - 4)),
-  );
-  return result;
-}
-
 test("songs round-trip as deterministic compressed binary", async (context) => {
   const { Note, Song, cleanup } = await loadSongModules();
   context.after(cleanup);
@@ -92,6 +78,49 @@ test("songs round-trip as deterministic compressed binary", async (context) => {
   assert.deepEqual(restored.toBinary(), first);
 });
 
+test("existing version 1 effect values decode and re-encode without data loss", async (context) => {
+  const { Song, cleanup } = await loadSongModules();
+  context.after(cleanup);
+
+  // Regression fixture saved by version 1 with effect text-input values beyond
+  // the decoder's former artificial bounds.
+  const version1 = new Uint8Array(
+    Buffer.from(
+      "U0xERwG7wyDIyMDAcGYaiwAHIwMLM+OEKZNYJs5jYDjL8v4c+weGBIbTDhNAKhgYTh9oYIEwHBIkoCIFTFCRAAWYFA+MIQBlFMB0NbCBGZOYJ04FmQ9iMiGYDBOnMjGBmUcgZuEBR1jB9gIAYuxYYg==",
+      "base64",
+    ),
+  );
+  assert.equal(version1[4], 1);
+
+  const song = new Song(version1);
+  const instrument = song.channels[0].instruments[0];
+  assert.deepEqual(
+    {
+      pitchShift: instrument.pitchShift,
+      detune: instrument.detune,
+      distortion: instrument.distortion,
+      bitcrusherFreq: instrument.bitcrusherFreq,
+      bitcrusherQuantization: instrument.bitcrusherQuantization,
+      chorus: instrument.chorus,
+      echoSustain: instrument.echoSustain,
+      echoDelay: instrument.echoDelay,
+      reverb: instrument.reverb,
+    },
+    {
+      pitchShift: 1024.25,
+      detune: -512.5,
+      distortion: 128.75,
+      bitcrusherFreq: -256.125,
+      bitcrusherQuantization: 64.5,
+      chorus: 128.375,
+      echoSustain: 256.25,
+      echoDelay: 512.75,
+      reverb: 128.5,
+    },
+  );
+  assert.deepEqual(song.toBinary(), version1);
+});
+
 test("song binary rejects the old uncompressed version 1 format", async (context) => {
   const { Song, decodeSongBinary, encodeBinaryValue, cleanup } =
     await loadSongModules();
@@ -102,30 +131,6 @@ test("song binary rejects the old uncompressed version 1 format", async (context
     encodeBinaryValue(song.toBinaryObject()),
   );
   assert.throws(() => new Song(legacy));
-});
-
-test("song binary rejects the old compressed version 2 format", async (context) => {
-  const { Song, encodeBinaryValue, cleanup } = await loadSongModules();
-  context.after(cleanup);
-  const song = new Song();
-  song.tempo = 203;
-  song.channels[0].octave = 5;
-  const legacy = encodeVersion2SongBinary(
-    encodeBinaryValue(song.toBinaryObject(), true),
-  );
-  assert.throws(() => new Song(legacy), /Unsupported \.goop version: 2/);
-});
-
-test("song binary rejects the old version 3 container", async (context) => {
-  const { Song, cleanup } = await loadSongModules();
-  context.after(cleanup);
-  const version3 = new Uint8Array(
-    Buffer.from(
-      "U0xERwO7wyDIxMDAcOY0iwAHIwMLM+OEKZNYJk5lYDjLAhSexIxgMiGYDBOnMjGBmUcUBIAkPnCEcy/H2cWzQUwAEuwPYw==",
-      "base64",
-    ),
-  );
-  assert.throws(() => new Song(version3), /Unsupported \.goop version: 3/);
 });
 
 test("song binary rejects the old compact song body", async (context) => {

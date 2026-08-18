@@ -190,15 +190,15 @@ test("fractional and out-of-range effect slider values survive serialization", a
   const song = new Song();
   const instrument = song.channels[0].instruments[0];
   const values = {
-    pitchShift: 27.25,
-    detune: -2.5,
-    distortion: 8.75,
-    bitcrusherFreq: -1.125,
-    bitcrusherQuantization: 9.5,
-    chorus: 3.375,
-    echoSustain: 8.25,
-    echoDelay: 25.75,
-    reverb: 4.5,
+    pitchShift: 1024.25,
+    detune: -512.5,
+    distortion: 128.75,
+    bitcrusherFreq: -256.125,
+    bitcrusherQuantization: 64.5,
+    chorus: 128.375,
+    echoSustain: 256.25,
+    echoDelay: 512.75,
+    reverb: 128.5,
   };
   Object.assign(instrument, values);
   for (const name of [

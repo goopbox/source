@@ -453,14 +453,19 @@ class EffectSlider {
     private readonly _fromDisplayValue:
       ((value: number) => number) | null = null,
     sliderStep: number | "any" = "any",
+    textInputMin: number | null = null,
+    textInputMax: number | null = null,
   ) {
+    const textInputAttributes: { [name: string]: string } = {
+      class: "instrument-value-input",
+      type: "number",
+      step: "any",
+      value: "0",
+    };
+    if (textInputMin != null) textInputAttributes["min"] = String(textInputMin);
+    if (textInputMax != null) textInputAttributes["max"] = String(textInputMax);
     this._textInput = new NumberInput(
-      input({
-        class: "instrument-value-input",
-        type: "number",
-        step: "any",
-        value: "0",
-      }),
+      input(textInputAttributes),
       doc,
       (oldDisplayValue: number, newDisplayValue: number) =>
         getChange(
@@ -707,6 +712,13 @@ export class SongEditor {
     Config.chorusRange - 1,
     (oldValue: number, newValue: number) =>
       new ChangeChorus(this.doc, oldValue, newValue),
+    0,
+    100,
+    null,
+    null,
+    "any",
+    0,
+    100,
   );
   private readonly _chorusRow: HTMLDivElement = div(
     { class: "selectRow" },
@@ -719,6 +731,13 @@ export class SongEditor {
     Config.reverbRange - 1,
     (oldValue: number, newValue: number) =>
       new ChangeReverb(this.doc, oldValue, newValue),
+    0,
+    100,
+    null,
+    null,
+    "any",
+    0,
+    (100 * Config.reverbRange) / (Config.reverbRange - 1),
   );
   private readonly _reverbRow: HTMLDivElement = div(
     { class: "selectRow" },
@@ -731,6 +750,11 @@ export class SongEditor {
     (Config.echoSustainRange - 1) * 2,
     (oldValue: number, newValue: number) =>
       new ChangeEchoSustain(this.doc, oldValue, newValue),
+    0,
+    200,
+    null,
+    null,
+    "any",
     0,
     200,
   );
@@ -1165,6 +1189,13 @@ export class SongEditor {
     Config.distortionRange - 1,
     (oldValue: number, newValue: number) =>
       new ChangeDistortion(this.doc, oldValue, newValue),
+    0,
+    100,
+    null,
+    null,
+    "any",
+    0,
+    100,
   );
   private readonly _distortionRow: HTMLDivElement = div(
     { class: "selectRow" },

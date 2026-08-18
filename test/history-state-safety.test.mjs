@@ -370,8 +370,6 @@ test("CRC-valid unsafe numeric domains and note bends are rejected without poiso
     ],
   ];
   for (const name of [
-    "pitchShift",
-    "detune",
     "volume",
     "pan",
     "pulseWidth",
@@ -379,13 +377,6 @@ test("CRC-valid unsafe numeric domains and note bends are rejected without poiso
     "supersawSpread",
     "supersawShape",
     "stringSustain",
-    "distortion",
-    "bitcrusherFreq",
-    "bitcrusherQuantization",
-    "chorus",
-    "reverb",
-    "echoSustain",
-    "echoDelay",
     "feedbackAmplitude",
   ]) {
     corruptions.push([

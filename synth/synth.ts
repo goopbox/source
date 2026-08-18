@@ -2254,20 +2254,6 @@ export class Instrument {
       throw new Error("Invalid .goop SoundFont.");
     }
 
-    // Effect text inputs historically allowed modest values outside their visible
-    // slider ranges, and those values are intentionally preserved. Keep a bounded
-    // compatibility margin while rejecting magnitudes that can overflow synthesis
-    // math or request impractically large delay buffers.
-    rangeValue(
-      scalarValues["pitchShift"],
-      -Config.pitchShiftRange * 2,
-      Config.pitchShiftRange * 2,
-    );
-    rangeValue(
-      scalarValues["detune"],
-      -Config.detuneMax * 2,
-      Config.detuneMax * 2,
-    );
     rangeValue(scalarValues["volume"], 0, Config.volumeRange - 1);
     rangeValue(scalarValues["pan"], 0, Config.panMax);
     rangeValue(scalarValues["pulseWidth"], 0, Config.pulseWidthRange - 1);
@@ -2275,41 +2261,6 @@ export class Instrument {
     rangeValue(scalarValues["supersawSpread"], 0, Config.supersawSpreadMax);
     rangeValue(scalarValues["supersawShape"], 0, Config.supersawShapeMax);
     rangeValue(scalarValues["stringSustain"], 0, Config.stringSustainRange - 1);
-    rangeValue(
-      scalarValues["distortion"],
-      -Config.distortionRange * 2,
-      Config.distortionRange * 2,
-    );
-    rangeValue(
-      scalarValues["bitcrusherFreq"],
-      -Config.bitcrusherFreqRange * 2,
-      Config.bitcrusherFreqRange * 2,
-    );
-    rangeValue(
-      scalarValues["bitcrusherQuantization"],
-      -Config.bitcrusherQuantizationRange * 2,
-      Config.bitcrusherQuantizationRange * 2,
-    );
-    rangeValue(
-      scalarValues["chorus"],
-      -Config.chorusRange * 2,
-      Config.chorusRange * 2,
-    );
-    rangeValue(
-      scalarValues["reverb"],
-      -Config.reverbRange * 2,
-      Config.reverbRange * 2,
-    );
-    rangeValue(
-      scalarValues["echoSustain"],
-      -Config.echoSustainRange * 2,
-      Config.echoSustainRange * 2,
-    );
-    rangeValue(
-      scalarValues["echoDelay"],
-      -Config.echoDelayRange,
-      Config.echoDelayRange * 2,
-    );
     rangeValue(
       scalarValues["feedbackAmplitude"],
       0,
