@@ -477,7 +477,6 @@ class EffectSlider {
     );
     this._slider = new Slider(
       input({
-        style: "margin: 0;",
         type: "range",
         min: String(this._displayMin),
         max: String(this._displayMax),
@@ -780,7 +779,7 @@ export class SongEditor {
   private _showLegacyKey: boolean = false;
   private readonly _tempoSlider: Slider = new Slider(
     input({
-      style: "margin: 0; width: 4em; flex-grow: 1; vertical-align: middle;",
+      style: "width: 4em; flex-grow: 1; vertical-align: middle;",
       type: "range",
       min: "0",
       max: "14",
@@ -796,7 +795,7 @@ export class SongEditor {
       ),
   );
   private readonly _tempoStepper: HTMLInputElement = input({
-    style: "width: 4.5em; margin-left: 0.4em; vertical-align: middle;",
+    style: "width: 4.5em; vertical-align: middle;",
     type: "number",
     step: "1",
   });
@@ -970,7 +969,6 @@ export class SongEditor {
   );
   private readonly _instrumentVolumeSlider: Slider = new Slider(
     input({
-      style: "margin: 0;",
       type: "range",
       title: "Volume",
       min: "0",
@@ -985,7 +983,7 @@ export class SongEditor {
   private readonly _instrumentVolumeInput: NumberInput = new NumberInput(
     input({
       class: "instrument-value-input",
-      style: "width: 4.5em; margin-left: 0.4em; vertical-align: middle;",
+      style: "width: 4.5em; vertical-align: middle;",
       type: "number",
       min: "0",
       max: "100",
@@ -1009,7 +1007,6 @@ export class SongEditor {
   );
   private readonly _panSlider: Slider = new Slider(
     input({
-      style: "margin: 0;",
       type: "range",
       title: "Panning",
       min: "-100",
@@ -1028,7 +1025,7 @@ export class SongEditor {
   private readonly _panInput: NumberInput = new NumberInput(
     input({
       class: "instrument-value-input",
-      style: "width: 4.5em; margin-left: 0.4em; vertical-align: middle;",
+      style: "width: 4.5em; vertical-align: middle;",
       type: "number",
       min: "-100",
       max: "100",
@@ -1134,7 +1131,6 @@ export class SongEditor {
   );
   private readonly _supersawDynamismSlider: Slider = new Slider(
     input({
-      style: "margin: 0;",
       type: "range",
       min: "0",
       max: Config.supersawDynamismMax,
@@ -1152,7 +1148,6 @@ export class SongEditor {
   );
   private readonly _supersawSpreadSlider: Slider = new Slider(
     input({
-      style: "margin: 0;",
       type: "range",
       min: "0",
       max: Config.supersawSpreadMax,
@@ -1170,7 +1165,6 @@ export class SongEditor {
   );
   private readonly _supersawShapeSlider: Slider = new Slider(
     input({
-      style: "margin: 0;",
       type: "range",
       min: "0",
       max: Config.supersawShapeMax,
@@ -1188,7 +1182,6 @@ export class SongEditor {
   );
   private readonly _pulseWidthSlider: Slider = new Slider(
     input({
-      style: "margin: 0;",
       type: "range",
       min: "0",
       max: Config.pulseWidthRange - 1,
@@ -1324,7 +1317,6 @@ export class SongEditor {
   );
   private readonly _stringSustainSlider: Slider = new Slider(
     input({
-      style: "margin: 0;",
       type: "range",
       min: "0",
       max: Config.stringSustainRange - 1,
@@ -1570,7 +1562,7 @@ export class SongEditor {
           { class: "selectRow" },
           label("Tempo"),
           span(
-            { style: "display: flex;" },
+            { style: "display: flex; gap: 4px;" },
             this._tempoSlider.container,
             this._tempoStepper,
           ),
@@ -1696,7 +1688,6 @@ export class SongEditor {
       const frequencyInput: NumberInput = new NumberInput(
         input({
           class: "instrument-value-input",
-          style: "margin-right: .3em;",
           type: "number",
           min: "0",
           max: String(Config.operatorFrequencyMax),

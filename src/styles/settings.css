@@ -1,6 +1,5 @@
 .selectRow,
 .instrumentActionRow {
-    margin: 2px 0;
     height: var(--button-size);
     align-items: center;
     justify-content: space-between;
@@ -37,7 +36,6 @@
 
 .drumset-row > select {
     width: 5em;
-    margin-right: 0.3em;
 }
 
 .drumset-row > .spectrum {
@@ -50,8 +48,8 @@
     flex: 1;
 }
 
-.selectRow.instrument-symbol-control > :last-child {
-    margin-left: 0.5em;
+.selectRow:is(.instrument-symbol-control, .fm-operator-row, .drumset-row) {
+    gap: 4px;
 }
 
 .selectRow.instrument-symbol-control > span,
@@ -69,7 +67,7 @@
 .slider-with-input {
     display: flex;
     width: 100%;
-    gap: 0.4em;
+    gap: 4px;
 }
 
 .slider-with-input > :first-child {
@@ -85,7 +83,7 @@
 
 .instrument-pan-slider {
     align-items: center;
-    gap: 0.25em;
+    gap: 4px;
 }
 
 .instrument-pan-slider > span:not(.pan-label) {
@@ -98,12 +96,8 @@
     font-size: 0.75em;
 }
 
-.menu-area > * {
-    margin: 2px 0;
-}
-
-.song-settings-area {
-    margin-top: 2px;
+.menu-area {
+    gap: 4px;
 }
 .menu-area > button {
     padding: 0 var(--button-size);
@@ -112,6 +106,7 @@
 
 .editor-controls {
     flex-shrink: 0;
+    gap: 4px;
 }
 
 .instrument-settings-area > .editor-controls {
@@ -119,16 +114,8 @@
     width: 100%;
 }
 
-.groupedSettings {
-    gap: 4px;
-}
-
-.groupedSettings > :is(.selectRow, .instrumentActionRow) {
-    margin: 0;
-}
-
 .settingsGroup {
-    gap: 2px;
+    gap: 4px;
     padding: 5px;
     border-radius: 7px;
     background: var(--surface);
@@ -161,7 +148,7 @@
 
 .settingsGroupActions {
     display: flex;
-    gap: 2px;
+    gap: 4px;
 }
 
 .settingsGroupActions > :is(button, .effects-menu),

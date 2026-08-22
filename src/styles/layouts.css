@@ -19,7 +19,6 @@ html[data-layout="tall"] {
         "play-pause-area" auto
         "menu-area" auto
         "song-settings-area" minmax(0, auto)
-        "." 4px
         "instrument-settings-area" minmax(0, 1fr)
         / minmax(0, 1fr);
 }
@@ -32,7 +31,7 @@ html[data-layout="tall"] {
 
 .settings-area {
     grid-template: var(--settings-grid-template);
-    gap: 0 4px;
+    gap: 4px;
     min-width: 0;
     min-height: 0;
     overflow: hidden;

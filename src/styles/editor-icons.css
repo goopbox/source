@@ -171,12 +171,8 @@
     filter: brightness(0.5);
 }
 
-.customize-instrument {
-    margin: 2px 0;
-}
-
 .instrumentActionRow {
-    gap: 2px;
+    gap: 4px;
 }
 
 .instrumentActionRow > button {
@@ -184,21 +180,31 @@
 }
 
 .envelope-row {
-    margin: 2px 0;
-    gap: 2px;
+    gap: 4px;
     align-items: center;
 }
 
 .envelope-parameters {
-    margin: 2px 0 6px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
 }
 
 .envelope-parameter {
     display: grid;
     grid-template-columns: 3.5em minmax(0, 1fr) 4em;
-    gap: 6px;
+    gap: 4px;
     align-items: center;
-    margin: 2px 0;
+}
+
+.envelopeEditor,
+.envelope-editor-item {
+    gap: 4px;
+}
+
+.envelope-editor-item {
+    display: flex;
+    flex-direction: column;
 }
 
 .envelope-parameter label {

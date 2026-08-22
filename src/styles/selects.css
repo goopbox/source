@@ -2,9 +2,14 @@ select {
     /* Native pickers are often rendered outside .app; set this on the control
 	 * itself so the browser carries the dark scheme into that popup. */
     color-scheme: dark;
-    padding: 0 4px;
+    -webkit-appearance: none;
+    appearance: none;
+    padding: 0 var(--button-size) 0 4px;
     display: block;
     color: inherit;
+    background-image: var(--menu-down-symbol);
+    background-repeat: no-repeat;
+    background-position: right center;
 }
 select option,
 select optgroup {

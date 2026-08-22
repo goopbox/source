@@ -38,8 +38,7 @@ button.reveal-arrow {
     display: grid;
     grid-template-columns: repeat(4, minmax(0, 1fr));
     grid-template-rows: min-content;
-    grid-column-gap: 4px;
-    margin: 0 0 2px;
+    gap: 4px;
 }
 
 button.playButton,
@@ -87,7 +86,7 @@ button.recordButton.shrunk {
 }
 
 .instrument-bar {
-    gap: 2px;
+    gap: 4px;
     min-width: 0;
 }
 
@@ -95,7 +94,7 @@ button.recordButton.shrunk {
     display: flex;
     flex: 1 1 auto;
     min-width: 0;
-    gap: 2px;
+    gap: 4px;
     overflow-x: auto;
     scrollbar-width: none;
 }
@@ -107,7 +106,7 @@ button.recordButton.shrunk {
 .instrument-actions {
     display: flex;
     flex: none;
-    gap: 2px;
+    gap: 4px;
 }
 
 .instrument-bar button {
