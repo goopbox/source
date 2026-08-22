@@ -2827,10 +2827,6 @@ export class SongEditor {
   };
 
   private _onTrackAreaScroll = (_event: Event): void => {
-    this._loopEditor.container.style.setProperty(
-      "--track-scroll-left",
-      `${this._trackAndMuteContainer.scrollLeft}px`,
-    );
     this.doc.barScrollPos =
       this._trackAndMuteContainer.scrollLeft / this.doc.getBarWidth();
     this.doc.channelScrollPos =

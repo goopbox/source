@@ -83,6 +83,9 @@ export class LoopEditor {
   private _renderedLoopStop: number = -1;
   private _renderedBarCount: number = 0;
   private _renderedBarWidth: number = -1;
+  private _renderedLoopEnabled: boolean | null = null;
+  private _renderedHighlightVisible: boolean | null = null;
+  private _renderedHighlightPath: string = "";
 
   constructor(private _doc: SongDocument) {
     this._updateCursorStatus();
@@ -328,7 +331,10 @@ export class LoopEditor {
   private _updatePreview(): void {
     const showHighlight: boolean = this._mouseOver && !this._mouseDown;
     //const showHighlight: boolean = this._pointers.latest.isHovering;
-    this._highlight.style.display = showHighlight ? "" : "none";
+    if (this._renderedHighlightVisible != showHighlight) {
+      this._renderedHighlightVisible = showHighlight;
+      this._highlight.style.display = showHighlight ? "" : "none";
+    }
 
     if (showHighlight) {
       const radius: number = this._editorHeight / 2;
@@ -349,15 +355,17 @@ export class LoopEditor {
         highlightStop = (endPoints.start + endPoints.length) * this._barWidth;
       }
 
-      this._highlight.setAttribute(
-        "d",
+      const highlightPath: string =
         `M ${highlightStart + radius} ${4} ` +
-          `L ${highlightStop - radius} ${4} ` +
-          `A ${radius - 4} ${radius - 4} ${0} ${0} ${1} ${highlightStop - radius} ${this._editorHeight - 4} ` +
-          `L ${highlightStart + radius} ${this._editorHeight - 4} ` +
-          `A ${radius - 4} ${radius - 4} ${0} ${0} ${1} ${highlightStart + radius} ${4} ` +
-          `z`,
-      );
+        `L ${highlightStop - radius} ${4} ` +
+        `A ${radius - 4} ${radius - 4} ${0} ${0} ${1} ${highlightStop - radius} ${this._editorHeight - 4} ` +
+        `L ${highlightStart + radius} ${this._editorHeight - 4} ` +
+        `A ${radius - 4} ${radius - 4} ${0} ${0} ${1} ${highlightStart + radius} ${4} ` +
+        `z`;
+      if (this._renderedHighlightPath != highlightPath) {
+        this._renderedHighlightPath = highlightPath;
+        this._highlight.setAttribute("d", highlightPath);
+      }
     }
   }
 
@@ -367,12 +375,14 @@ export class LoopEditor {
 
   private _render(): void {
     this._barWidth = this._doc.getBarWidth();
-    this._loop.setAttribute(
-      "stroke",
-      this._doc.synth.loopRepeatCount == -1
-        ? ColorConfig.accent
-        : ColorConfig.disabledLoop,
-    );
+    const loopEnabled: boolean = this._doc.synth.loopRepeatCount == -1;
+    if (this._renderedLoopEnabled != loopEnabled) {
+      this._renderedLoopEnabled = loopEnabled;
+      this._loop.setAttribute(
+        "stroke",
+        loopEnabled ? ColorConfig.accent : ColorConfig.disabledLoop,
+      );
+    }
 
     const radius: number = this._editorHeight / 2;
     const loopStart: number = this._doc.song.loopStart * this._barWidth;

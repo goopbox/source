@@ -147,6 +147,17 @@ canvas {
     background: var(--background);
 }
 
+.muteEditor::before {
+    content: "";
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: -1px;
+    width: 2px;
+    pointer-events: none;
+    background: var(--background);
+}
+
 .muteHeaderFiller {
     height: 10px;
     flex: 0 0 10px;
@@ -157,8 +168,7 @@ canvas {
     background: none;
 }
 
-.mute-button,
-.loop-toggle {
+.mute-button {
     height: 24px;
     margin: 2px;
 }
@@ -167,10 +177,23 @@ canvas {
     position: sticky;
     bottom: 0;
     left: 0;
-    flex: 0 0 24px;
+    flex: 0 0 28px;
+    height: 28px;
+    margin: 0;
     display: flex;
     align-items: center;
     justify-content: center;
+    background: var(--background);
+}
+
+.loop-toggle::after {
+    content: "";
+    position: absolute;
+    right: 0;
+    bottom: -1px;
+    left: 0;
+    height: 2px;
+    pointer-events: none;
     background: var(--background);
 }
 
