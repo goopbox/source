@@ -55,7 +55,7 @@ export class ChannelRow {
 
   private _renderedBarWidth: number = -1;
   private _boxes: Box[] = [];
-  private readonly _number: HTMLElement;
+  public readonly number: HTMLElement;
   private readonly _boxContainer: HTMLElement;
 
   public readonly container: HTMLElement;
@@ -64,14 +64,14 @@ export class ChannelRow {
     private readonly _doc: SongDocument,
     public readonly index: number,
   ) {
-    this._number = HTML.div(
+    this.number = HTML.div(
       { class: "channelNumber", title: `Channel ${index + 1}` },
       String(index + 1),
     );
     this._boxContainer = HTML.div({ class: "channelBoxes" });
     this.container = HTML.div(
       { class: "channelRow" },
-      this._number,
+      this.number,
       this._boxContainer,
     );
   }
@@ -135,6 +135,18 @@ export class ChannelRow {
         box.container.style.visibility = "hidden";
       }
     }
-    this._number.classList.toggle("selected", this.index == this._doc.channel);
+    this.number.classList.toggle("selected", this.index == this._doc.channel);
+  }
+
+  public setDragOffset(offset: number): void {
+    this.container.style.transform = offset == 0 ? "" : `translateY(${offset}px)`;
+    this.container.classList.toggle("reorder-preview", offset != 0);
+  }
+
+  public setBarDragOffset(bar: number, offset: number): void {
+    const box: Box | undefined = this._boxes[bar];
+    if (box == undefined) return;
+    box.container.style.transform = offset == 0 ? "" : `translateX(${offset}px)`;
+    box.container.classList.toggle("reorder-preview", offset != 0);
   }
 }

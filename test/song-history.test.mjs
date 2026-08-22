@@ -174,9 +174,9 @@ async function loadSongHistory() {
         'export {SongDocument} from "./src/SongDocument.ts";',
         'export {encodeSongUrl, decodeSongUrl, decodeSongUrlHash} from "./src/SongUrl.ts";',
         'export {encodeSongBinary, decodeSongBinary, extractCompressedSongBody} from "./synth/SongBinary.ts";',
-        'export {Note, Pattern, Song} from "./synth/synth.ts";',
+        'export {Instrument, Note, Pattern, Song} from "./synth/synth.ts";',
         'export {Config} from "./synth/SynthConfig.ts";',
-        'export {ChangeAddChannelInstrument, ChangeBarCount, ChangeChannelBar, ChangeChorus, ChangeEnsurePatternExists, ChangeKey, ChangeLoop, ChangeNoteAdded, ChangeOctave, ChangePan, ChangeSong, ChangeTempo, ChangeToggleEffects, ChangeTrackSelection, ChangeVolume} from "./src/changes.ts";',
+        'export {ChangeAddChannelInstrument, ChangeBarCount, ChangeBarOrder, ChangeChannelBar, ChangeChannelOrder, ChangeChorus, ChangeEnsurePatternExists, ChangeKey, ChangeLoop, ChangeNoteAdded, ChangeOctave, ChangePan, ChangeSong, ChangeTempo, ChangeToggleEffects, ChangeTrackSelection, ChangeVolume} from "./src/changes.ts";',
       ].join("\n"),
       resolveDir: process.cwd(),
       sourcefile: "song-history-entry.ts",
@@ -339,7 +339,9 @@ test("undo history is durable, contiguous, exact, and crash resistant", async (c
   const {
     ChangeAddChannelInstrument,
     ChangeBarCount,
+    ChangeBarOrder,
     ChangeChannelBar,
+    ChangeChannelOrder,
     ChangeChorus,
     ChangeEnsurePatternExists,
     ChangeKey,
@@ -353,6 +355,7 @@ test("undo history is durable, contiguous, exact, and crash resistant", async (c
     ChangeTrackSelection,
     ChangeVolume,
     Config,
+    Instrument,
     Note,
     Pattern,
     Song,
@@ -577,6 +580,97 @@ test("undo history is durable, contiguous, exact, and crash resistant", async (c
         snapshotDocument(doc),
         states.at(-1),
         "redo at the newest boundary should be a no-op",
+      );
+    },
+  );
+
+  await context.test(
+    "channel and bar reorders survive undo, redo, and reload without corruption",
+    () => {
+      const browser = new FakeBrowser();
+      const doc = new SongDocument();
+
+      doc.song.channels[0].instruments.push(new Instrument(false));
+      doc.viewedInstrument[0] = 1;
+      for (let channel = 0; channel < doc.song.getChannelCount(); channel++) {
+        for (let bar = 0; bar < doc.song.barCount; bar++) {
+          doc.song.channels[channel].bars[bar] =
+            (channel * 3 + bar) % (doc.song.patternsPerChannel + 1);
+        }
+      }
+      doc.updateCurrentHistoryEntry();
+      const before = snapshotDocument(doc);
+      const sameChannel = new ChangeChannelOrder(doc, 1, 1, 0);
+      const sameBar = new ChangeBarOrder(doc, 3, 3);
+      assert.equal(sameChannel.isNoop(), true);
+      assert.equal(sameBar.isNoop(), true);
+      assert.deepEqual(
+        snapshotDocument(doc),
+        before,
+        "same-position drops must not mutate or corrupt the song",
+      );
+
+      const expectedChannelSong = new Song(before.song);
+      expectedChannelSong.channels.splice(
+        2,
+        0,
+        ...expectedChannelSong.channels.splice(0, 1),
+      );
+      recordChange(browser, doc, new ChangeChannelOrder(doc, 0, 0, 2));
+      assert.deepEqual(doc.song.toBinary(), expectedChannelSong.toBinary());
+      assert.deepEqual(doc.viewedInstrument, [0, 0, 1, 0]);
+      const afterChannel = snapshotDocument(doc);
+
+      const expectedBarSong = new Song(afterChannel.song);
+      for (const channel of expectedBarSong.channels) {
+        channel.bars.splice(5, 0, ...channel.bars.splice(1, 1));
+      }
+      recordChange(browser, doc, new ChangeBarOrder(doc, 1, 5));
+      assert.deepEqual(doc.song.toBinary(), expectedBarSong.toBinary());
+      const afterBar = snapshotDocument(doc);
+
+      for (let cycle = 0; cycle < 2; cycle++) {
+        doc.undo();
+        assert.deepEqual(snapshotDocument(doc), afterChannel);
+        doc.undo();
+        assert.deepEqual(snapshotDocument(doc), before);
+        doc.redo();
+        assert.deepEqual(snapshotDocument(doc), afterChannel);
+        doc.redo();
+        assert.deepEqual(snapshotDocument(doc), afterBar);
+      }
+
+      doc.undo();
+      assert.deepEqual(snapshotDocument(doc), afterChannel);
+      browser.reload();
+      const reloadedDoc = new SongDocument();
+      assert.deepEqual(
+        snapshotDocument(reloadedDoc),
+        afterChannel,
+        "reload must preserve the exact reordered channel state and undo position",
+      );
+      assert.equal(reloadedDoc.hasRedoHistory(), true);
+
+      reloadedDoc.redo();
+      assert.deepEqual(
+        snapshotDocument(reloadedDoc),
+        afterBar,
+        "redo after reload must restore every moved bar reference",
+      );
+      reloadedDoc.undo();
+      assert.deepEqual(snapshotDocument(reloadedDoc), afterChannel);
+      reloadedDoc.undo();
+      assert.deepEqual(
+        snapshotDocument(reloadedDoc),
+        before,
+        "undo after reload must restore the original song without loss",
+      );
+      reloadedDoc.redo();
+      reloadedDoc.redo();
+      assert.deepEqual(
+        snapshotDocument(reloadedDoc),
+        afterBar,
+        "repeated redo after reload must remain byte-for-byte stable",
       );
     },
   );

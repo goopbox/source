@@ -5,6 +5,17 @@ import { SongDocument } from "./SongDocument.js";
 import { ChannelRow } from "./ChannelRow.js";
 import { HTML, SVG } from "imperative-html/dist/esm/elements-strict.js";
 import { EasyPointers, Point2d } from "./EasyPointers.js";
+import { ChangeGroup } from "./Change.js";
+import { ChangeBarOrder, ChangeChannelBar, ChangeChannelOrder } from "./changes.js";
+
+type ReorderDrag = {
+  kind: "bar" | "channel";
+  source: number;
+  target: number;
+  startPointer: number;
+  offset: number;
+  moved: boolean;
+};
 
 export class TrackEditor {
   public static readonly channelNumberWidth: number = 18;
@@ -66,16 +77,26 @@ export class TrackEditor {
     this._downHighlight,
     this._playhead,
   );
+  private readonly _barReorderLine: HTMLElement = HTML.div({
+    class: "reorder-line vertical",
+  });
+  private readonly _channelReorderLine: HTMLElement = HTML.div({
+    class: "reorder-line horizontal",
+  });
   public readonly container: HTMLElement = HTML.div(
     { class: "noSelection", style: "position: relative;" },
     this._barNumberContainer,
     this._channelRowContainer,
     this._svg,
+    this._barReorderLine,
+    this._channelReorderLine,
   );
 
   private readonly _pointers: EasyPointers = new EasyPointers(this.container);
 
   private readonly _channels: ChannelRow[] = [];
+  private _pointerX: number = 0;
+  private _pointerY: number = 0;
   private _mouseX: number = 0;
   private _mouseY: number = 0;
   private _mouseStartBar: number = 0;
@@ -83,6 +104,7 @@ export class TrackEditor {
   private _mouseBar: number = 0;
   private _mouseChannel: number = 0;
   private _mouseDragging = false;
+  private _reorderDrag: ReorderDrag | null = null;
   private _barWidth: number = 32;
   private _renderedEditorWidth: number = -1;
   private _renderedEditorHeight: number = -1;
@@ -96,7 +118,7 @@ export class TrackEditor {
     this.container.addEventListener("pointerdown", this._onPointerDown);
     this.container.addEventListener("pointermove", this._onPointerMove);
     this.container.addEventListener("pointerup", this._onPointerUp);
-    //this.container.addEventListener("pointercancel", this._onPointerUp);
+    this.container.addEventListener("pointercancel", this._onPointerCancel);
   }
 
   private _animatePlayhead = (_timestamp: number): void => {
@@ -132,6 +154,8 @@ export class TrackEditor {
 
   private _updateMousePos(event: PointerEvent): void {
     const point: Point2d = event.pointer!.getPointIn(this.container);
+    this._pointerX = point.x;
+    this._pointerY = point.y;
     this._mouseX = point.x - TrackEditor.channelNumberWidth;
     this._mouseY = point.y - TrackEditor.barNumberHeight;
     this._mouseBar = Math.floor(
@@ -148,12 +172,189 @@ export class TrackEditor {
     );
   }
 
+  private _startReorderDrag(event: PointerEvent): boolean {
+    const target: EventTarget | null = event.target;
+    if (!(target instanceof Element)) return false;
+
+    const barNumber: HTMLElement | null = target.closest(".barNumber");
+    if (barNumber != null) {
+      const source: number = this._barNumbers.indexOf(barNumber);
+      if (source >= 0) {
+        this._reorderDrag = {
+          kind: "bar",
+          source,
+          target: source,
+          startPointer: this._pointerX,
+          offset: 0,
+          moved: false,
+        };
+        event.preventDefault();
+        return true;
+      }
+    }
+
+    const channelNumber: HTMLElement | null = target.closest(".channelNumber");
+    if (channelNumber != null) {
+      const source: number = this._channels.findIndex(
+        (channel: ChannelRow): boolean => channel.number == channelNumber,
+      );
+      if (source >= 0) {
+        this._reorderDrag = {
+          kind: "channel",
+          source,
+          target: source,
+          startPointer: this._pointerY,
+          offset: 0,
+          moved: false,
+        };
+        event.preventDefault();
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private _getChannelDragBounds(source: number): [number, number] {
+    if (source < this._doc.song.pitchChannelCount) {
+      return [0, this._doc.song.pitchChannelCount - 1];
+    }
+    return [
+      this._doc.song.pitchChannelCount,
+      this._doc.song.getChannelCount() - 1,
+    ];
+  }
+
+  private _updateReorderDrag(): void {
+    const drag: ReorderDrag | null = this._reorderDrag;
+    if (drag == null) return;
+
+    const itemSize: number =
+      drag.kind == "bar" ? this._barWidth : ChannelRow.patternHeight;
+    const pointer: number = drag.kind == "bar" ? this._pointerX : this._pointerY;
+    const [minimum, maximum]: [number, number] =
+      drag.kind == "bar"
+        ? [0, this._doc.song.barCount - 1]
+        : this._getChannelDragBounds(drag.source);
+    drag.offset = Math.max(
+      (minimum - drag.source) * itemSize,
+      Math.min((maximum - drag.source) * itemSize, pointer - drag.startPointer),
+    );
+    drag.target = Math.max(
+      minimum,
+      Math.min(maximum, drag.source + Math.round(drag.offset / itemSize)),
+    );
+    drag.moved = drag.moved || Math.abs(drag.offset) >= 1;
+    this._renderReorderPreview();
+  }
+
+  private _renderReorderPreview(): void {
+    const drag: ReorderDrag | null = this._reorderDrag;
+    if (drag == null) return;
+
+    if (drag.kind == "bar") {
+      const number: HTMLElement | undefined = this._barNumbers[drag.source];
+      if (number != undefined) {
+        number.style.transform =
+          drag.offset == 0 ? "" : `translateX(${drag.offset}px)`;
+        number.classList.toggle("reorder-preview", drag.offset != 0);
+      }
+      for (const channel of this._channels) {
+        channel.setBarDragOffset(drag.source, drag.offset);
+      }
+      this._barReorderLine.style.left =
+        TrackEditor.channelNumberWidth + drag.target * this._barWidth + "px";
+      this._barReorderLine.style.display = drag.moved ? "block" : "none";
+      this._channelReorderLine.style.display = "none";
+    } else {
+      const channel: ChannelRow | undefined = this._channels[drag.source];
+      if (channel != undefined) channel.setDragOffset(drag.offset);
+      this._channelReorderLine.style.top =
+        TrackEditor.barNumberHeight +
+        drag.target * ChannelRow.patternHeight +
+        "px";
+      this._channelReorderLine.style.display = drag.moved ? "block" : "none";
+      this._barReorderLine.style.display = "none";
+    }
+  }
+
+  private _clearReorderPreview(): void {
+    const drag: ReorderDrag | null = this._reorderDrag;
+    if (drag != null) {
+      if (drag.kind == "bar") {
+        const number: HTMLElement | undefined = this._barNumbers[drag.source];
+        if (number != undefined) {
+          number.style.transform = "";
+          number.classList.remove("reorder-preview");
+        }
+        for (const channel of this._channels) {
+          channel.setBarDragOffset(drag.source, 0);
+        }
+      } else {
+        const channel: ChannelRow | undefined = this._channels[drag.source];
+        if (channel != undefined) channel.setDragOffset(0);
+      }
+    }
+    this._barReorderLine.style.display = "none";
+    this._channelReorderLine.style.display = "none";
+  }
+
+  private _remapMovedIndex(index: number, source: number, target: number): number {
+    if (index == source) return target;
+    if (source < target && index > source && index <= target) return index - 1;
+    if (target < source && index >= target && index < source) return index + 1;
+    return index;
+  }
+
+  private _finishReorderDrag(): boolean {
+    const drag: ReorderDrag | null = this._reorderDrag;
+    if (drag == null) return false;
+
+    this._clearReorderPreview();
+    this._reorderDrag = null;
+    if (drag.source == drag.target) return true;
+
+    const change: ChangeGroup = new ChangeGroup();
+    if (drag.kind == "bar") {
+      const newBar: number = this._remapMovedIndex(
+        this._doc.bar,
+        drag.source,
+        drag.target,
+      );
+      change.append(new ChangeBarOrder(this._doc, drag.source, drag.target));
+      change.append(new ChangeChannelBar(this._doc, this._doc.channel, newBar));
+    } else {
+      const newChannel: number = this._remapMovedIndex(
+        this._doc.channel,
+        drag.source,
+        drag.target,
+      );
+      change.append(
+        new ChangeChannelOrder(
+          this._doc,
+          drag.source,
+          drag.source,
+          drag.target - drag.source,
+        ),
+      );
+      change.append(new ChangeChannelBar(this._doc, newChannel, this._doc.bar));
+    }
+    this._doc.selection.resetBoxSelection();
+    this._doc.selection.selectionUpdated();
+    this._doc.record(change);
+    return true;
+  }
+
   private _onPointerLeave = (_event: PointerEvent): void => {
     this._updatePreview();
   };
 
   private _onPointerDown = (event: PointerEvent): void => {
     this._updateMousePos(event);
+    if (this._startReorderDrag(event)) {
+      this._mouseDragging = true;
+      this._updatePreview();
+      return;
+    }
     this._mouseStartBar = this._mouseBar;
     this._mouseStartChannel = this._mouseChannel;
     if (event.shiftKey) {
@@ -180,6 +381,11 @@ export class TrackEditor {
 
   private _onPointerMove = (event: PointerEvent): void => {
     this._updateMousePos(event);
+    if (this._reorderDrag != null) {
+      if (event.pointer!.isDown) this._updateReorderDrag();
+      this._updatePreview();
+      return;
+    }
     if (event.pointer!.isDown) {
       if (
         this._mouseStartBar != this._mouseBar ||
@@ -192,7 +398,16 @@ export class TrackEditor {
     this._updatePreview();
   };
 
-  private _onPointerUp = (_event: PointerEvent): void => {
+  private _onPointerUp = (event: PointerEvent): void => {
+    if (this._reorderDrag != null) {
+      this._updateMousePos(event);
+      this._updateReorderDrag();
+    }
+    if (this._finishReorderDrag()) {
+      this._mouseDragging = false;
+      this._updatePreview();
+      return;
+    }
     if (!this._mouseDragging) {
       if (
         this._doc.channel == this._mouseChannel &&
@@ -213,7 +428,20 @@ export class TrackEditor {
     this._updatePreview();
   };
 
+  private _onPointerCancel = (_event: PointerEvent): void => {
+    this._clearReorderPreview();
+    this._reorderDrag = null;
+    this._mouseDragging = false;
+    this._updatePreview();
+  };
+
   private _updatePreview(): void {
+    if (this._reorderDrag != null) {
+      this._boxHighlight.style.display = "none";
+      this._upHighlight.style.display = "none";
+      this._downHighlight.style.display = "none";
+      return;
+    }
     let channel: number = this._mouseChannel;
     let bar: number = this._mouseBar;
 

@@ -1628,6 +1628,28 @@ export class ChangeDeleteBars extends Change {
   }
 }
 
+export class ChangeBarOrder extends Change {
+  constructor(doc: SongDocument, source: number, target: number) {
+    super();
+    if (source == target) return;
+    if (
+      source < 0 ||
+      source >= doc.song.barCount ||
+      target < 0 ||
+      target >= doc.song.barCount
+    ) {
+      throw new Error("Bar reorder index out of range.");
+    }
+
+    for (const channel of doc.song.channels) {
+      const movedBars: number[] = channel.bars.splice(source, 1);
+      channel.bars.splice(target, 0, ...movedBars);
+    }
+    doc.notifier.changed();
+    this._didSomething();
+  }
+}
+
 export class ChangeChannelOrder extends Change {
   constructor(
     doc: SongDocument,
@@ -1636,14 +1658,31 @@ export class ChangeChannelOrder extends Change {
     offset: number,
   ) {
     super();
+    if (offset == 0) return;
+    const selectionLength: number = selectionMax - selectionMin + 1;
+    const target: number = selectionMin + offset;
+    if (
+      selectionLength <= 0 ||
+      selectionMin < 0 ||
+      selectionMax >= doc.song.getChannelCount() ||
+      target < 0 ||
+      target + selectionLength > doc.song.getChannelCount()
+    ) {
+      throw new Error("Channel reorder index out of range.");
+    }
+
     doc.song.channels.splice(
-      selectionMin + offset,
+      target,
       0,
-      ...doc.song.channels.splice(
-        selectionMin,
-        selectionMax - selectionMin + 1,
-      ),
+      ...doc.song.channels.splice(selectionMin, selectionLength),
     );
+    if (doc.viewedInstrument.length == doc.song.getChannelCount()) {
+      doc.viewedInstrument.splice(
+        target,
+        0,
+        ...doc.viewedInstrument.splice(selectionMin, selectionLength),
+      );
+    }
     doc.notifier.changed();
     this._didSomething();
   }

@@ -61,6 +61,40 @@ canvas {
     text-align: center;
 }
 
+.barNumber,
+.channelNumber {
+    cursor: grab;
+    touch-action: none;
+}
+
+.reorder-preview {
+    position: relative;
+    z-index: 7;
+    cursor: grabbing;
+    opacity: 1;
+    background: var(--background) !important;
+}
+
+.reorder-line {
+    display: none;
+    position: absolute;
+    z-index: 6;
+    pointer-events: none;
+    background: var(--text);
+}
+
+.reorder-line.horizontal {
+    left: 0;
+    right: 0;
+    height: 2px;
+}
+
+.reorder-line.vertical {
+    top: 0;
+    bottom: 0;
+    width: 2px;
+}
+
 .barNumber.selected,
 .channelNumber.selected {
     color: var(--text);
