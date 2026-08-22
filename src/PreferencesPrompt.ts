@@ -20,8 +20,8 @@ const { button, div, input, option, select } = HTML;
 
 export class PreferencesPrompt implements Prompt {
   private readonly _prompt: TabbedSearchablePrompt;
-  private readonly _toggleListeners: Array<{
-    button: HTMLButtonElement;
+  private readonly _checkboxListeners: Array<{
+    checkbox: HTMLInputElement;
     listener: () => void;
   }> = [];
   private readonly _layoutSelect: HTMLSelectElement = select(
@@ -176,27 +176,19 @@ export class PreferencesPrompt implements Prompt {
     getValue: () => boolean,
     setValue: (value: boolean) => void,
   ): HTMLDivElement {
-    const toggle: HTMLButtonElement = button({
-      class: "preferenceToggle",
-      type: "button",
+    const checkbox: HTMLInputElement = input({
+      type: "checkbox",
+      "aria-label": name,
     });
-    const render = (): void => {
-      const value: boolean = getValue();
-      toggle.textContent = value ? "✔" : "✘";
-      toggle.classList.toggle("enabled", value);
-      toggle.setAttribute("aria-pressed", String(value));
-      toggle.setAttribute("aria-label", `${name}: ${value ? "on" : "off"}`);
-    };
+    checkbox.checked = getValue();
     const listener = (): void => {
-      setValue(!getValue());
+      setValue(checkbox.checked);
       this._doc.prefs.save();
       this._doc.notifier.changed();
-      render();
     };
-    toggle.addEventListener("click", listener);
-    this._toggleListeners.push({ button: toggle, listener });
-    render();
-    return this._makeRow(name, toggle);
+    checkbox.addEventListener("change", listener);
+    this._checkboxListeners.push({ checkbox, listener });
+    return this._makeRow(name, checkbox);
   }
 
   private _whenLayoutChanged = (): void => {
@@ -265,8 +257,8 @@ export class PreferencesPrompt implements Prompt {
 
   public cleanUp = (): void => {
     this._prompt.cleanUp();
-    for (const toggle of this._toggleListeners)
-      toggle.button.removeEventListener("click", toggle.listener);
+    for (const toggle of this._checkboxListeners)
+      toggle.checkbox.removeEventListener("change", toggle.listener);
     this._layoutSelect.removeEventListener("change", this._whenLayoutChanged);
     this._themeSelect.removeEventListener("change", this._whenThemeChanged);
     this._keyboardLayout.removeEventListener(

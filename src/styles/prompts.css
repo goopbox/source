@@ -307,9 +307,6 @@ dialog.prompt:not([open]) {
 .preferenceRow > input[type="range"] {
     width: 42%;
 }
-.preferenceToggle {
-    font-weight: bold;
-}
 .layout-option {
     flex: 1;
     cursor: pointer;
