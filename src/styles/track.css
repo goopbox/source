@@ -42,6 +42,9 @@ canvas {
     z-index: 3;
     width: 18px;
     min-width: 18px;
+}
+
+.trackCorner {
     background: var(--background);
 }
 
@@ -65,6 +68,28 @@ canvas {
 .channelNumber {
     cursor: grab;
     touch-action: none;
+    background: var(--surface);
+    box-shadow: inset 0 0 0 1px var(--background);
+    transition:
+        background-color 30ms,
+        color 30ms;
+}
+
+.barNumber.has-content,
+.channelNumber.has-content {
+    background: var(--ui-widget-background);
+}
+
+.barNumber.selected,
+.channelNumber.selected {
+    color: var(--text);
+}
+
+.barNumber:hover,
+.channelNumber:hover,
+.barNumber.reorder-active,
+.channelNumber.reorder-active {
+    background: var(--button-hover) !important;
 }
 
 .reorder-preview {
@@ -93,11 +118,6 @@ canvas {
     top: 0;
     bottom: 0;
     width: 2px;
-}
-
-.barNumber.selected,
-.channelNumber.selected {
-    color: var(--text);
 }
 
 .channelBox {

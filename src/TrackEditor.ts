@@ -188,6 +188,7 @@ export class TrackEditor {
           offset: 0,
           moved: false,
         };
+        barNumber.classList.add("reorder-active");
         event.preventDefault();
         return true;
       }
@@ -207,6 +208,7 @@ export class TrackEditor {
           offset: 0,
           moved: false,
         };
+        channelNumber.classList.add("reorder-active");
         event.preventDefault();
         return true;
       }
@@ -284,14 +286,17 @@ export class TrackEditor {
         const number: HTMLElement | undefined = this._barNumbers[drag.source];
         if (number != undefined) {
           number.style.transform = "";
-          number.classList.remove("reorder-preview");
+          number.classList.remove("reorder-preview", "reorder-active");
         }
         for (const channel of this._channels) {
           channel.setBarDragOffset(drag.source, 0);
         }
       } else {
         const channel: ChannelRow | undefined = this._channels[drag.source];
-        if (channel != undefined) channel.setDragOffset(0);
+        if (channel != undefined) {
+          channel.setDragOffset(0);
+          channel.number.classList.remove("reorder-active");
+        }
       }
     }
     this._barReorderLine.style.display = "none";
@@ -528,7 +533,20 @@ export class TrackEditor {
     }
     for (let bar = 0; bar < this._barNumbers.length; bar++) {
       const number = this._barNumbers[bar];
+      let hasContent: boolean = false;
+      for (
+        let channel = 0;
+        channel < this._doc.song.getChannelCount();
+        channel++
+      ) {
+        const pattern = this._doc.song.getPattern(channel, bar);
+        if (pattern != null && pattern.notes.length > 0) {
+          hasContent = true;
+          break;
+        }
+      }
       number.style.width = this._barWidth + "px";
+      number.classList.toggle("has-content", hasContent);
       number.classList.toggle("selected", bar == this._doc.bar);
     }
 

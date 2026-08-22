@@ -110,6 +110,7 @@ export class ChannelRow {
       }
     }
 
+    let hasContent: boolean = false;
     for (let i: number = 0; i < this._boxes.length; i++) {
       const pattern: Pattern | null = this._doc.song.getPattern(this.index, i);
       const patternIndex: number = this._doc.song.channels[this.index].bars[i];
@@ -117,6 +118,7 @@ export class ChannelRow {
         i == this._doc.bar && this.index == this._doc.channel;
       const dim: boolean = pattern == null || pattern.notes.length == 0;
       const empty: boolean = patternIndex != 0 && dim;
+      hasContent = hasContent || !dim;
 
       const box: Box = this._boxes[i];
       if (i < this._doc.song.barCount) {
@@ -135,6 +137,7 @@ export class ChannelRow {
         box.container.style.visibility = "hidden";
       }
     }
+    this.number.classList.toggle("has-content", hasContent);
     this.number.classList.toggle("selected", this.index == this._doc.channel);
   }
 
