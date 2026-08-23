@@ -4715,6 +4715,7 @@ class Tone {
   public readonly phases: number[] = [];
   public readonly phaseDeltas: number[] = [];
   public readonly phaseDeltaScales: number[] = [];
+  public readonly phaseCatchUpCycles: number[] = [];
   public readonly chipWaveGrainPhases: number[] = [];
   public readonly chipWaveStarted: boolean[] = [];
   public expression: number = 0.0;
@@ -4778,6 +4779,7 @@ class Tone {
       i++
     ) {
       this.phases[i] = 0.0;
+      this.phaseCatchUpCycles[i] = 0.0;
       this.chipWaveGrainPhases[i] = 0.0;
       this.chipWaveStarted[i] = false;
       if (i < Config.operatorCount * 2) this.feedbackOutputs[i] = 0.0;
@@ -8162,6 +8164,247 @@ export class Synth {
         }
       }
     }
+
+    if (
+      tone.note != null &&
+      (instrument.type == InstrumentType.chip ||
+        instrument.type == InstrumentType.fm)
+    ) {
+      this.computeTonePhaseCatchUp(
+        song,
+        channelIndex,
+        instrument,
+        tone,
+        partTimeStart,
+        secondsPerPart,
+      );
+    }
+  }
+
+  private computeTonePhaseCatchUp(
+    song: Song,
+    channelIndex: number,
+    instrument: Instrument,
+    tone: Tone,
+    currentPart: number,
+    secondsPerPart: number,
+  ): void {
+    const usesUnison: boolean =
+      instrument.type == InstrumentType.fm &&
+      effectsIncludeUnison(instrument.effects);
+    if (instrument.type == InstrumentType.chip) {
+      if (tone.chipWaveStarted[0] && tone.chipWaveStarted[1]) return;
+    } else {
+      let needsCatchUp: boolean = false;
+      for (let i: number = 0; i < Config.operatorCount; i++) {
+        if (
+          !tone.chipWaveStarted[i] ||
+          (usesUnison && !tone.chipWaveStarted[Config.operatorCount + i])
+        ) {
+          needsCatchUp = true;
+          break;
+        }
+      }
+      if (!needsCatchUp) return;
+    }
+
+    const note: Note = tone.note!;
+    const startPart: number = Math.max(note.start, tone.noteStartPart);
+    const endPart: number = Math.min(note.end, currentPart);
+    const continuedNotes: Note[] = this.getContinuedNoteChain(
+      song,
+      channelIndex,
+      note,
+    );
+    let elapsedParts: number = Math.max(0.0, endPart - startPart);
+    for (let i: number = 1; i < continuedNotes.length; i++) {
+      elapsedParts += continuedNotes[i].end - continuedNotes[i].start;
+    }
+    if (elapsedParts <= 0.0) return;
+
+    const intervalScale: number = song.getChannelIsNoise(channelIndex)
+      ? Config.noiseInterval
+      : 1.0;
+    const basePitch: number = Config.keys[song.key].basePitch;
+    const unison: Unison = instrument.getUnison();
+    const unisonA: number = Math.pow(
+      2.0,
+      (unison.offset + unison.spread) / 12.0,
+    );
+    const unisonB: number = Math.pow(
+      2.0,
+      (unison.offset - unison.spread) / 12.0,
+    );
+    const elapsedSamples: number =
+      elapsedParts * secondsPerPart * this.samplesPerSecond;
+    const grainPhase: number =
+      (elapsedSamples / Synth.chipWaveGrainLength(this.samplesPerSecond)) % 1.0;
+    const setCatchUp = (index: number, cycles: number): void => {
+      if (tone.chipWaveStarted[index]) return;
+      tone.phaseCatchUpCycles[index] = cycles;
+      tone.chipWaveGrainPhases[index] = grainPhase;
+    };
+
+    if (instrument.type == InstrumentType.chip) {
+      const cycles: number = Synth.integrateContinuedPitchBendCycles(
+        continuedNotes,
+        tone.pitches[0],
+        startPart,
+        endPart,
+        basePitch,
+        0.0,
+        intervalScale,
+        secondsPerPart,
+      );
+      setCatchUp(0, cycles * unisonA);
+      setCatchUp(1, cycles * unisonB);
+      return;
+    }
+
+    const chord: Chord = instrument.getChord();
+    for (let i: number = 0; i < Config.operatorCount; i++) {
+      const secondVoiceIndex: number = Config.operatorCount + i;
+      if (
+        tone.chipWaveStarted[i] &&
+        (!usesUnison || tone.chipWaveStarted[secondVoiceIndex])
+      ) {
+        continue;
+      }
+      const associatedCarrierIndex: number =
+        Config.algorithms[instrument.algorithm].associatedCarrier[i] - 1;
+      const pitchIndex: number = chord.arpeggiates
+        ? 0
+        : i < tone.pitchCount
+          ? i
+          : associatedCarrierIndex < tone.pitchCount
+            ? associatedCarrierIndex
+            : 0;
+      const cycles: number =
+        instrument.operators[i].frequency *
+        Synth.integrateContinuedPitchBendCycles(
+          continuedNotes,
+          tone.pitches[pitchIndex],
+          startPart,
+          endPart,
+          basePitch,
+          Config.operatorCarrierInterval[associatedCarrierIndex],
+          intervalScale,
+          secondsPerPart,
+        );
+      setCatchUp(i, cycles * unisonA);
+      if (usesUnison) setCatchUp(secondVoiceIndex, cycles * unisonB);
+    }
+  }
+
+  private getContinuedNoteChain(
+    song: Song,
+    channelIndex: number,
+    note: Note,
+  ): Note[] {
+    const notes: Note[] = [note];
+    const partsPerBar: number = Config.partsPerBeat * song.beatsPerBar;
+    let currentNote: Note = note;
+    let bar: number = this.bar;
+    while (
+      bar > 0 &&
+      currentNote.start == 0 &&
+      currentNote.continuesLastPattern
+    ) {
+      const previousPattern: Pattern | null = song.getPattern(
+        channelIndex,
+        bar - 1,
+      );
+      if (previousPattern == null || previousPattern.notes.length == 0) break;
+      const previousNote: Note =
+        previousPattern.notes[previousPattern.notes.length - 1];
+      if (
+        previousNote.end != partsPerBar ||
+        !Synth.adjacentNotesHaveMatchingPitches(previousNote, currentNote)
+      ) {
+        break;
+      }
+      notes.push(previousNote);
+      currentNote = previousNote;
+      bar--;
+    }
+    return notes;
+  }
+
+  private static integrateContinuedPitchBendCycles(
+    notes: readonly Note[],
+    currentPitch: number,
+    currentStartPart: number,
+    currentEndPart: number,
+    basePitch: number,
+    pitchOffset: number,
+    intervalScale: number,
+    secondsPerPart: number,
+  ): number {
+    let cycles: number = 0.0;
+    let pitch: number = currentPitch;
+    for (let i: number = 0; i < notes.length; i++) {
+      const note: Note = notes[i];
+      cycles += Synth.integratePitchBendCycles(
+        note,
+        i == 0 ? currentStartPart : note.start,
+        i == 0 ? currentEndPart : note.end,
+        basePitch + pitch * intervalScale + pitchOffset,
+        intervalScale,
+        secondsPerPart,
+      );
+      if (i + 1 < notes.length) {
+        const previousNote: Note = notes[i + 1];
+        pitch -=
+          previousNote.pins[previousNote.pins.length - 1].interval;
+      }
+    }
+    return cycles;
+  }
+
+  private static integratePitchBendCycles(
+    note: Note,
+    startPart: number,
+    endPart: number,
+    basePitch: number,
+    intervalScale: number,
+    secondsPerPart: number,
+  ): number {
+    let cycles: number = 0.0;
+    for (let i: number = 1; i < note.pins.length; i++) {
+      const startPin: NotePin = note.pins[i - 1];
+      const endPin: NotePin = note.pins[i];
+      const pinStartPart: number = note.start + startPin.time;
+      const pinEndPart: number = note.start + endPin.time;
+      const segmentStart: number = Math.max(startPart, pinStartPart);
+      const segmentEnd: number = Math.min(endPart, pinEndPart);
+      if (segmentEnd <= segmentStart || pinEndPart <= pinStartPart) continue;
+
+      const startRatio: number =
+        (segmentStart - pinStartPart) / (pinEndPart - pinStartPart);
+      const endRatio: number =
+        (segmentEnd - pinStartPart) / (pinEndPart - pinStartPart);
+      const intervalStart: number =
+        startPin.interval +
+        (endPin.interval - startPin.interval) * startRatio;
+      const intervalEnd: number =
+        startPin.interval +
+        (endPin.interval - startPin.interval) * endRatio;
+      const frequencyStart: number = Instrument.frequencyFromPitch(
+        basePitch + intervalStart * intervalScale,
+      );
+      const frequencyEnd: number = Instrument.frequencyFromPitch(
+        basePitch + intervalEnd * intervalScale,
+      );
+      const durationSeconds: number =
+        (segmentEnd - segmentStart) * secondsPerPart;
+      const frequencyRatio: number = frequencyEnd / frequencyStart;
+      cycles +=
+        Math.abs(frequencyRatio - 1.0) < 1.0e-12
+          ? frequencyStart * durationSeconds
+          : ((frequencyEnd - frequencyStart) / Math.log(frequencyRatio)) *
+            durationSeconds;
+    }
+    return cycles;
   }
 
   public static getLFOAmplitude(
@@ -8406,7 +8649,7 @@ export class Synth {
                 const stateIndex: number =
                   j + (voice == "B" ? Config.operatorCount : 0);
                 let voiceLine: string = line.replace(
-                  /tone\.(phases|phaseDeltas|phaseDeltaScales|chipWaveGrainPhases|feedbackOutputs)\[#\]/g,
+                  /tone\.(phases|phaseDeltas|phaseDeltaScales|phaseCatchUpCycles|chipWaveGrainPhases|chipWaveStarted|feedbackOutputs)\[#\]/g,
                   (_match, arrayName) =>
                     "tone." + arrayName + "[" + stateIndex + "]",
                 );
@@ -8454,12 +8697,20 @@ export class Synth {
                     voiceLine =
                       "\t\tlet operator#Phase = tone.chipWaveStarted[" +
                       stateIndex +
-                      "] ? tone.phases[" +
+                      "] && operator#SampleData != undefined ? tone.phases[" +
                       stateIndex +
-                      "] * operator#WaveLength : operator#Offset;\n" +
+                      "] * operator#WaveLength : Synth.advanceChipWavePhase(operator#Offset, tone.phaseCatchUpCycles[" +
+                      stateIndex +
+                      "] * operator#PhaseScale * instrument.operatorChipWaveTempoFactors[" +
+                      j +
+                      "], operator#LoopStart, operator#LoopEnd, operator#Oneshot);";
+                  } else if (
+                    line.indexOf("tone.chipWaveStarted[#] = true") != -1
+                  ) {
+                    voiceLine =
                       "\t\ttone.chipWaveStarted[" +
                       stateIndex +
-                      "] = true;";
+                      "] = operator#SampleData != undefined;";
                   } else if (
                     line.indexOf("let operator#BasePhaseDelta =") != -1
                   ) {
@@ -8759,11 +9010,10 @@ export class Synth {
     const unisonSign: number = instrumentState.usesUnison
       ? tone.specialIntervalExpressionMult * instrumentState.unison!.sign
       : 0.0;
-    if (
+    const singleVoice: boolean =
       instrumentState.unison!.voices == 1 &&
-      !instrumentState.chord!.customInterval
-    )
-      tone.phases[1] = tone.phases[0];
+      !instrumentState.chord!.customInterval;
+    if (singleVoice && tone.chipWaveStarted[0]) tone.phases[1] = tone.phases[0];
     let basePhaseDeltaA: number = tone.phaseDeltas[0] * waveLength;
     let basePhaseDeltaB: number = tone.phaseDeltas[1] * waveLength;
     let phaseDeltaA: number =
@@ -8774,8 +9024,20 @@ export class Synth {
     const phaseDeltaScaleB: number = +tone.phaseDeltaScales[1];
     let expression: number = +tone.expression;
     const expressionDelta: number = +tone.expressionDelta;
-    let phaseA: number = (tone.phases[0] % 1) * waveLength;
-    let phaseB: number = (tone.phases[1] % 1) * waveLength;
+    let phaseA: number = tone.chipWaveStarted[0]
+      ? (tone.phases[0] % 1) * waveLength
+      : tone.phaseCatchUpCycles[0] *
+        instrumentState.chipWavePitchFactor *
+        waveLength;
+    let phaseB: number = singleVoice
+      ? phaseA
+      : tone.chipWaveStarted[1]
+        ? (tone.phases[1] % 1) * waveLength
+        : tone.phaseCatchUpCycles[1] *
+          instrumentState.chipWavePitchFactor *
+          waveLength;
+    tone.chipWaveStarted[0] = true;
+    tone.chipWaveStarted[1] = true;
 
     const filters: DynamicBiquadFilter[] = tone.noteFilters;
     const filterCount: number = tone.noteFilterCount | 0;
@@ -8903,12 +9165,24 @@ export class Synth {
     const expressionDelta: number = +tone.expressionDelta;
     let phaseA: number = tone.chipWaveStarted[0]
       ? tone.phases[0] * waveLength
-      : offset;
+      : Synth.advanceChipWavePhase(
+          offset,
+          tone.phaseCatchUpCycles[0] * samplePhaseScale * tempoFactor,
+          loopStart,
+          loopEnd,
+          oneshot,
+        );
     let phaseB: number = singleVoice
       ? phaseA
       : tone.chipWaveStarted[1]
         ? tone.phases[1] * waveLength
-        : offset;
+        : Synth.advanceChipWavePhase(
+            offset,
+            tone.phaseCatchUpCycles[1] * samplePhaseScale * tempoFactor,
+            loopStart,
+            loopEnd,
+            oneshot,
+          );
     tone.chipWaveStarted[0] = true;
     tone.chipWaveStarted[1] = true;
 
@@ -10101,9 +10375,10 @@ export class Synth {
 		const operator#Wave = Config.getFmWave(/*operatorWave*/);
 
 		// I'm adding 1000 to the phase to ensure that it's never negative even when modulated by other waves because negative numbers don't work with the modulus operator very well.
-		let operator#Phase = +((tone.phases[#] % 1) + 1000) * ` +
+		let operator#Phase = +((tone.chipWaveStarted[#] ? tone.phases[#] % 1 : tone.phaseCatchUpCycles[#] * instrument.operatorChipWavePitchFactors[/*operatorIndex*/]) + 1000) * ` +
     Config.sineWaveLength +
     `;
+		tone.chipWaveStarted[#] = true;
 		let operator#BasePhaseDelta = +tone.phaseDeltas[#] * ` +
     Config.sineWaveLength +
     `;

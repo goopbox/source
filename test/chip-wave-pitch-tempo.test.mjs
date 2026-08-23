@@ -12,7 +12,7 @@ async function loadModules() {
   await build({
     stdin: {
       contents: [
-        'export {Instrument, Note, Song, Synth, SynthEngine} from "./synth/synth.ts";',
+        'export {Instrument, Note, Pattern, Song, Synth, SynthEngine, makeNotePin} from "./synth/synth.ts";',
         'export {Config, EffectType, InstrumentType, parseAssetDefinition} from "./synth/SynthConfig.ts";',
       ].join("\n"),
       resolveDir: process.cwd(),
@@ -94,6 +94,166 @@ function renderSourcePhase(module, instrumentType, pitch, tempo) {
   const tone = engine.channels[0].instruments[0].activeTones.get(0);
   assert.notEqual(tone, undefined);
   return tone.phases[0];
+}
+
+function configureCatchUpSong(module, instrumentType) {
+  const { Config, makeNotePin } = module;
+  const { asset, song } = configureShortSong(
+    module,
+    instrumentType,
+    137,
+    83,
+  );
+  song.tempo = 125;
+  const instrument = song.channels[0].instruments[0];
+  const settings =
+    instrumentType == module.InstrumentType.chip
+      ? instrument.chipWaveSettings
+      : instrument.operators[0].chipWaveSettings;
+  settings.offset = 0.125;
+  settings.loopStart = 0.0625;
+  settings.loopEnd = 0.9375;
+  const note = song.channels[0].patterns[0].notes[0];
+  note.pins = [
+    makeNotePin(0, 0, Config.noteSizeMax),
+    makeNotePin(12, Config.partsPerBeat / 2, Config.noteSizeMax),
+    makeNotePin(-5, Config.partsPerBeat, Config.noteSizeMax),
+  ];
+  return { asset, song };
+}
+
+function renderCatchUpState(module, instrumentType, seekToMiddle) {
+  const { asset, song } = configureCatchUpSong(module, instrumentType);
+  const engine = new module.SynthEngine(song);
+  engine.setSampleRate(48000);
+  const samples = new Float32Array(65536);
+  for (let i = 0; i < samples.length; i++) {
+    samples[i] = Math.sin((i * Math.PI * 2) / 97);
+  }
+  engine.setAsset(asset.id, samples, 48000);
+  const seekFraction = 0.75;
+  const samplesBeforeSeek = engine.getSamplesPerBar() * seekFraction;
+  assert.equal(Number.isInteger(samplesBeforeSeek), true);
+  if (seekToMiddle) engine.playhead = seekFraction;
+  engine.play();
+  const renderedSamples = seekToMiddle ? 1 : samplesBeforeSeek + 1;
+  engine.synthesize(
+    new Float32Array(renderedSamples),
+    new Float32Array(renderedSamples),
+    renderedSamples,
+  );
+  const tone = engine.channels[0].instruments[0].activeTones.get(0);
+  assert.notEqual(tone, undefined);
+  return {
+    phase: tone.phases[0],
+    grainPhase: tone.chipWaveGrainPhases[0],
+  };
+}
+
+function assertCatchUpMatchesContinuousPlayback(module, instrumentType) {
+  const continuous = renderCatchUpState(module, instrumentType, false);
+  const caughtUp = renderCatchUpState(module, instrumentType, true);
+  assert.ok(
+    Math.abs(caughtUp.phase - continuous.phase) < 3e-5,
+    `caught-up phase ${caughtUp.phase} should match continuous phase ${continuous.phase}`,
+  );
+  assert.ok(
+    Math.abs(caughtUp.grainPhase - continuous.grainPhase) < 1e-9,
+    `caught-up grain phase ${caughtUp.grainPhase} should match continuous grain phase ${continuous.grainPhase}`,
+  );
+}
+
+function configureExtendedCatchUpSong(module, instrumentType) {
+  const { Config, Note, Pattern, makeNotePin } = module;
+  const { asset, song } = configureShortSong(
+    module,
+    instrumentType,
+    137,
+    83,
+  );
+  song.tempo = 250;
+  song.barCount = 17;
+  song.loopStart = 0;
+  song.loopLength = song.barCount;
+  for (let channelIndex = 0; channelIndex < song.channels.length; channelIndex++) {
+    const channel = song.channels[channelIndex];
+    channel.bars.length = song.barCount;
+    channel.bars.fill(0);
+  }
+
+  const channel = song.channels[0];
+  channel.patterns.length = 0;
+  let pitch = 48;
+  const partsPerBar = song.beatsPerBar * Config.partsPerBeat;
+  for (let bar = 0; bar < song.barCount; bar++) {
+    const pattern = new Pattern();
+    const note = new Note(
+      pitch,
+      0,
+      partsPerBar,
+      Config.noteSizeMax,
+    );
+    note.pins = [
+      makeNotePin(0, 0, Config.noteSizeMax),
+      makeNotePin(bar % 2 == 0 ? 4 : -2, partsPerBar / 2, Config.noteSizeMax),
+      makeNotePin(1, partsPerBar, Config.noteSizeMax),
+    ];
+    note.continuesLastPattern = bar > 0;
+    pattern.notes.push(note);
+    channel.patterns.push(pattern);
+    channel.bars[bar] = bar + 1;
+    pitch++;
+  }
+
+  const instrument = channel.instruments[0];
+  const settings =
+    instrumentType == module.InstrumentType.chip
+      ? instrument.chipWaveSettings
+      : instrument.operators[0].chipWaveSettings;
+  settings.offset = 0.125;
+  settings.loopStart = 0.0625;
+  settings.loopEnd = 0.9375;
+  return { asset, song };
+}
+
+function renderExtendedCatchUpState(module, instrumentType, seekToBar16) {
+  const { asset, song } = configureExtendedCatchUpSong(module, instrumentType);
+  const engine = new module.SynthEngine(song);
+  engine.setSampleRate(8000);
+  const samples = new Float32Array(65536);
+  for (let i = 0; i < samples.length; i++) {
+    samples[i] = Math.sin((i * Math.PI * 2) / 97);
+  }
+  engine.setAsset(asset.id, samples, 8000);
+  if (seekToBar16) engine.playhead = 16;
+  engine.play();
+  const samplesBeforeSeek = engine.getSamplesPerBar() * 16;
+  assert.equal(Number.isInteger(samplesBeforeSeek), true);
+  const renderedSamples = seekToBar16 ? 1 : samplesBeforeSeek + 1;
+  engine.synthesize(
+    new Float32Array(renderedSamples),
+    new Float32Array(renderedSamples),
+    renderedSamples,
+  );
+  const tone = engine.channels[0].instruments[0].activeTones.get(0);
+  assert.notEqual(tone, undefined);
+  return {
+    phase: tone.phases[0],
+    grainPhase: tone.chipWaveGrainPhases[0],
+  };
+}
+
+function assertExtendedCatchUpMatchesContinuousPlayback(module, instrumentType) {
+  const continuous = renderExtendedCatchUpState(module, instrumentType, false);
+  const caughtUp = renderExtendedCatchUpState(module, instrumentType, true);
+  assert.ok(
+    Math.abs(caughtUp.phase - continuous.phase) < 2e-4,
+    `16-bar caught-up phase ${caughtUp.phase} should match continuous phase ${continuous.phase}`,
+  );
+  assert.ok(
+    Math.abs(caughtUp.grainPhase - continuous.grainPhase) < 1e-9,
+    `16-bar caught-up grain phase ${caughtUp.grainPhase} should match continuous grain phase ${continuous.grainPhase}`,
+  );
 }
 
 test("pitch and notes are separate effect categories without a pitch/tempo effect", async (context) => {
@@ -309,4 +469,42 @@ test("sample-backed chip and FM paths share one sampler and decouple source temp
   assert.ok(Math.abs(fmPitchA - fmPitchB) < 1e-9, "FM source tempo must not change with pitch");
   const fmTempoB = renderSourcePhase(module, module.InstrumentType.fm, 70, 80);
   assert.ok(Math.abs(fmPitchA - fmTempoB) > 1e-4, "FM source position must change with tempo");
+});
+
+test("sample-backed chip waves catch up through pitch bends when playback starts mid-note", async (context) => {
+  const module = await loadModules();
+  context.after(module.cleanup);
+  context.after(() => module.Config.configureAssets([]));
+
+  assertCatchUpMatchesContinuousPlayback(module, module.InstrumentType.chip);
+});
+
+test("sample-backed FM operator waves catch up through pitch bends when playback starts mid-note", async (context) => {
+  const module = await loadModules();
+  context.after(module.cleanup);
+  context.after(() => module.Config.configureAssets([]));
+
+  assertCatchUpMatchesContinuousPlayback(module, module.InstrumentType.fm);
+});
+
+test("extended chip waves catch up across 16 continued bars and their pitch bends", async (context) => {
+  const module = await loadModules();
+  context.after(module.cleanup);
+  context.after(() => module.Config.configureAssets([]));
+
+  assertExtendedCatchUpMatchesContinuousPlayback(
+    module,
+    module.InstrumentType.chip,
+  );
+});
+
+test("extended FM operator waves catch up across 16 continued bars and their pitch bends", async (context) => {
+  const module = await loadModules();
+  context.after(module.cleanup);
+  context.after(() => module.Config.configureAssets([]));
+
+  assertExtendedCatchUpMatchesContinuousPlayback(
+    module,
+    module.InstrumentType.fm,
+  );
 });
