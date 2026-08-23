@@ -585,6 +585,7 @@ class ChipWaveEditor {
       this.select,
     );
     this.container = div(
+      { class: "editor-controls" },
       this.waveRow,
       div(
         { class: "selectRow instrument-unlabeled-control" },

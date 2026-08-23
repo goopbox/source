@@ -86,18 +86,29 @@ dialog.prompt:not([open]) {
 }
 
 .prompt.chipWaveLoopPrompt {
-    width: min(820px, calc(100vw - 24px));
+    width: min(60em, calc(100vw - 24px));
     overflow: auto;
+}
+
+.chipWaveLoopPrompt > *:not(.cancelButton) {
+    flex-shrink: 0;
 }
 
 .chip-wave-loop-viewer {
     min-width: 0;
 }
 
+.chip-wave-loop-canvas-container {
+    width: 100%;
+    height: 18em;
+    min-height: 0;
+    overflow: hidden;
+}
+
 .chip-wave-loop-canvas {
     display: block;
     width: 100%;
-    height: min(320px, 45vh);
+    height: 100%;
     border: 1px solid var(--ui-widget-background);
     cursor: grab;
     touch-action: none;
@@ -108,7 +119,7 @@ dialog.prompt:not([open]) {
     align-items: center;
     justify-content: space-between;
     gap: 8px;
-    margin-top: 6px;
+    margin-bottom: 0.5em;
     text-align: left;
 }
 

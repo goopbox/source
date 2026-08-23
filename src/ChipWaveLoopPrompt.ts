@@ -59,7 +59,6 @@ export class ChipWaveLoopPrompt implements Prompt {
     h2("Chip Wave Loop"),
     div(
       { class: "chip-wave-loop-viewer" },
-      this._canvas,
       div(
         { class: "chip-wave-loop-toolbar" },
         span("Drag markers or the waveform. Scroll to zoom."),
@@ -69,6 +68,7 @@ export class ChipWaveLoopPrompt implements Prompt {
           this._zoomInButton,
         ),
       ),
+      div({ class: "chip-wave-loop-canvas-container" }, this._canvas),
     ),
     div(
       { class: "chip-wave-loop-fields" },
