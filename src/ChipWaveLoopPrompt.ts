@@ -22,6 +22,7 @@ const markerRows: ReadonlyArray<{
 const waveformTop: number = 68;
 
 export class ChipWaveLoopPrompt implements Prompt {
+  // Opening the prompt leaves playback alone. Preview performs a non-restoring pause.
   public readonly pausePlayback: boolean = false;
   private readonly _canvas: HTMLCanvasElement = canvas({
     class: "chip-wave-loop-canvas",
@@ -54,6 +55,10 @@ export class ChipWaveLoopPrompt implements Prompt {
   private readonly _resetZoomButton: HTMLButtonElement = button(
     { type: "button" },
     "Fit",
+  );
+  private readonly _previewButton: HTMLButtonElement = button(
+    { class: "playButton", type: "button" },
+    "Preview",
   );
   private readonly _cancelButton: HTMLButtonElement = button({
     class: "cancelButton",
@@ -93,7 +98,11 @@ export class ChipWaveLoopPrompt implements Prompt {
       ),
     ),
     this._status,
-    div({ class: "chip-wave-loop-actions" }, this._okayButton),
+    div(
+      { class: "chip-wave-loop-actions" },
+      this._previewButton,
+      this._okayButton,
+    ),
     this._cancelButton,
   );
 
@@ -111,6 +120,7 @@ export class ChipWaveLoopPrompt implements Prompt {
   private _pointerId: number | null = null;
   private _pointerStartX: number = 0;
   private _panStart: number = 0;
+  private _previewing: boolean = false;
 
   constructor(
     private readonly _doc: SongDocument,
@@ -152,6 +162,7 @@ export class ChipWaveLoopPrompt implements Prompt {
     this._zoomOutButton.addEventListener("click", this._zoomOut);
     this._zoomInButton.addEventListener("click", this._zoomIn);
     this._resetZoomButton.addEventListener("click", this._fitView);
+    this._previewButton.addEventListener("click", this._preview);
     this._okayButton.addEventListener("click", this._save);
     this._cancelButton.addEventListener("click", this._close);
     this._loadSampleData();
@@ -179,12 +190,14 @@ export class ChipWaveLoopPrompt implements Prompt {
         status == "error"
           ? `Failed to load sample: ${this._doc.synth.getAssetLoadError(this._sampleId) ?? "Unknown error"}`
           : "Loading sample waveform...";
+      this._previewButton.disabled = true;
       this._okayButton.disabled = true;
       return;
     }
     if (this._sampleData != null) return;
     if (data.samples.length == 0) {
       this._status.textContent = "The sample contains no audio frames.";
+      this._previewButton.disabled = true;
       this._okayButton.disabled = true;
       return;
     }
@@ -203,6 +216,7 @@ export class ChipWaveLoopPrompt implements Prompt {
     ])
       positionInput.max = String(length);
     this._status.textContent = `${length.toLocaleString()} samples at ${data.sampleRate.toLocaleString()} Hz`;
+    this._previewButton.disabled = false;
     this._okayButton.disabled = false;
     this._syncInputs();
     this._draw();
@@ -556,6 +570,36 @@ export class ChipWaveLoopPrompt implements Prompt {
     this._doc.record(change);
   };
 
+  private _preview = (): void => {
+    if (this._sampleData == null) return;
+    if (this._previewing) {
+      this._doc.synth.stopSamplePreview();
+      this._setPreviewing(false);
+      return;
+    }
+    if (this._doc.synth.playing) this._doc.performance.pause();
+    const started: boolean = this._doc.synth.playSamplePreview(
+      this._sampleId,
+      {
+        offsetFrame: this._offset,
+        loopStartFrame: this._loopStart,
+        loopEndFrame: this._loopEnd,
+        oneshot: this._oneshotInput.checked,
+      },
+      this._previewEnded,
+    );
+    this._setPreviewing(started);
+  };
+
+  private _previewEnded = (): void => this._setPreviewing(false);
+
+  private _setPreviewing(previewing: boolean): void {
+    this._previewing = previewing;
+    this._previewButton.classList.toggle("playButton", !previewing);
+    this._previewButton.classList.toggle("stopButton", previewing);
+    this._previewButton.textContent = previewing ? "Stop" : "Preview";
+  }
+
   private _whenAssetStateChanged = (): void => this._loadSampleData();
   private _close = (): void => this._doc.closePrompt();
 
@@ -577,7 +621,9 @@ export class ChipWaveLoopPrompt implements Prompt {
     this._zoomOutButton.removeEventListener("click", this._zoomOut);
     this._zoomInButton.removeEventListener("click", this._zoomIn);
     this._resetZoomButton.removeEventListener("click", this._fitView);
+    this._previewButton.removeEventListener("click", this._preview);
     this._okayButton.removeEventListener("click", this._save);
     this._cancelButton.removeEventListener("click", this._close);
+    this._doc.synth.stopSamplePreview();
   };
 }

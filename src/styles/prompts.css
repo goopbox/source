@@ -172,6 +172,7 @@ dialog.prompt:not([open]) {
 
 .chip-wave-loop-actions {
     display: flex;
+    gap: 10px;
     justify-content: flex-end;
 }
 

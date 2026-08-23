@@ -21,6 +21,12 @@ export interface SampleAssetData {
   readonly samples: Float32Array;
   readonly sampleRate: number;
 }
+export interface SamplePreviewSettings {
+  readonly offsetFrame: number;
+  readonly loopStartFrame: number;
+  readonly loopEndFrame: number;
+  readonly oneshot: boolean;
+}
 export interface SoundFontPresetInfo {
   readonly index: number;
   readonly name: string;
@@ -78,6 +84,7 @@ export class SynthController {
   private audioContext: AudioContext | null = null;
   private audioWorkletNode: AudioWorkletNode | null = null;
   private outputGainNode: GainNode | null = null;
+  private samplePreviewSource: AudioBufferSourceNode | null = null;
   private audioInitialization: Promise<void> | null = null;
   private songSyncFrame: number | null = null;
   private lastSerializedSong: Uint8Array | null = null;
@@ -135,6 +142,89 @@ export class SynthController {
 
   public getSampleAsset(sampleId: string): SampleAssetData | null {
     return this.sampleAssets.get(sampleId) ?? null;
+  }
+
+  public playSamplePreview(
+    sampleId: string,
+    settings: SamplePreviewSettings,
+    onEnded: () => void,
+  ): boolean {
+    const sample: SampleAssetData | undefined = this.sampleAssets.get(sampleId);
+    const context: AudioContext | null = this.audioContext;
+    const output: GainNode | null = this.outputGainNode;
+    if (
+      sample == undefined ||
+      sample.samples.length == 0 ||
+      context == null ||
+      output == null
+    )
+      return false;
+
+    this.stopSamplePreviewInternal(false);
+    const sampleLength: number = sample.samples.length;
+    const loopStartFrame: number = Math.max(
+      0,
+      Math.min(sampleLength - 1, settings.loopStartFrame),
+    );
+    const loopEndFrame: number = Math.max(
+      loopStartFrame + 1,
+      Math.min(sampleLength, settings.loopEndFrame),
+    );
+    let offsetFrame: number = Math.max(
+      0,
+      Math.min(loopEndFrame, settings.offsetFrame),
+    );
+    if (!settings.oneshot && offsetFrame >= loopEndFrame)
+      offsetFrame = loopStartFrame;
+    const buffer: AudioBuffer = context.createBuffer(
+      1,
+      sampleLength,
+      sample.sampleRate,
+    );
+    buffer.getChannelData(0).set(sample.samples);
+    const source: AudioBufferSourceNode = context.createBufferSource();
+    source.buffer = buffer;
+    source.loop = !settings.oneshot;
+    source.loopStart = loopStartFrame / sample.sampleRate;
+    source.loopEnd = loopEndFrame / sample.sampleRate;
+    source.connect(output);
+    source.onended = (): void => {
+      if (this.samplePreviewSource != source) return;
+      source.disconnect();
+      this.samplePreviewSource = null;
+      this.suspendAudioIfIdle();
+      onEnded();
+    };
+    this.samplePreviewSource = source;
+    if (context.state == "suspended")
+      void context.resume().catch((): void => {
+        /* Retried by the next user interaction. */
+      });
+    const offsetSeconds: number = offsetFrame / sample.sampleRate;
+    if (settings.oneshot) {
+      source.start(
+        0,
+        offsetSeconds,
+        (loopEndFrame - offsetFrame) / sample.sampleRate,
+      );
+    } else {
+      source.start(0, offsetSeconds);
+    }
+    return true;
+  }
+
+  public stopSamplePreview(): void {
+    this.stopSamplePreviewInternal(true);
+  }
+
+  private stopSamplePreviewInternal(suspendAudio: boolean): void {
+    const source: AudioBufferSourceNode | null = this.samplePreviewSource;
+    if (source == null) return;
+    this.samplePreviewSource = null;
+    source.onended = null;
+    source.stop();
+    source.disconnect();
+    if (suspendAudio) this.suspendAudioIfIdle();
   }
 
   public getSoundFontPresets(
@@ -341,6 +431,16 @@ export class SynthController {
       this.errorWasShown = true;
       window.alert(message);
     }
+  }
+
+  private suspendAudioIfIdle(): void {
+    if (
+      !this.desiredPlaying &&
+      this.livePitches.length == 0 &&
+      this.samplePreviewSource == null &&
+      this.audioContext?.state == "running"
+    )
+      void this.audioContext.suspend();
   }
 
   private post(command: SynthCommand, transfer: Transferable[] = []): void {
@@ -559,8 +659,7 @@ export class SynthController {
         );
         break;
       case "idle":
-        if (!this.desiredPlaying && this.livePitches.length == 0)
-          void this.audioContext?.suspend();
+        this.suspendAudioIfIdle();
         break;
     }
   }
@@ -714,6 +813,7 @@ export class SynthController {
   public dispose(): void {
     if (this.songSyncFrame != null) cancelAnimationFrame(this.songSyncFrame);
     this.songSyncFrame = null;
+    this.stopSamplePreviewInternal(false);
     this.post({ type: "shutdown" });
     this.audioWorkletNode?.disconnect();
     this.audioWorkletNode = null;
