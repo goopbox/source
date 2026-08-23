@@ -2421,10 +2421,7 @@ export class ChangeChipWaveLoop extends ChangeInstrumentSlider {
         ? this._instrument.chipWaveSettings
         : this._instrument.operators[operatorIndex].chipWaveSettings;
     const offset: number = Math.max(0, Math.min(1, values.offset));
-    const loopStart: number = Math.max(
-      offset,
-      Math.min(1, values.loopStart),
-    );
+    const loopStart: number = Math.max(0, Math.min(1, values.loopStart));
     const loopEnd: number = Math.max(
       loopStart,
       Math.min(1, values.loopEnd),

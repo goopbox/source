@@ -10,6 +10,17 @@ const { button, canvas, dialog, div, h2, input, label, span } = HTML;
 
 type Marker = "offset" | "loopStart" | "loopEnd";
 
+const markerRows: ReadonlyArray<{
+  readonly marker: Marker;
+  readonly centerY: number;
+  readonly endY: number;
+}> = [
+  { marker: "offset", centerY: 14, endY: 24 },
+  { marker: "loopStart", centerY: 34, endY: 44 },
+  { marker: "loopEnd", centerY: 54, endY: 64 },
+];
+const waveformTop: number = 68;
+
 export class ChipWaveLoopPrompt implements Prompt {
   public readonly pausePlayback: boolean = false;
   private readonly _canvas: HTMLCanvasElement = canvas({
@@ -204,20 +215,17 @@ export class ChipWaveLoopPrompt implements Prompt {
       Math.max(0, Math.min(length, this._loopStart)),
     );
     this._loopEnd = Math.round(Math.max(0, Math.min(length, this._loopEnd)));
-    if (changed == "offset") {
-      this._offset = Math.min(this._offset, this._loopStart);
-    } else if (changed == "loopStart") {
-      this._loopStart = Math.max(
-        this._offset,
-        Math.min(Math.max(0, length - 1), this._loopStart),
+    if (changed == "loopStart") {
+      this._loopStart = Math.min(
+        Math.max(0, length - 1),
+        this._loopStart,
       );
       this._loopEnd = Math.max(this._loopStart + 1, this._loopEnd);
-    } else {
+    } else if (changed == "loopEnd") {
       this._loopEnd = Math.max(this._loopStart + 1, this._loopEnd);
       if (this._loopEnd > length) {
         this._loopEnd = length;
         this._loopStart = Math.min(this._loopStart, Math.max(0, length - 1));
-        this._offset = Math.min(this._offset, this._loopStart);
       }
     }
   }
@@ -269,11 +277,22 @@ export class ChipWaveLoopPrompt implements Prompt {
     );
   }
 
+  private _pickMarkerRow(y: number): Marker | null {
+    if (y < 0) return null;
+    for (const row of markerRows) {
+      if (y < row.endY) return row.marker;
+    }
+    return null;
+  }
+
   private _pickMarker(x: number, y: number, width: number): Marker | null {
-    const markers: Array<{ marker: Marker; sample: number; y: number }> = [
-      { marker: "offset", sample: this._offset, y: 14 },
-      { marker: "loopStart", sample: this._loopStart, y: 34 },
-      { marker: "loopEnd", sample: this._loopEnd, y: 54 },
+    const rowMarker: Marker | null = this._pickMarkerRow(y);
+    if (rowMarker != null) return rowMarker;
+    if (y < waveformTop) return null;
+    const markers: Array<{ marker: Marker; sample: number }> = [
+      { marker: "offset", sample: this._offset },
+      { marker: "loopStart", sample: this._loopStart },
+      { marker: "loopEnd", sample: this._loopEnd },
     ];
     let best: Marker | null = null;
     let bestDistance: number = Infinity;
@@ -281,26 +300,40 @@ export class ChipWaveLoopPrompt implements Prompt {
       const xDistance: number = Math.abs(
         x - this._sampleToX(marker.sample, width),
       );
-      const yDistance: number = Math.abs(y - marker.y);
-      if (xDistance > 12 || (yDistance > 10 && xDistance > 5)) continue;
-      const distance: number = xDistance + yDistance * 0.25;
-      if (distance < bestDistance) {
+      if (xDistance <= 5 && xDistance < bestDistance) {
         best = marker.marker;
-        bestDistance = distance;
+        bestDistance = xDistance;
       }
     }
     return best;
+  }
+
+  private _setMarker(marker: Marker, value: number): void {
+    if (marker == "offset") this._offset = value;
+    else if (marker == "loopStart") this._loopStart = value;
+    else this._loopEnd = value;
+    this._normalizePositions(marker);
+    this._syncInputs();
   }
 
   private _onPointerDown = (event: PointerEvent): void => {
     if (this._sampleData == null || event.button != 0) return;
     const point = this._getCanvasPoint(event);
     const width: number = this._canvas.getBoundingClientRect().width;
+    const rowMarker: Marker | null = this._pickMarkerRow(point.y);
+    this._dragMarker = rowMarker ?? this._pickMarker(point.x, point.y, width);
+    this._panning = this._dragMarker == null && point.y >= waveformTop;
+    if (this._dragMarker == null && !this._panning) return;
     this._pointerId = event.pointerId;
-    this._dragMarker = this._pickMarker(point.x, point.y, width);
-    this._panning = this._dragMarker == null;
     this._pointerStartX = point.x;
     this._panStart = this._viewStart;
+    if (rowMarker != null) {
+      this._setMarker(
+        rowMarker,
+        Math.round(this._xToSample(point.x, width)),
+      );
+      this._draw();
+    }
     this._canvas.setPointerCapture(event.pointerId);
     this._canvas.style.cursor = this._panning ? "grabbing" : "ew-resize";
     event.preventDefault();
@@ -311,17 +344,24 @@ export class ChipWaveLoopPrompt implements Prompt {
     const point = this._getCanvasPoint(event);
     const width: number = this._canvas.getBoundingClientRect().width;
     if (this._pointerId != event.pointerId) {
+      const marker: Marker | null = this._pickMarker(
+        point.x,
+        point.y,
+        width,
+      );
       this._canvas.style.cursor =
-        this._pickMarker(point.x, point.y, width) == null ? "grab" : "ew-resize";
+        marker != null
+          ? "ew-resize"
+          : point.y >= waveformTop
+            ? "grab"
+            : "default";
       return;
     }
     if (this._dragMarker != null) {
-      const value: number = Math.round(this._xToSample(point.x, width));
-      if (this._dragMarker == "offset") this._offset = value;
-      else if (this._dragMarker == "loopStart") this._loopStart = value;
-      else this._loopEnd = value;
-      this._normalizePositions(this._dragMarker);
-      this._syncInputs();
+      this._setMarker(
+        this._dragMarker,
+        Math.round(this._xToSample(point.x, width)),
+      );
     } else if (this._panning) {
       const length: number = this._sampleData.samples.length;
       const span: number = this._viewEnd - this._viewStart;
@@ -341,7 +381,14 @@ export class ChipWaveLoopPrompt implements Prompt {
     this._pointerId = null;
     this._dragMarker = null;
     this._panning = false;
-    this._canvas.style.cursor = "grab";
+    const point = this._getCanvasPoint(event);
+    const width: number = this._canvas.getBoundingClientRect().width;
+    this._canvas.style.cursor =
+      this._pickMarker(point.x, point.y, width) != null
+        ? "ew-resize"
+        : point.y >= waveformTop
+          ? "grab"
+          : "default";
   };
 
   private _zoomAt(x: number, factor: number): void {
@@ -405,11 +452,11 @@ export class ChipWaveLoopPrompt implements Prompt {
     context.fillStyle = background || "#111";
     context.fillRect(0, 0, width, height);
     context.fillStyle = widget || "#444";
-    context.fillRect(0, 64, width, height - 64);
+    const markerAreaBottom: number = markerRows[markerRows.length - 1].endY;
+    context.fillRect(0, markerAreaBottom, width, height - markerAreaBottom);
 
     if (this._sampleData == null) return;
     const samples: Float32Array = this._sampleData.samples;
-    const waveformTop: number = 68;
     const waveformHeight: number = height - waveformTop - 4;
     const middle: number = waveformTop + waveformHeight / 2;
     const amplitude: number = Math.max(1, waveformHeight / 2 - 2);
@@ -462,10 +509,10 @@ export class ChipWaveLoopPrompt implements Prompt {
     context.stroke();
 
     const drawMarker = (
+      marker: Marker,
       markerX: number,
       markerY: number,
       color: string,
-      markerLabel: string,
     ): void => {
       if (markerX < -20 || markerX > width + 20) return;
       context.strokeStyle = color;
@@ -476,23 +523,24 @@ export class ChipWaveLoopPrompt implements Prompt {
       context.lineTo(markerX, height);
       context.stroke();
       context.beginPath();
-      context.moveTo(markerX - 6, markerY - 6);
-      context.lineTo(markerX + 6, markerY - 6);
-      context.lineTo(markerX, markerY + 6);
+      if (marker == "offset") {
+        context.moveTo(markerX - 6, markerY - 6);
+        context.lineTo(markerX + 6, markerY - 6);
+        context.lineTo(markerX, markerY + 6);
+      } else {
+        const direction: number = marker == "loopStart" ? 1 : -1;
+        context.moveTo(markerX - 6 * direction, markerY - 6);
+        context.lineTo(markerX, markerY - 6);
+        context.lineTo(markerX + 6 * direction, markerY);
+        context.lineTo(markerX, markerY + 6);
+        context.lineTo(markerX - 6 * direction, markerY + 6);
+      }
       context.closePath();
       context.fill();
-      context.font = "12px sans-serif";
-      context.textBaseline = "middle";
-      const labelWidth: number = context.measureText(markerLabel).width;
-      const labelX: number = Math.max(
-        2,
-        Math.min(width - labelWidth - 2, markerX + 9),
-      );
-      context.fillText(markerLabel, labelX, markerY);
     };
-    drawMarker(offsetX, 14, "#f4a261", "Offset");
-    drawMarker(loopStartX, 34, "#2a9d8f", "Loop start");
-    drawMarker(loopEndX, 54, "#e76f51", "Loop end");
+    drawMarker("offset", offsetX, markerRows[0].centerY, "#f4a261");
+    drawMarker("loopStart", loopStartX, markerRows[1].centerY, "#2a9d8f");
+    drawMarker("loopEnd", loopEndX, markerRows[2].centerY, "#e76f51");
   };
 
   private _save = (): void => {

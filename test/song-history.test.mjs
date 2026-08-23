@@ -176,7 +176,7 @@ async function loadSongHistory() {
         'export {encodeSongBinary, decodeSongBinary, extractCompressedSongBody} from "./synth/SongBinary.ts";',
         'export {Instrument, Note, Pattern, Song} from "./synth/synth.ts";',
         'export {Config} from "./synth/SynthConfig.ts";',
-        'export {ChangeAddChannelInstrument, ChangeBarCount, ChangeBarOrder, ChangeChannelBar, ChangeChannelOrder, ChangeChorus, ChangeEnsurePatternExists, ChangeKey, ChangeLoop, ChangeNoteAdded, ChangeOctave, ChangePan, ChangeSong, ChangeTempo, ChangeToggleEffects, ChangeTrackSelection, ChangeVolume} from "./src/changes.ts";',
+        'export {ChangeAddChannelInstrument, ChangeBarCount, ChangeBarOrder, ChangeChannelBar, ChangeChannelOrder, ChangeChipWaveLoop, ChangeChorus, ChangeEnsurePatternExists, ChangeKey, ChangeLoop, ChangeNoteAdded, ChangeOctave, ChangePan, ChangeSong, ChangeTempo, ChangeToggleEffects, ChangeTrackSelection, ChangeVolume} from "./src/changes.ts";',
       ].join("\n"),
       resolveDir: process.cwd(),
       sourcefile: "song-history-entry.ts",
@@ -342,6 +342,7 @@ test("undo history is durable, contiguous, exact, and crash resistant", async (c
     ChangeBarOrder,
     ChangeChannelBar,
     ChangeChannelOrder,
+    ChangeChipWaveLoop,
     ChangeChorus,
     ChangeEnsurePatternExists,
     ChangeKey,
@@ -532,6 +533,16 @@ test("undo history is durable, contiguous, exact, and crash resistant", async (c
         ),
       );
       const instrument = doc.song.channels[0].instruments[0];
+      apply(
+        new ChangeChipWaveLoop(doc, null, {
+          offset: 0.75,
+          loopStart: 0.25,
+          loopEnd: 0.9,
+          oneshot: false,
+        }),
+      );
+      assert.equal(instrument.chipWaveSettings.offset, 0.75);
+      assert.equal(instrument.chipWaveSettings.loopStart, 0.25);
       apply(new ChangeVolume(doc, instrument.volume, instrument.volume + 1));
       apply(new ChangePan(doc, instrument.pan, instrument.pan + 1));
       apply(new ChangeToggleEffects(doc, 1));

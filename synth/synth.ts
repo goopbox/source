@@ -721,7 +721,7 @@ export class ChipWaveSettings {
       ? Math.max(0, Math.min(1, offset))
       : 0;
     this.loopStart = Number.isFinite(loopStart)
-      ? Math.max(this.offset, Math.min(1, loopStart))
+      ? Math.max(0, Math.min(1, loopStart))
       : this.offset;
     this.loopEnd = Number.isFinite(loopEnd)
       ? Math.max(this.loopStart, Math.min(1, loopEnd))
@@ -2298,7 +2298,7 @@ export class Instrument {
     );
     const chipWaveLoopStart: number = rangeValue(
       binaryState.chipWaveLoopStart,
-      chipWaveOffset,
+      0,
       1,
     );
     const chipWaveLoopEnd: number = rangeValue(
@@ -2488,7 +2488,7 @@ export class Instrument {
       const loopStart: number =
         candidate.loopStart == undefined
           ? offset
-          : rangeValue(candidate.loopStart, offset, 1);
+          : rangeValue(candidate.loopStart, 0, 1);
       const loopEnd: number =
         candidate.loopEnd == undefined
           ? 1
