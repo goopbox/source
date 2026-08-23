@@ -8,6 +8,7 @@ import {
   Pattern,
   makeNotePin,
 } from "../synth/synth.js";
+import type { SoundFontPresetInfo } from "../synth/SynthController.js";
 import {
   FlpImportError,
   type FlpArrangement,
@@ -76,15 +77,27 @@ export interface FlpChannelSource {
 
 export function getFruitySoundFontPresetIndex(
   source: FlpChannelSource,
+  presets: readonly SoundFontPresetInfo[] | null,
 ): number | null {
+  const plugin: FlpChannelPlugin | undefined = source.plugin;
   if (
-    source.plugin?.internalName.toLowerCase() != "fruity soundfont player"
+    plugin?.internalName.toLowerCase() != "fruity soundfont player" ||
+    plugin.soundFontBank == null ||
+    plugin.soundFontProgram == null ||
+    presets == null
   )
     return null;
-  const match: RegExpExecArray | null = /^Preset (\d+)$/.exec(
-    source.plugin.statePreset ?? "",
+  const bank: number = plugin.soundFontBank;
+  return (
+    presets.find(
+      (preset: SoundFontPresetInfo): boolean =>
+        preset.program == plugin.soundFontProgram &&
+        (preset.bankMSB |
+          (preset.isDrum ? 0x80 : 0) |
+          (preset.bankLSB << 8)) ==
+          bank,
+    )?.index ?? null
   );
-  return match == null ? null : Number(match[1]);
 }
 
 function selectArrangement(project: FlpProject): FlpArrangement | undefined {

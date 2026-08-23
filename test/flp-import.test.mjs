@@ -78,10 +78,11 @@ function vstWrapperInfo({ name, vendor, state }) {
   return Buffer.concat([Buffer.from([12, 0, 0, 0]), ...records]);
 }
 
-function fruitySoundFontState(path, presetNumber) {
+function fruitySoundFontState(path, presetNumber, bank = 0) {
   const header = Buffer.alloc(64, 0xff);
   header.writeUInt32LE(2, 0);
   header.writeUInt32LE(presetNumber, 4);
+  header.writeUInt32LE(bank, 8);
   return Buffer.concat([
     header,
     Buffer.from(`\\${path}`, "ascii"),
@@ -704,7 +705,7 @@ test("parses FL channel instruments and carries their source details to every ou
   assert.equal(absoluteNotes(song.pitchChannels[0]).length, 1);
 });
 
-test("extracts the chosen SoundFont and preset number from Fruity Soundfont Player state", async () => {
+test("resolves the chosen Fruity Soundfont Player bank and program to a preset index", async () => {
   const { getFruitySoundFontPresetIndex, importFlp, parseFlpProject } =
     await loadedModule;
   const statePath =
@@ -713,17 +714,22 @@ test("extracts the chosen SoundFont and preset number from Fruity Soundfont Play
     channels: [{ id: 0, name: "od" }],
     extraEvents: [
       blobEvent(0xc9, utf16("Fruity soundfont player")),
-      blobEvent(0xd5, fruitySoundFontState(statePath, 145)),
+      blobEvent(0xd5, fruitySoundFontState(statePath, 50, 1)),
     ],
   });
   assert.deepEqual(parseFlpProject(buffer).channels[0].plugin, {
     internalName: "Fruity soundfont player",
     statePath,
-    statePreset: "Preset 145",
+    soundFontBank: 1,
+    soundFontProgram: 49,
   });
   const source = importFlp(buffer).channelSources[0];
   assert.equal(source.plugin.statePath, statePath);
-  assert.equal(getFruitySoundFontPresetIndex(source), 145);
+  const presets = [
+    { index: 0, program: 49, bankMSB: 0, bankLSB: 0, isDrum: false },
+    { index: 1, program: 49, bankMSB: 1, bankLSB: 0, isDrum: false },
+  ];
+  assert.equal(getFruitySoundFontPresetIndex(source, presets), 1);
 });
 
 test("ignores VST wrapper preset state while preserving the FL channel and plugin names", async () => {

@@ -59,6 +59,7 @@ export class FlpInstrumentPrompt implements Prompt {
             ? null
             : getFruitySoundFontPresetIndex(
                 _imported.channelSources[channelIndex]!,
+                this._doc.synth.getSoundFontPresets(defaultSoundFontId),
               ),
       }),
     );
@@ -133,12 +134,12 @@ export class FlpInstrumentPrompt implements Prompt {
       const presetSelect: HTMLSelectElement = select({
         "aria-label": `SoundFont instrument for ${this._channelLabel(startChannelIndex, endChannelIndex)}`,
       });
+      let presets: readonly SoundFontPresetInfo[] | null = null;
       if (selection.soundFontId == null) {
         presetSelect.append(option({ value: "" }, "Choose a SoundFont first"));
         presetSelect.disabled = true;
       } else {
-        const presets: readonly SoundFontPresetInfo[] | null =
-          this._doc.synth.getSoundFontPresets(selection.soundFontId);
+        presets = this._doc.synth.getSoundFontPresets(selection.soundFontId);
         if (presets == null) {
           const status: string | null = this._doc.synth.getAssetLoadStatus(
             selection.soundFontId,
@@ -164,11 +165,13 @@ export class FlpInstrumentPrompt implements Prompt {
                 preset.index == selection.presetIndex,
             )
           ) {
+            const importedPresetIndex: number | null =
+              getFruitySoundFontPresetIndex(source, presets);
             this._setGroupSelection(
               startChannelIndex,
               endChannelIndex,
               selection.soundFontId,
-              presets[0]!.index,
+              importedPresetIndex ?? presets[0]!.index,
             );
           }
           presetSelect.value = String(selection.presetIndex);
@@ -194,7 +197,7 @@ export class FlpInstrumentPrompt implements Prompt {
       });
 
       const sourceName: string = this._sourceName(source);
-      const details: string[] = this._sourceDetails(source);
+      const details: string[] = this._sourceDetails(source, presets);
       this._channelRows.append(
         div(
           { class: "assetCard flpChannelCard" },
@@ -255,7 +258,10 @@ export class FlpInstrumentPrompt implements Prompt {
     return `FL channel ${source.sourceChannelId + 1}`;
   }
 
-  private _sourceDetails(source: FlpChannelSource): string[] {
+  private _sourceDetails(
+    source: FlpChannelSource,
+    presets: readonly SoundFontPresetInfo[] | null,
+  ): string[] {
     const details: string[] = [];
     const pluginName: string | undefined =
       source.plugin?.name ?? source.plugin?.internalName;
@@ -268,14 +274,10 @@ export class FlpInstrumentPrompt implements Prompt {
     }
     if (source.plugin?.statePath != null)
       details.push(getAssetName(source.plugin.statePath));
-    const stateFileBaseName: string = getAssetName(
-      source.plugin?.statePath ?? "",
-    ).replace(/\.[^.]+$/, "");
-    if (
-      source.plugin?.statePreset != null &&
-      source.plugin.statePreset != stateFileBaseName
-    )
-      details.push(source.plugin.statePreset);
+    const importedPresetIndex: number | null =
+      getFruitySoundFontPresetIndex(source, presets);
+    if (importedPresetIndex != null)
+      details.push(`Preset ${importedPresetIndex + 1}`);
     if (source.samplePath != null)
       details.push(`Sample: ${getAssetName(source.samplePath)}`);
     return details;
@@ -320,6 +322,7 @@ export class FlpInstrumentPrompt implements Prompt {
         ? null
         : getFruitySoundFontPresetIndex(
             this._imported.channelSources[startChannelIndex]!,
+            this._doc.synth.getSoundFontPresets(soundFontId),
           ),
     );
   }

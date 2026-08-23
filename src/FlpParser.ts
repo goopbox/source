@@ -48,7 +48,8 @@ export interface FlpChannelPlugin {
   name?: string;
   vendor?: string;
   statePath?: string;
-  statePreset?: string;
+  soundFontBank?: number;
+  soundFontProgram?: number;
 }
 
 export interface FlpPlaylistClip {
@@ -364,18 +365,27 @@ function findStatePath(
 
 function decodeSoundFontPlayerState(payload: Uint8Array): {
   statePath?: string;
-  statePreset?: string;
+  soundFontBank?: number;
+  soundFontProgram?: number;
 } {
-  const info: { statePath?: string; statePreset?: string } = {};
+  const info: {
+    statePath?: string;
+    soundFontBank?: number;
+    soundFontProgram?: number;
+  } = {};
   const statePath = findStatePath(payload, [".sf2", ".sf3"]);
   if (statePath != null) info.statePath = statePath;
-  if (payload.byteLength >= 8) {
-    const presetNumber = new DataView(
+  if (payload.byteLength >= 12) {
+    const view = new DataView(
       payload.buffer,
       payload.byteOffset,
       payload.byteLength,
-    ).getUint32(4, true);
-    if (presetNumber <= 0xffff) info.statePreset = `Preset ${presetNumber}`;
+    );
+    const oneBasedProgram = view.getUint32(4, true);
+    const bank = view.getUint32(8, true);
+    if (oneBasedProgram > 0 && oneBasedProgram <= 0x10000)
+      info.soundFontProgram = oneBasedProgram - 1;
+    if (bank <= 0xffff) info.soundFontBank = bank;
   }
   return info;
 }
@@ -472,8 +482,10 @@ function buildChannels(
         const state = decodeSoundFontPlayerState(event.payload);
         if (state.statePath !== undefined)
           current.plugin.statePath = state.statePath;
-        if (state.statePreset !== undefined)
-          current.plugin.statePreset = state.statePreset;
+        if (state.soundFontBank !== undefined)
+          current.plugin.soundFontBank = state.soundFontBank;
+        if (state.soundFontProgram !== undefined)
+          current.plugin.soundFontProgram = state.soundFontProgram;
       }
     } else if (event.opcode === 0xcb && !preferredNames.has(current.id)) {
       const name = decodeName(event.payload, legacyText);
