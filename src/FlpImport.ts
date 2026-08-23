@@ -74,6 +74,19 @@ export interface FlpChannelSource {
   readonly laneCount: number;
 }
 
+export function getFruitySoundFontPresetIndex(
+  source: FlpChannelSource,
+): number | null {
+  if (
+    source.plugin?.internalName.toLowerCase() != "fruity soundfont player"
+  )
+    return null;
+  const match: RegExpExecArray | null = /^Preset (\d+)$/.exec(
+    source.plugin.statePreset ?? "",
+  );
+  return match == null ? null : Number(match[1]);
+}
+
 function selectArrangement(project: FlpProject): FlpArrangement | undefined {
   if (project.currentArrangementId != undefined) {
     const current: FlpArrangement | undefined = project.arrangements.find(

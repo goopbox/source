@@ -238,7 +238,7 @@ const loadedModule = (async () => {
     stdin: {
       contents: [
         'export {parseFlpProject} from "./src/FlpParser.ts";',
-        'export {convertFlpProject, importFlp, FlpImportError} from "./src/FlpImport.ts";',
+        'export {convertFlpProject, getFruitySoundFontPresetIndex, importFlp, FlpImportError} from "./src/FlpImport.ts";',
         'export {Config} from "./synth/SynthConfig.ts";',
       ].join("\n"),
       resolveDir: process.cwd(),
@@ -705,22 +705,25 @@ test("parses FL channel instruments and carries their source details to every ou
 });
 
 test("extracts the chosen SoundFont and preset number from Fruity Soundfont Player state", async () => {
-  const { importFlp, parseFlpProject } = await loadedModule;
+  const { getFruitySoundFontPresetIndex, importFlp, parseFlpProject } =
+    await loadedModule;
   const statePath =
     "%SystemDrive%\\Program Files\\Image-Line\\FL Studio\\Data\\Patches\\Soundfonts\\EarthBound.sf2";
   const buffer = makeFlp({
     channels: [{ id: 0, name: "od" }],
     extraEvents: [
       blobEvent(0xc9, utf16("Fruity soundfont player")),
-      blobEvent(0xd5, fruitySoundFontState(statePath, 20)),
+      blobEvent(0xd5, fruitySoundFontState(statePath, 145)),
     ],
   });
   assert.deepEqual(parseFlpProject(buffer).channels[0].plugin, {
     internalName: "Fruity soundfont player",
     statePath,
-    statePreset: "Preset 20",
+    statePreset: "Preset 145",
   });
-  assert.equal(importFlp(buffer).channelSources[0].plugin.statePath, statePath);
+  const source = importFlp(buffer).channelSources[0];
+  assert.equal(source.plugin.statePath, statePath);
+  assert.equal(getFruitySoundFontPresetIndex(source), 145);
 });
 
 test("ignores VST wrapper preset state while preserving the FL channel and plugin names", async () => {

@@ -4,7 +4,11 @@ import { HTML } from "imperative-html/dist/esm/elements-strict.js";
 import { getAssetName, type AssetDefinition } from "../synth/SynthConfig.js";
 import { assetCacheEvents, getPinnedAssets } from "../synth/AssetCache.js";
 import type { SoundFontPresetInfo } from "../synth/SynthController.js";
-import type { FlpChannelSource, FlpSongImport } from "./FlpImport.js";
+import {
+  getFruitySoundFontPresetIndex,
+  type FlpChannelSource,
+  type FlpSongImport,
+} from "./FlpImport.js";
 import { SongDocument } from "./SongDocument.js";
 import { applySoundFontPreset, ChangeAssets } from "./changes.js";
 import type { Prompt } from "./Prompt.js";
@@ -47,10 +51,17 @@ export class FlpInstrumentPrompt implements Prompt {
       this._doc.song.assets.find(
         (asset: AssetDefinition): boolean => asset.type == "soundFont",
       )?.id ?? null;
-    this._selections = _imported.pitchChannels.map((): ChannelSelection => ({
-      soundFontId: defaultSoundFontId,
-      presetIndex: null,
-    }));
+    this._selections = _imported.pitchChannels.map(
+      (_channel, channelIndex: number): ChannelSelection => ({
+        soundFontId: defaultSoundFontId,
+        presetIndex:
+          defaultSoundFontId == null
+            ? null
+            : getFruitySoundFontPresetIndex(
+                _imported.channelSources[channelIndex]!,
+              ),
+      }),
+    );
     const columns: HTMLDivElement = div(
       { class: "assetsPromptColumns" },
       div(
@@ -165,11 +176,10 @@ export class FlpInstrumentPrompt implements Prompt {
       }
 
       soundFontSelect.addEventListener("change", (): void => {
-        this._setGroupSelection(
+        this._setGroupSoundFont(
           startChannelIndex,
           endChannelIndex,
           soundFontSelect.value || null,
-          null,
         );
         this._render();
       });
@@ -297,6 +307,23 @@ export class FlpInstrumentPrompt implements Prompt {
     }
   }
 
+  private _setGroupSoundFont(
+    startChannelIndex: number,
+    endChannelIndex: number,
+    soundFontId: string | null,
+  ): void {
+    this._setGroupSelection(
+      startChannelIndex,
+      endChannelIndex,
+      soundFontId,
+      soundFontId == null
+        ? null
+        : getFruitySoundFontPresetIndex(
+            this._imported.channelSources[startChannelIndex]!,
+          ),
+    );
+  }
+
   private _insertAsset(asset: AssetDefinition): void {
     if (
       this._doc.song.assets.some(
@@ -313,8 +340,14 @@ export class FlpInstrumentPrompt implements Prompt {
     this._doc.record(
       new ChangeAssets(this._doc, [...this._doc.song.assets, asset]),
     );
-    if (isFirstSoundFont)
-      this._setGroupSelection(0, this._selections.length, asset.id, null);
+    if (isFirstSoundFont) {
+      for (
+        let channelIndex: number = 0;
+        channelIndex < this._selections.length;
+        channelIndex++
+      )
+        this._setGroupSoundFont(channelIndex, channelIndex + 1, asset.id);
+    }
     this._render();
   }
 
