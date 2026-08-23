@@ -81,6 +81,7 @@ import {
 } from "./InstrumentPresetPrompt.js";
 import { InstrumentTypePrompt } from "./InstrumentTypePrompt.js";
 import { AssetsPrompt } from "./AssetsPrompt.js";
+import { ChipWaveLoopPrompt } from "./ChipWaveLoopPrompt.js";
 import { panPercentToSetting, panSettingToPercent } from "./PanConversion.js";
 import { Change } from "./Change.js";
 import {
@@ -532,6 +533,10 @@ class ChipWaveEditor {
   public readonly select: HTMLSelectElement = select({ title: "Waveform" });
   public readonly waveRow: HTMLDivElement;
   public readonly container: HTMLDivElement;
+  private readonly _loopButton: HTMLButtonElement = button(
+    { type: "button", class: "chip-wave-loop-button" },
+    "Loop controls",
+  );
   private readonly _pitchSlider: EffectSlider;
   private readonly _tempoSlider: EffectSlider;
 
@@ -540,6 +545,7 @@ class ChipWaveEditor {
     private readonly _includeSine: boolean,
     private readonly _operatorIndex: number | null,
     getWaveChange: (newValue: number) => Change,
+    openLoopPrompt: () => void,
     assetSelect: boolean = false,
   ) {
     this._pitchSlider = new EffectSlider(
@@ -581,6 +587,10 @@ class ChipWaveEditor {
     this.container = div(
       this.waveRow,
       div(
+        { class: "selectRow instrument-unlabeled-control" },
+        this._loopButton,
+      ),
+      div(
         { class: "selectRow" },
         label("Pitch %"),
         this._pitchSlider.container,
@@ -595,6 +605,7 @@ class ChipWaveEditor {
     this.select.addEventListener("change", () => {
       this._doc.record(getWaveChange(this.select.selectedIndex));
     });
+    this._loopButton.addEventListener("click", openLoopPrompt);
   }
 
   public syncOptions(): void {
@@ -615,6 +626,13 @@ class ChipWaveEditor {
 
   public render(wave: number, pitch: number, tempo: number): void {
     setSelectedValue(this.select, wave);
+    const chipWaveIndex: number = this._includeSine ? wave - 1 : wave;
+    const sampleBacked: boolean =
+      Config.chipWaves[chipWaveIndex]?.sampleId != undefined;
+    this._loopButton.disabled = !sampleBacked;
+    this._loopButton.title = sampleBacked
+      ? "Edit sample offset and loop"
+      : "Loop controls are available for sample assets";
     this._pitchSlider.updateValue(pitch);
     this._tempoSlider.updateValue(tempo);
   }
@@ -1056,6 +1074,7 @@ export class SongEditor {
     false,
     null,
     (newValue: number) => new ChangeChipWave(this.doc, newValue),
+    () => this._openChipWaveLoopPrompt(null),
     true,
   );
   private readonly _chipWaveSelectRow: HTMLDivElement =
@@ -1644,6 +1663,7 @@ export class SongEditor {
 
   private _wasPlaying: boolean = false;
   private _currentPromptName: string | null = null;
+  private _chipWaveLoopOperatorIndex: number | null = null;
   private _highlightedInstrumentIndex: number = -1;
   private _renderedInstrumentCount: number = 0;
   private _renderedIsPlaying: boolean = false;
@@ -1714,6 +1734,7 @@ export class SongEditor {
         operatorIndex,
         (newValue: number) =>
           new ChangeOperatorWave(this.doc, operatorIndex, newValue),
+        () => this._openChipWaveLoopPrompt(operatorIndex),
       );
       const waveSelect: HTMLSelectElement = waveEditor.select;
       const amplitudeSlider: Slider = new Slider(
@@ -2104,6 +2125,11 @@ export class SongEditor {
     this._openPrompt("about");
   };
 
+  private _openChipWaveLoopPrompt(operatorIndex: number | null): void {
+    this._chipWaveLoopOperatorIndex = operatorIndex;
+    this._openPrompt("chipWaveLoop");
+  }
+
   private _setPrompt(promptName: string | null): void {
     if (this._currentPromptName == promptName) return;
     this._currentPromptName = promptName;
@@ -2147,6 +2173,12 @@ export class SongEditor {
           break;
         case "stringSustain":
           this.prompt = new SustainPrompt(this.doc);
+          break;
+        case "chipWaveLoop":
+          this.prompt = new ChipWaveLoopPrompt(
+            this.doc,
+            this._chipWaveLoopOperatorIndex,
+          );
           break;
         case "instrumentPreset":
           this.prompt = new InstrumentPresetPrompt(

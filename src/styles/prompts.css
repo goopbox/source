@@ -84,6 +84,88 @@ dialog.prompt:not([open]) {
     height: min(720px, calc(100vh - 24px));
     overflow: hidden;
 }
+
+.prompt.chipWaveLoopPrompt {
+    width: min(820px, calc(100vw - 24px));
+    overflow: auto;
+}
+
+.chip-wave-loop-viewer {
+    min-width: 0;
+}
+
+.chip-wave-loop-canvas {
+    display: block;
+    width: 100%;
+    height: min(320px, 45vh);
+    border: 1px solid var(--ui-widget-background);
+    cursor: grab;
+    touch-action: none;
+}
+
+.chip-wave-loop-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    margin-top: 6px;
+    text-align: left;
+}
+
+.chip-wave-loop-toolbar > div {
+    display: flex;
+    gap: 4px;
+}
+
+.chip-wave-loop-toolbar button {
+    min-width: var(--button-size);
+}
+
+.chip-wave-loop-fields {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 10px;
+    text-align: left;
+}
+
+.chip-wave-loop-fields label:not(.chip-wave-oneshot) {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.chip-wave-loop-fields input[type="number"] {
+    width: 100%;
+    height: var(--button-size);
+}
+
+.chip-wave-loop-fields .chip-wave-oneshot {
+    grid-column: 1 / -1;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: max-content;
+}
+
+.chip-wave-loop-status {
+    min-height: 1.2em;
+    text-align: left;
+}
+
+.chip-wave-loop-actions {
+    display: flex;
+    justify-content: flex-end;
+}
+
+.chip-wave-loop-actions > button {
+    width: min(220px, 45%);
+}
+
+@media (max-width: 560px) {
+    .chip-wave-loop-fields {
+        grid-template-columns: 1fr;
+    }
+}
 .flpInstrumentPrompt > .assetsPromptColumns {
     grid-template-columns: repeat(2, minmax(0, 1fr));
     margin-top: 10px;

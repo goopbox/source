@@ -109,6 +109,10 @@ const compactInstrumentFields: ReadonlyArray<string> = [
   "drumsetSpectra",
   "chipWavePitch",
   "chipWaveTempo",
+  "chipWaveOffset",
+  "chipWaveLoopStart",
+  "chipWaveLoopEnd",
+  "chipWaveOneshot",
 ];
 const compactInstrumentFieldSet: ReadonlySet<string> = new Set(
   compactInstrumentFields,
@@ -680,16 +684,28 @@ export class Pattern {
 export class ChipWaveSettings {
   public pitch: number = 100;
   public tempo: number = 100;
+  public offset: number = 0;
+  public loopStart: number = 0;
+  public loopEnd: number = 1;
+  public oneshot: boolean = false;
 
   public reset(): void {
     this.pitch = 100;
     this.tempo = 100;
+    this.offset = 0;
+    this.loopStart = 0;
+    this.loopEnd = 1;
+    this.oneshot = false;
   }
 
   public toSettingsObject(): Object {
     return {
       pitchPercent: this.pitch,
       tempoPercent: this.tempo,
+      sampleOffset: this.offset,
+      sampleLoopStart: this.loopStart,
+      sampleLoopEnd: this.loopEnd,
+      sampleOneshot: this.oneshot,
     };
   }
 
@@ -698,6 +714,19 @@ export class ChipWaveSettings {
     const tempo: number = Number(settingsObject?.["tempoPercent"]);
     this.pitch = Number.isFinite(pitch) ? pitch : 100;
     this.tempo = Number.isFinite(tempo) ? tempo : 100;
+    const offset: number = Number(settingsObject?.["sampleOffset"]);
+    const loopStart: number = Number(settingsObject?.["sampleLoopStart"]);
+    const loopEnd: number = Number(settingsObject?.["sampleLoopEnd"]);
+    this.offset = Number.isFinite(offset)
+      ? Math.max(0, Math.min(1, offset))
+      : 0;
+    this.loopStart = Number.isFinite(loopStart)
+      ? Math.max(this.offset, Math.min(1, loopStart))
+      : this.offset;
+    this.loopEnd = Number.isFinite(loopEnd)
+      ? Math.max(this.loopStart, Math.min(1, loopEnd))
+      : 1;
+    this.oneshot = settingsObject?.["sampleOneshot"] === true;
   }
 }
 
@@ -2108,6 +2137,10 @@ export class Instrument {
       chipWave: this.chipWave,
       chipWavePitch: this.chipWaveSettings.pitch,
       chipWaveTempo: this.chipWaveSettings.tempo,
+      chipWaveOffset: this.chipWaveSettings.offset,
+      chipWaveLoopStart: this.chipWaveSettings.loopStart,
+      chipWaveLoopEnd: this.chipWaveSettings.loopEnd,
+      chipWaveOneshot: this.chipWaveSettings.oneshot,
       chipNoise: this.chipNoise,
       fadeIn: this.fadeIn,
       fadeOut: this.fadeOut,
@@ -2156,6 +2189,10 @@ export class Instrument {
         wave: operator.wave,
         pitch: operator.chipWaveSettings.pitch,
         tempo: operator.chipWaveSettings.tempo,
+        offset: operator.chipWaveSettings.offset,
+        loopStart: operator.chipWaveSettings.loopStart,
+        loopEnd: operator.chipWaveSettings.loopEnd,
+        oneshot: operator.chipWaveSettings.oneshot,
       })),
       spectrum: this.spectrumWave.spectrum.concat(),
       harmonics: this.harmonicsWave.harmonics.concat(),
@@ -2254,6 +2291,24 @@ export class Instrument {
       scalarValues[name] = numberValue(binaryState[name]);
     const chipWavePitch: number = numberValue(binaryState.chipWavePitch);
     const chipWaveTempo: number = numberValue(binaryState.chipWaveTempo);
+    const chipWaveOffset: number = rangeValue(
+      binaryState.chipWaveOffset,
+      0,
+      1,
+    );
+    const chipWaveLoopStart: number = rangeValue(
+      binaryState.chipWaveLoopStart,
+      chipWaveOffset,
+      1,
+    );
+    const chipWaveLoopEnd: number = rangeValue(
+      binaryState.chipWaveLoopEnd,
+      chipWaveLoopStart,
+      1,
+    );
+    if (typeof binaryState.chipWaveOneshot != "boolean")
+      throw new Error("Invalid .goop chip wave oneshot setting.");
+    const chipWaveOneshot: boolean = binaryState.chipWaveOneshot;
 
     // These settings index fixed configuration arrays, even when their instrument
     // type or effect is currently disabled. Validate dormant settings too so a
@@ -2413,6 +2468,10 @@ export class Instrument {
       wave: number;
       pitch: number;
       tempo: number;
+      offset: number;
+      loopStart: number;
+      loopEnd: number;
+      oneshot: boolean;
     }> = [];
     for (let i: number = 0; i < this.operators.length; i++) {
       const candidate: any = binaryState.operators[i];
@@ -2422,6 +2481,23 @@ export class Instrument {
         Array.isArray(candidate)
       )
         throw new Error("Invalid .goop instrument operator.");
+      const offset: number =
+        candidate.offset == undefined
+          ? 0
+          : rangeValue(candidate.offset, 0, 1);
+      const loopStart: number =
+        candidate.loopStart == undefined
+          ? offset
+          : rangeValue(candidate.loopStart, offset, 1);
+      const loopEnd: number =
+        candidate.loopEnd == undefined
+          ? 1
+          : rangeValue(candidate.loopEnd, loopStart, 1);
+      if (
+        candidate.oneshot != undefined &&
+        typeof candidate.oneshot != "boolean"
+      )
+        throw new Error("Invalid .goop operator oneshot setting.");
       operatorStates.push({
         frequency: rangeValue(
           candidate.frequency,
@@ -2436,6 +2512,10 @@ export class Instrument {
         wave: indexValue(candidate.wave, Config.chipWaves.length + 1),
         pitch: candidate.pitch == undefined ? 100 : numberValue(candidate.pitch),
         tempo: candidate.tempo == undefined ? 100 : numberValue(candidate.tempo),
+        offset,
+        loopStart,
+        loopEnd,
+        oneshot: candidate.oneshot === true,
       });
     }
 
@@ -2498,6 +2578,10 @@ export class Instrument {
     for (const name of scalarNames) (<any>this)[name] = scalarValues[name];
     this.chipWaveSettings.pitch = chipWavePitch;
     this.chipWaveSettings.tempo = chipWaveTempo;
+    this.chipWaveSettings.offset = chipWaveOffset;
+    this.chipWaveSettings.loopStart = chipWaveLoopStart;
+    this.chipWaveSettings.loopEnd = chipWaveLoopEnd;
+    this.chipWaveSettings.oneshot = chipWaveOneshot;
     this.soundFontId = binaryState.soundFontId;
     const restoreFilter = (
       filter: FilterSettings,
@@ -2528,6 +2612,11 @@ export class Instrument {
       this.operators[i].wave = operatorStates[i].wave;
       this.operators[i].chipWaveSettings.pitch = operatorStates[i].pitch;
       this.operators[i].chipWaveSettings.tempo = operatorStates[i].tempo;
+      this.operators[i].chipWaveSettings.offset = operatorStates[i].offset;
+      this.operators[i].chipWaveSettings.loopStart =
+        operatorStates[i].loopStart;
+      this.operators[i].chipWaveSettings.loopEnd = operatorStates[i].loopEnd;
+      this.operators[i].chipWaveSettings.oneshot = operatorStates[i].oneshot;
     }
     this.spectrumWave.spectrum = spectrumState;
     this.spectrumWave.markCustomWaveDirty();
@@ -4627,6 +4716,7 @@ class Tone {
   public readonly phaseDeltas: number[] = [];
   public readonly phaseDeltaScales: number[] = [];
   public readonly chipWaveGrainPhases: number[] = [];
+  public readonly chipWaveStarted: boolean[] = [];
   public expression: number = 0.0;
   public expressionDelta: number = 0.0;
   public readonly operatorExpressions: number[] = [];
@@ -4689,6 +4779,7 @@ class Tone {
     ) {
       this.phases[i] = 0.0;
       this.chipWaveGrainPhases[i] = 0.0;
+      this.chipWaveStarted[i] = false;
       if (i < Config.operatorCount * 2) this.feedbackOutputs[i] = 0.0;
       if (i < Config.maxPitchOrOperatorCount)
         this.prevPitchExpressions[i] = null;
@@ -4755,8 +4846,16 @@ class InstrumentState {
   public effects: number = 0;
   public chipWavePitchFactor: number = 1.0;
   public chipWaveTempoFactor: number = 1.0;
+  public chipWaveOffset: number = 0.0;
+  public chipWaveLoopStart: number = 0.0;
+  public chipWaveLoopEnd: number = 1.0;
+  public chipWaveOneshot: boolean = false;
   public readonly operatorChipWavePitchFactors: number[] = [];
   public readonly operatorChipWaveTempoFactors: number[] = [];
+  public readonly operatorChipWaveOffsets: number[] = [];
+  public readonly operatorChipWaveLoopStarts: number[] = [];
+  public readonly operatorChipWaveLoopEnds: number[] = [];
+  public readonly operatorChipWaveOneshots: boolean[] = [];
   public soundFontBankId: string | null = null;
   public soundFontPresetIndex: number = -1;
 
@@ -4854,6 +4953,10 @@ class InstrumentState {
     for (let i: number = 0; i < Config.operatorCount; i++) {
       this.operatorChipWavePitchFactors[i] = 1.0;
       this.operatorChipWaveTempoFactors[i] = 1.0;
+      this.operatorChipWaveOffsets[i] = 0.0;
+      this.operatorChipWaveLoopStarts[i] = 0.0;
+      this.operatorChipWaveLoopEnds[i] = 1.0;
+      this.operatorChipWaveOneshots[i] = false;
     }
     for (let i: number = 0; i < Config.drumCount; i++) {
       this.drumsetSpectrumWaves[i] = new SpectrumWaveState();
@@ -5025,6 +5128,10 @@ class InstrumentState {
     this.chipWaveTempoFactor = Synth.chipWavePercentToFactor(
       instrument.chipWaveSettings.tempo,
     );
+    this.chipWaveOffset = instrument.chipWaveSettings.offset;
+    this.chipWaveLoopStart = instrument.chipWaveSettings.loopStart;
+    this.chipWaveLoopEnd = instrument.chipWaveSettings.loopEnd;
+    this.chipWaveOneshot = instrument.chipWaveSettings.oneshot;
     for (let i: number = 0; i < Config.operatorCount; i++) {
       this.operatorChipWavePitchFactors[i] = Synth.chipWavePercentToFactor(
         instrument.operators[i].chipWaveSettings.pitch,
@@ -5032,6 +5139,14 @@ class InstrumentState {
       this.operatorChipWaveTempoFactors[i] = Synth.chipWavePercentToFactor(
         instrument.operators[i].chipWaveSettings.tempo,
       );
+      this.operatorChipWaveOffsets[i] =
+        instrument.operators[i].chipWaveSettings.offset;
+      this.operatorChipWaveLoopStarts[i] =
+        instrument.operators[i].chipWaveSettings.loopStart;
+      this.operatorChipWaveLoopEnds[i] =
+        instrument.operators[i].chipWaveSettings.loopEnd;
+      this.operatorChipWaveOneshots[i] =
+        instrument.operators[i].chipWaveSettings.oneshot;
     }
 
     // Force effects to be disabled if the corresponding slider is at zero (and automation isn't involved).
@@ -8074,15 +8189,74 @@ export class Synth {
   public static interpolateChipWaveSample(
     wave: Float32Array,
     phase: number,
+    loopStart: number = 0,
+    loopEnd: number = wave.length,
+    oneshot: boolean = false,
+    referencePhase: number = phase,
   ): number {
     const waveLength: number = wave.length;
     if (waveLength == 0) return 0.0;
+    loopStart = Math.max(0, Math.min(waveLength - 1, loopStart));
+    loopEnd = Math.max(loopStart + 1, Math.min(waveLength, loopEnd));
+    const loopLength: number = loopEnd - loopStart;
+    if (oneshot && referencePhase >= loopEnd) return 0.0;
+    if (phase >= loopEnd) {
+      if (oneshot) return 0.0;
+      phase =
+        loopStart +
+        (((phase - loopStart) % loopLength) + loopLength) % loopLength;
+    } else if (!oneshot && phase < loopStart && referencePhase >= loopStart) {
+      phase =
+        loopStart +
+        (((phase - loopStart) % loopLength) + loopLength) % loopLength;
+    }
+    if (phase < 0) return 0.0;
     const phaseFloor: number = Math.floor(phase);
-    const index: number =
-      ((phaseFloor % waveLength) + waveLength) % waveLength;
-    const nextIndex: number = (index + 1) % waveLength;
+    const index: number = Math.min(waveLength - 1, phaseFloor);
+    const nextIndex: number = index + 1;
+    let nextSample: number;
+    if (nextIndex >= loopEnd && phase >= loopStart) {
+      nextSample = oneshot
+        ? 0.0
+        : wave[Math.min(waveLength - 1, Math.floor(loopStart))];
+    } else if (nextIndex >= waveLength) {
+      nextSample = oneshot ? 0.0 : wave[0];
+    } else {
+      nextSample = wave[nextIndex];
+    }
     const ratio: number = phase - phaseFloor;
-    return wave[index] + (wave[nextIndex] - wave[index]) * ratio;
+    return wave[index] + (nextSample - wave[index]) * ratio;
+  }
+
+  public static advanceChipWavePhase(
+    phase: number,
+    phaseDelta: number,
+    loopStart: number,
+    loopEnd: number,
+    oneshot: boolean,
+  ): number {
+    const loopLength: number = loopEnd - loopStart;
+    if (!(loopLength > 0)) return loopEnd;
+    const nextPhase: number = phase + phaseDelta;
+    if (phaseDelta >= 0 && nextPhase >= loopEnd) {
+      if (oneshot) return loopEnd;
+      return (
+        loopStart +
+        (((nextPhase - loopStart) % loopLength) + loopLength) % loopLength
+      );
+    }
+    if (
+      phaseDelta < 0 &&
+      phase >= loopStart &&
+      nextPhase < loopStart &&
+      !oneshot
+    ) {
+      return (
+        loopStart +
+        (((nextPhase - loopStart) % loopLength) + loopLength) % loopLength
+      );
+    }
+    return nextPhase;
   }
 
   public static sampleChipWave(
@@ -8092,9 +8266,20 @@ export class Synth {
     sourcePhaseDelta: number,
     grainPhase: number,
     grainLength: number,
+    loopStart: number = 0,
+    loopEnd: number = wave.length,
+    oneshot: boolean = false,
+    referencePhase: number = phase,
   ): number {
     if (pitchPhaseDelta == sourcePhaseDelta) {
-      return Synth.interpolateChipWaveSample(wave, phase);
+      return Synth.interpolateChipWaveSample(
+        wave,
+        phase,
+        loopStart,
+        loopEnd,
+        oneshot,
+        referencePhase,
+      );
     }
     const phaseDifference: number = pitchPhaseDelta - sourcePhaseDelta;
     const secondGrainPhase: number = (grainPhase + 0.5) % 1.0;
@@ -8103,10 +8288,18 @@ export class Synth {
     const firstSample: number = Synth.interpolateChipWaveSample(
       wave,
       phase + grainPhase * grainLength * phaseDifference,
+      loopStart,
+      loopEnd,
+      oneshot,
+      referencePhase,
     );
     const secondSample: number = Synth.interpolateChipWaveSample(
       wave,
       phase + secondGrainPhase * grainLength * phaseDifference,
+      loopStart,
+      loopEnd,
+      oneshot,
+      referencePhase,
     );
     return firstSample * firstWeight + secondSample * (1.0 - firstWeight);
   }
@@ -8244,12 +8437,29 @@ export class Synth {
                       ";\n" +
                       "\t\tconst operator#PhaseModScale = operator#PhaseScale / " +
                       Config.sineWaveLength +
-                      ";";
+                      ";\n" +
+                      "\t\tconst operator#LoopStart = Math.max(0, Math.min(operator#WaveLength - 1, instrument.operatorChipWaveLoopStarts[" +
+                      j +
+                      "] * operator#WaveLength));\n" +
+                      "\t\tconst operator#LoopEnd = Math.max(operator#LoopStart + 1, Math.min(operator#WaveLength, instrument.operatorChipWaveLoopEnds[" +
+                      j +
+                      "] * operator#WaveLength));\n" +
+                      "\t\tconst operator#Offset = Math.max(0, Math.min(operator#LoopEnd, instrument.operatorChipWaveOffsets[" +
+                      j +
+                      "] * operator#WaveLength));\n" +
+                      "\t\tconst operator#Oneshot = instrument.operatorChipWaveOneshots[" +
+                      j +
+                      "];";
                   } else if (line.indexOf("let operator#Phase =") != -1) {
                     voiceLine =
-                      "\t\tlet operator#Phase = +((tone.phases[" +
+                      "\t\tlet operator#Phase = tone.chipWaveStarted[" +
                       stateIndex +
-                      "] % 1) + 1000) * operator#WaveLength;";
+                      "] ? tone.phases[" +
+                      stateIndex +
+                      "] * operator#WaveLength : operator#Offset;\n" +
+                      "\t\ttone.chipWaveStarted[" +
+                      stateIndex +
+                      "] = true;";
                   } else if (
                     line.indexOf("let operator#BasePhaseDelta =") != -1
                   ) {
@@ -8262,6 +8472,11 @@ export class Synth {
                       "\t\tlet operator#PhaseDelta = operator#BasePhaseDelta * instrument.operatorChipWaveTempoFactors[" +
                       j +
                       "];";
+                  } else if (
+                    line.indexOf("operator#Phase += operator#PhaseDelta") != -1
+                  ) {
+                    voiceLine =
+                      "\t\t\toperator#Phase = Synth.advanceChipWavePhase(operator#Phase, operator#PhaseDelta, operator#LoopStart, operator#LoopEnd, operator#Oneshot);";
                   } else if (line.indexOf("tone.phases[#] =") != -1) {
                     voiceLine =
                       "\t\ttone.phases[" +
@@ -8655,6 +8870,19 @@ export class Synth {
     const samplePhaseScale: number = sampleData.sampleRate / rootFrequency;
     const pitchFactor: number = instrumentState.chipWavePitchFactor;
     const tempoFactor: number = instrumentState.chipWaveTempoFactor;
+    const loopStart: number = Math.max(
+      0,
+      Math.min(waveLength - 1, instrumentState.chipWaveLoopStart * waveLength),
+    );
+    const loopEnd: number = Math.max(
+      loopStart + 1,
+      Math.min(waveLength, instrumentState.chipWaveLoopEnd * waveLength),
+    );
+    const offset: number = Math.max(
+      0,
+      Math.min(loopEnd, instrumentState.chipWaveOffset * waveLength),
+    );
+    const oneshot: boolean = instrumentState.chipWaveOneshot;
     const grainLength: number = Synth.chipWaveGrainLength(
       synth.samplesPerSecond,
     );
@@ -8664,19 +8892,25 @@ export class Synth {
     const unisonSign: number = instrumentState.usesUnison
       ? tone.specialIntervalExpressionMult * instrumentState.unison!.sign
       : 0.0;
-    if (
+    const singleVoice: boolean =
       instrumentState.unison!.voices == 1 &&
-      !instrumentState.chord!.customInterval
-    )
-      tone.phases[1] = tone.phases[0];
+      !instrumentState.chord!.customInterval;
     let basePhaseDeltaA: number = tone.phaseDeltas[0] * samplePhaseScale;
     let basePhaseDeltaB: number = tone.phaseDeltas[1] * samplePhaseScale;
     const phaseDeltaScaleA: number = +tone.phaseDeltaScales[0];
     const phaseDeltaScaleB: number = +tone.phaseDeltaScales[1];
     let expression: number = +tone.expression;
     const expressionDelta: number = +tone.expressionDelta;
-    let phaseA: number = (((tone.phases[0] % 1.0) + 1.0) % 1.0) * waveLength;
-    let phaseB: number = (((tone.phases[1] % 1.0) + 1.0) % 1.0) * waveLength;
+    let phaseA: number = tone.chipWaveStarted[0]
+      ? tone.phases[0] * waveLength
+      : offset;
+    let phaseB: number = singleVoice
+      ? phaseA
+      : tone.chipWaveStarted[1]
+        ? tone.phases[1] * waveLength
+        : offset;
+    tone.chipWaveStarted[0] = true;
+    tone.chipWaveStarted[1] = true;
 
     const filters: DynamicBiquadFilter[] = tone.noteFilters;
     const filterCount: number = tone.noteFilterCount | 0;
@@ -8701,6 +8935,9 @@ export class Synth {
         sourcePhaseDeltaA,
         grainPhase,
         grainLength,
+        loopStart,
+        loopEnd,
+        oneshot,
       );
       const waveB: number = Synth.sampleChipWave(
         wave,
@@ -8709,6 +8946,9 @@ export class Synth {
         sourcePhaseDeltaB,
         grainPhase,
         grainLength,
+        loopStart,
+        loopEnd,
+        oneshot,
       );
 
       const inputSample: number = waveA + waveB * unisonSign;
@@ -8726,16 +8966,28 @@ export class Synth {
       expression += expressionDelta;
       data[sampleIndex] += output;
 
-      phaseA += sourcePhaseDeltaA;
-      phaseB += sourcePhaseDeltaB;
+      phaseA = Synth.advanceChipWavePhase(
+        phaseA,
+        sourcePhaseDeltaA,
+        loopStart,
+        loopEnd,
+        oneshot,
+      );
+      phaseB = Synth.advanceChipWavePhase(
+        phaseB,
+        sourcePhaseDeltaB,
+        loopStart,
+        loopEnd,
+        oneshot,
+      );
       basePhaseDeltaA *= phaseDeltaScaleA;
       basePhaseDeltaB *= phaseDeltaScaleB;
       grainPhase += grainPhaseDelta;
       if (grainPhase >= 1.0) grainPhase -= 1.0;
     }
 
-    tone.phases[0] = (phaseA / waveLength) % 1.0;
-    tone.phases[1] = (phaseB / waveLength) % 1.0;
+    tone.phases[0] = phaseA / waveLength;
+    tone.phases[1] = phaseB / waveLength;
     tone.phaseDeltas[0] = basePhaseDeltaA / samplePhaseScale;
     tone.phaseDeltas[1] = basePhaseDeltaB / samplePhaseScale;
     tone.chipWaveGrainPhases[0] = grainPhase;
@@ -9934,6 +10186,10 @@ export class Synth {
 				operator#PhaseDelta,
 				operator#GrainPhase,
 				chipWaveGrainLength,
+				operator#LoopStart,
+				operator#LoopEnd,
+				operator#Oneshot,
+				operator#Phase,
 			) * operator#SampleGain;
 			operator#GrainPhase += chipWaveGrainPhaseDelta;
 			if (operator#GrainPhase >= 1.0) operator#GrainPhase -= 1.0;

@@ -2402,6 +2402,50 @@ export class ChangeChipWaveTempo extends ChangeInstrumentSlider {
   }
 }
 
+export interface ChipWaveLoopValues {
+  readonly offset: number;
+  readonly loopStart: number;
+  readonly loopEnd: number;
+  readonly oneshot: boolean;
+}
+
+export class ChangeChipWaveLoop extends ChangeInstrumentSlider {
+  constructor(
+    doc: SongDocument,
+    operatorIndex: number | null,
+    values: ChipWaveLoopValues,
+  ) {
+    super(doc);
+    const settings =
+      operatorIndex == null
+        ? this._instrument.chipWaveSettings
+        : this._instrument.operators[operatorIndex].chipWaveSettings;
+    const offset: number = Math.max(0, Math.min(1, values.offset));
+    const loopStart: number = Math.max(
+      offset,
+      Math.min(1, values.loopStart),
+    );
+    const loopEnd: number = Math.max(
+      loopStart,
+      Math.min(1, values.loopEnd),
+    );
+    if (
+      settings.offset == offset &&
+      settings.loopStart == loopStart &&
+      settings.loopEnd == loopEnd &&
+      settings.oneshot == values.oneshot
+    )
+      return;
+    settings.offset = offset;
+    settings.loopStart = loopStart;
+    settings.loopEnd = loopEnd;
+    settings.oneshot = values.oneshot;
+    this._instrument.preset = this._instrument.type;
+    doc.notifier.changed();
+    this._didSomething();
+  }
+}
+
 export class ChangeOperatorAmplitude extends ChangeInstrumentSlider {
   constructor(
     doc: SongDocument,

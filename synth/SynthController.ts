@@ -17,6 +17,10 @@ import {
 import { cacheAsset } from "./AssetCache.js";
 
 export type AssetLoadStatus = "loading" | "loaded" | "error";
+export interface SampleAssetData {
+  readonly samples: Float32Array;
+  readonly sampleRate: number;
+}
 export interface SoundFontPresetInfo {
   readonly index: number;
   readonly name: string;
@@ -82,6 +86,7 @@ export class SynthController {
   private readonly assetLoadStates: Map<string, AssetLoadStatus> = new Map();
   private readonly assetLoadProgress: Map<string, number | null> = new Map();
   private readonly assetLoadErrors: Map<string, string> = new Map();
+  private readonly sampleAssets: Map<string, SampleAssetData> = new Map();
   private readonly soundFontPresets: Map<
     string,
     readonly SoundFontPresetInfo[]
@@ -126,6 +131,10 @@ export class SynthController {
 
   public getAssetLoadError(sampleId: string): string | null {
     return this.assetLoadErrors.get(sampleId) ?? null;
+  }
+
+  public getSampleAsset(sampleId: string): SampleAssetData | null {
+    return this.sampleAssets.get(sampleId) ?? null;
   }
 
   public getSoundFontPresets(
@@ -361,6 +370,7 @@ export class SynthController {
         this.assetLoadStates.delete(sampleId);
         this.assetLoadProgress.delete(sampleId);
         this.assetLoadErrors.delete(sampleId);
+        this.sampleAssets.delete(sampleId);
         this.soundFontPresets.delete(sampleId);
       }
     }
@@ -491,14 +501,19 @@ export class SynthController {
         }
       }
 
+      this.sampleAssets.set(sample.id, {
+        samples: pcm,
+        sampleRate: audioBuffer.sampleRate,
+      });
+      const workletBuffer: ArrayBuffer = pcm.slice().buffer;
       this.post(
         {
           type: "setAsset",
           sampleId: sample.id,
-          samples: pcmBuffer,
+          samples: workletBuffer,
           sampleRate: audioBuffer.sampleRate,
         },
-        [pcmBuffer],
+        [workletBuffer],
       );
       this.setAssetLoadStatus(sample.id, "loaded");
       cacheAsset(sample, cacheResponse);

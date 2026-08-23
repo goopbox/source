@@ -117,15 +117,31 @@ test("chip instruments and FM operators use the same decimal pitch/tempo setting
   chip.setTypeAndReset(InstrumentType.chip, false);
   assert.equal(chip.chipWaveSettings.pitch, 100);
   assert.equal(chip.chipWaveSettings.tempo, 100);
+  assert.equal(chip.chipWaveSettings.offset, 0);
+  assert.equal(chip.chipWaveSettings.loopStart, 0);
+  assert.equal(chip.chipWaveSettings.loopEnd, 1);
+  assert.equal(chip.chipWaveSettings.oneshot, false);
   chip.chipWaveSettings.pitch = 12345.6789;
   chip.chipWaveSettings.tempo = -9876.54321;
+  chip.chipWaveSettings.offset = 0.125;
+  chip.chipWaveSettings.loopStart = 0.25;
+  chip.chipWaveSettings.loopEnd = 0.875;
+  chip.chipWaveSettings.oneshot = true;
   const chipSettings = chip.toSettingsObject();
   assert.equal(chipSettings.pitchPercent, 12345.6789);
   assert.equal(chipSettings.tempoPercent, -9876.54321);
+  assert.equal(chipSettings.sampleOffset, 0.125);
+  assert.equal(chipSettings.sampleLoopStart, 0.25);
+  assert.equal(chipSettings.sampleLoopEnd, 0.875);
+  assert.equal(chipSettings.sampleOneshot, true);
   const restoredChip = new Instrument(false);
   restoredChip.fromSettingsObject(chipSettings, false);
   assert.equal(restoredChip.chipWaveSettings.pitch, 12345.6789);
   assert.equal(restoredChip.chipWaveSettings.tempo, -9876.54321);
+  assert.equal(restoredChip.chipWaveSettings.offset, 0.125);
+  assert.equal(restoredChip.chipWaveSettings.loopStart, 0.25);
+  assert.equal(restoredChip.chipWaveSettings.loopEnd, 0.875);
+  assert.equal(restoredChip.chipWaveSettings.oneshot, true);
 
   const fm = new Instrument(false);
   fm.setTypeAndReset(InstrumentType.fm, false);
@@ -133,6 +149,10 @@ test("chip instruments and FM operators use the same decimal pitch/tempo setting
   assert.equal(fm.operators[0].chipWaveSettings.tempo, 100);
   fm.operators[0].chipWaveSettings.pitch = -4321.123456;
   fm.operators[0].chipWaveSettings.tempo = 7654.654321;
+  fm.operators[0].chipWaveSettings.offset = 0.2;
+  fm.operators[0].chipWaveSettings.loopStart = 0.4;
+  fm.operators[0].chipWaveSettings.loopEnd = 0.6;
+  fm.operators[0].chipWaveSettings.oneshot = true;
   const fmSettings = fm.toSettingsObject();
   assert.equal(fmSettings.operators[0].pitchPercent, -4321.123456);
   assert.equal(fmSettings.operators[0].tempoPercent, 7654.654321);
@@ -140,6 +160,10 @@ test("chip instruments and FM operators use the same decimal pitch/tempo setting
   restoredFm.fromSettingsObject(fmSettings, false);
   assert.equal(restoredFm.operators[0].chipWaveSettings.pitch, -4321.123456);
   assert.equal(restoredFm.operators[0].chipWaveSettings.tempo, 7654.654321);
+  assert.equal(restoredFm.operators[0].chipWaveSettings.offset, 0.2);
+  assert.equal(restoredFm.operators[0].chipWaveSettings.loopStart, 0.4);
+  assert.equal(restoredFm.operators[0].chipWaveSettings.loopEnd, 0.6);
+  assert.equal(restoredFm.operators[0].chipWaveSettings.oneshot, true);
 });
 
 test("chip-wave pitch/tempo keeps song version 1 and round-trips unrestricted binary values", async (context) => {
@@ -152,6 +176,14 @@ test("chip-wave pitch/tempo keeps song version 1 and round-trips unrestricted bi
   instrument.chipWaveSettings.tempo = -98765432.875;
   instrument.operators[0].chipWaveSettings.pitch = -24680.13579;
   instrument.operators[0].chipWaveSettings.tempo = 13579.2468;
+  instrument.chipWaveSettings.offset = 0.1;
+  instrument.chipWaveSettings.loopStart = 0.2;
+  instrument.chipWaveSettings.loopEnd = 0.9;
+  instrument.chipWaveSettings.oneshot = true;
+  instrument.operators[0].chipWaveSettings.offset = 0.3;
+  instrument.operators[0].chipWaveSettings.loopStart = 0.4;
+  instrument.operators[0].chipWaveSettings.loopEnd = 0.8;
+  instrument.operators[0].chipWaveSettings.oneshot = true;
 
   const binary = song.toBinary();
   assert.equal(binary[4], 1);
@@ -161,6 +193,14 @@ test("chip-wave pitch/tempo keeps song version 1 and round-trips unrestricted bi
   assert.equal(restoredInstrument.chipWaveSettings.tempo, -98765432.875);
   assert.equal(restoredInstrument.operators[0].chipWaveSettings.pitch, -24680.13579);
   assert.equal(restoredInstrument.operators[0].chipWaveSettings.tempo, 13579.2468);
+  assert.equal(restoredInstrument.chipWaveSettings.offset, 0.1);
+  assert.equal(restoredInstrument.chipWaveSettings.loopStart, 0.2);
+  assert.equal(restoredInstrument.chipWaveSettings.loopEnd, 0.9);
+  assert.equal(restoredInstrument.chipWaveSettings.oneshot, true);
+  assert.equal(restoredInstrument.operators[0].chipWaveSettings.offset, 0.3);
+  assert.equal(restoredInstrument.operators[0].chipWaveSettings.loopStart, 0.4);
+  assert.equal(restoredInstrument.operators[0].chipWaveSettings.loopEnd, 0.8);
+  assert.equal(restoredInstrument.operators[0].chipWaveSettings.oneshot, true);
   assert.deepEqual(restored.toBinary(), binary);
 });
 
@@ -177,11 +217,64 @@ test("existing version 1 songs default missing chip-wave pitch/tempo without cha
   const instrument = song.channels[0].instruments[0];
   assert.equal(instrument.chipWaveSettings.pitch, 100);
   assert.equal(instrument.chipWaveSettings.tempo, 100);
+  assert.equal(instrument.chipWaveSettings.offset, 0);
+  assert.equal(instrument.chipWaveSettings.loopStart, 0);
+  assert.equal(instrument.chipWaveSettings.loopEnd, 1);
+  assert.equal(instrument.chipWaveSettings.oneshot, false);
   for (const operator of instrument.operators) {
     assert.equal(operator.chipWaveSettings.pitch, 100);
     assert.equal(operator.chipWaveSettings.tempo, 100);
+    assert.equal(operator.chipWaveSettings.offset, 0);
+    assert.equal(operator.chipWaveSettings.loopStart, 0);
+    assert.equal(operator.chipWaveSettings.loopEnd, 1);
+    assert.equal(operator.chipWaveSettings.oneshot, false);
   }
   assert.deepEqual(song.toBinary(), version1);
+});
+
+test("chip-wave sampler wraps at loop points and one-shot stops at loop end", async (context) => {
+  const { Synth, cleanup } = await loadModules();
+  context.after(cleanup);
+  const wave = Float32Array.from([0, 1, 2, 3, 4, 5, 6, 7]);
+
+  assert.equal(Synth.advanceChipWavePhase(5.5, 1, 2, 6, false), 2.5);
+  assert.equal(Synth.advanceChipWavePhase(5.5, 1, 2, 6, true), 6);
+  assert.equal(
+    Synth.sampleChipWave(wave, 6.25, 1, 1, 0, 64, 2, 6, false),
+    2.25,
+  );
+  assert.equal(
+    Synth.sampleChipWave(wave, 6.25, 1, 1, 0, 64, 2, 6, true),
+    0,
+  );
+});
+
+test("sample-backed chip and FM tones initialize at their configured offsets", async (context) => {
+  const module = await loadModules();
+  context.after(module.cleanup);
+  context.after(() => module.Config.configureAssets([]));
+
+  for (const instrumentType of [
+    module.InstrumentType.chip,
+    module.InstrumentType.fm,
+  ]) {
+    const { asset, song } = configureShortSong(module, instrumentType, 100, 0);
+    const settings =
+      instrumentType == module.InstrumentType.chip
+        ? song.channels[0].instruments[0].chipWaveSettings
+        : song.channels[0].instruments[0].operators[0].chipWaveSettings;
+    settings.offset = 0.375;
+    settings.loopStart = 0.5;
+    settings.loopEnd = 0.75;
+    const engine = new module.SynthEngine(song);
+    engine.setSampleRate(8000);
+    engine.setAsset(asset.id, new Float32Array(1024).fill(1), 8000);
+    engine.play();
+    engine.synthesize(new Float32Array(64), new Float32Array(64), 64);
+    const tone = engine.channels[0].instruments[0].activeTones.get(0);
+    assert.notEqual(tone, undefined);
+    assert.ok(Math.abs(tone.phases[0] - 0.375) < 1e-9);
+  }
 });
 
 test("sample-backed chip and FM paths share one sampler and decouple source tempo from pitch", async (context) => {
