@@ -9,6 +9,12 @@ canvas {
     overflow: visible;
 }
 
+.trackViewport {
+    position: relative;
+    min-height: 0;
+    flex: 1;
+}
+
 .trackAndMuteContainer {
     align-items: flex-start;
     width: 100%;
@@ -16,6 +22,33 @@ canvas {
     flex: 1;
     overflow: auto;
     position: relative;
+}
+
+.trackViewportEdges {
+    position: absolute;
+    inset: 0;
+    z-index: 5;
+    pointer-events: none;
+}
+
+.trackViewportLeftEdge,
+.trackViewportBottomEdge {
+    position: absolute;
+    background: var(--background);
+}
+
+.trackViewportLeftEdge {
+    top: -2px;
+    bottom: -2px;
+    left: -2px;
+    width: 4px;
+}
+
+.trackViewportBottomEdge {
+    right: -2px;
+    bottom: -2px;
+    left: -2px;
+    height: 4px;
 }
 
 .barNumbers {
@@ -152,8 +185,8 @@ canvas {
     position: absolute;
     top: 0;
     bottom: 0;
-    left: -1px;
-    width: 2px;
+    left: -2px;
+    width: 4px;
     pointer-events: none;
     background: var(--background);
 }
@@ -190,9 +223,9 @@ canvas {
     content: "";
     position: absolute;
     right: 0;
-    bottom: -1px;
+    bottom: -2px;
     left: 0;
-    height: 2px;
+    height: 4px;
     pointer-events: none;
     background: var(--background);
 }

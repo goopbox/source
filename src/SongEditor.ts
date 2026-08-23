@@ -1524,10 +1524,19 @@ export class SongEditor {
     this._trackContainer,
     this._trackVisibleArea,
   );
+  private readonly _trackViewport: HTMLDivElement = div(
+    { class: "trackViewport" },
+    this._trackAndMuteContainer,
+    div(
+      { class: "trackViewportEdges" },
+      div({ class: "trackViewportLeftEdge" }),
+      div({ class: "trackViewportBottomEdge" }),
+    ),
+  );
   private readonly _barScrollBar: BarScrollBar = new BarScrollBar(this.doc);
   private readonly _trackArea: HTMLDivElement = div(
     { class: "track-area" },
-    this._trackAndMuteContainer,
+    this._trackViewport,
     this._barScrollBar.container,
   );
 
