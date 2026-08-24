@@ -25,6 +25,7 @@ import {
   volumeMultToMidiExpression,
   defaultMidiPitchBend,
   defaultMidiExpression,
+  getSoundFontMidiProgram,
 } from "./Midi.js";
 
 const { button, dialog, div, h2, input, progress, select, option } = HTML;
@@ -470,6 +471,7 @@ export class ExportPrompt implements Prompt {
 
   private _exportToMidi(): void {
     const song: Song = this._doc.song;
+    const synthController = this._doc.synth;
     const midiTicksPerEditorTick: number = 2;
     const midiTicksPerBeat: number =
       midiTicksPerEditorTick * Config.ticksPerPart * Config.partsPerBeat;
@@ -763,6 +765,17 @@ export class ExportPrompt implements Prompt {
                   instrumentProgram = 81; // sawtooth
                 } else if (instrument.type == InstrumentType.pickedString) {
                   instrumentProgram = 0x19; // steel guitar
+                } else if (instrument.type == InstrumentType.soundFont) {
+                  const soundFontPresets =
+                    instrument.soundFontId == null
+                      ? null
+                      : synthController.getSoundFontPresets(
+                          instrument.soundFontId,
+                        );
+                  instrumentProgram = getSoundFontMidiProgram(
+                    soundFontPresets,
+                    instrument.soundFontPreset,
+                  );
                 } else {
                   throw new Error("Unrecognized instrument type.");
                 }

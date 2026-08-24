@@ -2,6 +2,29 @@
 
 export const defaultMidiExpression: number = 0x7f;
 export const defaultMidiPitchBend: number = 0x2000;
+const squareLeadMidiProgram: number = 80;
+
+interface SoundFontMidiPreset {
+  readonly index: number;
+  readonly program: number;
+}
+
+export function getSoundFontMidiProgram(
+  presets: readonly SoundFontMidiPreset[] | null,
+  presetIndex: number,
+): number {
+  const program: number | undefined = presets?.find(
+    (preset: SoundFontMidiPreset): boolean => preset.index == presetIndex,
+  )?.program;
+  if (
+    program == undefined ||
+    !Number.isInteger(program) ||
+    program < 0 ||
+    program >= 0x80
+  )
+    return squareLeadMidiProgram;
+  return program;
+}
 
 export const enum MidiChunkType {
   header = 0x4d546864, // "MThd" as bytes, big endian
