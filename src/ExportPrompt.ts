@@ -288,7 +288,7 @@ export class ExportPrompt implements Prompt {
     this._progressBar.style.display = "block";
     this._statusMessage.style.display = "block";
     this._statusMessage.textContent = "Synthesizing...";
-    const renderer: SongRenderer = new SongRenderer();
+    const renderer: SongRenderer = new SongRenderer(this._doc.synth);
     for await (const completionRate of renderer.generate(
       this._doc.song,
       sampleRate,

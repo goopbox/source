@@ -14,6 +14,7 @@ async function loadModules() {
       contents: [
         'export {Instrument, Note, Pattern, Song, Synth, SynthEngine, makeNotePin} from "./synth/synth.ts";',
         'export {Config, EffectType, InstrumentType, parseAssetDefinition} from "./synth/SynthConfig.ts";',
+        'export {SongRenderer} from "./src/SongRenderer.ts";',
       ].join("\n"),
       resolveDir: process.cwd(),
       sourcefile: "chip-wave-pitch-tempo-entry.ts",
@@ -507,4 +508,45 @@ test("extended FM operator waves catch up across 16 continued bars and their pit
     module,
     module.InstrumentType.fm,
   );
+});
+
+test("song rendering includes loaded custom sample PCM", async (context) => {
+  const module = await loadModules();
+  context.after(module.cleanup);
+  context.after(() => module.Config.configureAssets([]));
+  const originalRequestAnimationFrame = globalThis.requestAnimationFrame;
+  globalThis.requestAnimationFrame = (callback) =>
+    setImmediate(() => callback(performance.now()));
+  context.after(() => {
+    globalThis.requestAnimationFrame = originalRequestAnimationFrame;
+  });
+
+  const { asset, song } = configureShortSong(
+    module,
+    module.InstrumentType.chip,
+    100,
+    100,
+  );
+  const samples = new Float32Array(4096);
+  for (let index = 0; index < samples.length; index++)
+    samples[index] = Math.sin((index * Math.PI * 2) / 97);
+  let assetLoadCount = 0;
+  const renderer = new module.SongRenderer({
+    loadAssetsInto: async (synth) => {
+      assetLoadCount++;
+      synth.setAsset(asset.id, samples, 8000);
+    },
+  });
+
+  for await (const _completionRate of renderer.generate(
+    song,
+    8000,
+    true,
+    true,
+    1,
+  )) {
+  }
+
+  assert.equal(assetLoadCount, 1);
+  assert.ok(renderer.outputSamplesL.some((sample) => sample != 0));
 });

@@ -115,6 +115,62 @@ test("master volume clamps and updates the output gain", async (context) => {
   assert.equal(controller.outputGainNode.gain.value, 0);
 });
 
+test("offline synths receive the controller's loaded samples and SoundFonts", async (context) => {
+  const { SynthController, cleanup } = await loadSynthController();
+  context.after(cleanup);
+
+  const controller = new SynthController();
+  const sample = {
+    source: "https://example.com/sample.wav",
+    id: "asset:sample",
+    url: "https://example.com/sample.wav",
+    name: "sample",
+    rootKey: 60,
+    type: "sample",
+  };
+  const soundFont = {
+    source: "https://example.com/instrument.sf2",
+    id: "asset:soundfont",
+    url: "https://example.com/instrument.sf2",
+    name: "instrument",
+    rootKey: 60,
+    type: "soundFont",
+  };
+  controller.song.assets.push(sample, soundFont);
+  controller.assetLoadStates.set(sample.id, "loading");
+  controller.assetLoadStates.set(soundFont.id, "loaded");
+  const sampleData = {
+    samples: new Float32Array([0.25, -0.5, 0.75]),
+    sampleRate: 32000,
+  };
+  const soundFontData = new Uint8Array([1, 2, 3]).buffer;
+  controller.soundFontAssets.set(soundFont.id, soundFontData);
+  let finishSampleLoad;
+  const sampleLoad = new Promise((resolve) => {
+    finishSampleLoad = () => {
+      controller.sampleAssets.set(sample.id, sampleData);
+      controller.assetLoadStates.set(sample.id, "loaded");
+      resolve();
+    };
+  });
+  controller.assetLoads.set(sample.id, sampleLoad);
+
+  const received = [];
+  const target = {
+    setAsset: (...args) => received.push(["sample", ...args]),
+    setSoundFont: (...args) => received.push(["soundFont", ...args]),
+  };
+  const loading = controller.loadAssetsInto(target);
+  assert.deepEqual(received, []);
+  finishSampleLoad();
+  await loading;
+
+  assert.deepEqual(received, [
+    ["sample", sample.id, sampleData.samples, sampleData.sampleRate],
+    ["soundFont", soundFont.id, soundFontData],
+  ]);
+});
+
 test("sample previews use raw PCM and loop controls without starting the song", async (context) => {
   const { SynthController, cleanup } = await loadSynthController();
   context.after(cleanup);

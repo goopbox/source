@@ -2,10 +2,16 @@
 
 import { Song, SynthEngine } from "../synth/synth.js";
 
+export interface SongRendererAssetSource {
+  loadAssetsInto(synth: SynthEngine): Promise<void>;
+}
+
 export class SongRenderer {
   public outputSamplesL!: Float32Array;
   public outputSamplesR!: Float32Array;
   public canceled: boolean = false;
+
+  public constructor(private readonly _assetSource: SongRendererAssetSource) {}
 
   public async *generate(
     song: Song,
@@ -15,18 +21,7 @@ export class SongRenderer {
     loopCount: number,
   ): AsyncGenerator<number> {
     const synth: SynthEngine = new SynthEngine(song);
-    await Promise.all(
-      song.assets
-        .filter((asset) => asset.type == "soundFont")
-        .map(async (asset): Promise<void> => {
-          const response: Response = await fetch(asset.url);
-          if (!response.ok)
-            throw new Error(
-              `Failed to load SoundFont ${asset.name}: HTTP ${response.status}`,
-            );
-          synth.setSoundFont(asset.id, await response.arrayBuffer());
-        }),
-    );
+    await this._assetSource.loadAssetsInto(synth);
     if (this.canceled) return;
     synth.setSampleRate(sampleRate);
     synth.loopRepeatCount = loopCount - 1;

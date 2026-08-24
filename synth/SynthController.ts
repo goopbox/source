@@ -93,7 +93,9 @@ export class SynthController {
   private readonly assetLoadStates: Map<string, AssetLoadStatus> = new Map();
   private readonly assetLoadProgress: Map<string, number | null> = new Map();
   private readonly assetLoadErrors: Map<string, string> = new Map();
+  private readonly assetLoads: Map<string, Promise<void>> = new Map();
   private readonly sampleAssets: Map<string, SampleAssetData> = new Map();
+  private readonly soundFontAssets: Map<string, ArrayBuffer> = new Map();
   private readonly soundFontPresets: Map<
     string,
     readonly SoundFontPresetInfo[]
@@ -142,6 +144,40 @@ export class SynthController {
 
   public getSampleAsset(sampleId: string): SampleAssetData | null {
     return this.sampleAssets.get(sampleId) ?? null;
+  }
+
+  public async loadAssetsInto(synth: SynthEngine): Promise<void> {
+    this.refreshAssetLoads();
+    await Promise.all(
+      this.song.assets.flatMap((asset: AssetDefinition): Promise<void>[] => {
+        const load: Promise<void> | undefined = this.assetLoads.get(asset.id);
+        return load == undefined ? [] : [load];
+      }),
+    );
+
+    for (const asset of this.song.assets) {
+      if (asset.type == "soundFont") {
+        const data: ArrayBuffer | undefined = this.soundFontAssets.get(
+          asset.id,
+        );
+        if (data != undefined) {
+          synth.setSoundFont(asset.id, data);
+          continue;
+        }
+      } else {
+        const data: SampleAssetData | undefined = this.sampleAssets.get(
+          asset.id,
+        );
+        if (data != undefined) {
+          synth.setAsset(asset.id, data.samples, data.sampleRate);
+          continue;
+        }
+      }
+
+      throw new Error(
+        `Failed to load asset ${asset.name}: ${this.assetLoadErrors.get(asset.id) ?? "Unknown error"}`,
+      );
+    }
   }
 
   public playSamplePreview(
@@ -471,6 +507,7 @@ export class SynthController {
         this.assetLoadProgress.delete(sampleId);
         this.assetLoadErrors.delete(sampleId);
         this.sampleAssets.delete(sampleId);
+        this.soundFontAssets.delete(sampleId);
         this.soundFontPresets.delete(sampleId);
       }
     }
@@ -479,7 +516,12 @@ export class SynthController {
       this.assetLoadErrors.delete(sample.id);
       this.setAssetLoadStatus(sample.id, "loading");
       this.setAssetLoadProgress(sample.id, null);
-      void this.loadAsset(sample);
+      const load: Promise<void> = this.loadAsset(sample);
+      this.assetLoads.set(sample.id, load);
+      void load.then((): void => {
+        if (this.assetLoads.get(sample.id) == load)
+          this.assetLoads.delete(sample.id);
+      });
     }
   }
 
@@ -548,6 +590,7 @@ export class SynthController {
         )
           return;
         this.soundFontPresets.set(sample.id, presets);
+        this.soundFontAssets.set(sample.id, encodedAudio);
         await this.ensureAudio();
         if (
           !this.song.assets.some(
@@ -556,9 +599,10 @@ export class SynthController {
           )
         )
           return;
+        const workletData: ArrayBuffer = encodedAudio.slice(0);
         this.post(
-          { type: "setSoundFont", soundFontId: sample.id, data: encodedAudio },
-          [encodedAudio],
+          { type: "setSoundFont", soundFontId: sample.id, data: workletData },
+          [workletData],
         );
         this.setAssetLoadStatus(sample.id, "loaded");
         cacheAsset(sample, cacheResponse);
@@ -627,6 +671,9 @@ export class SynthController {
         return;
       const message: string =
         error instanceof Error ? error.message : String(error);
+      this.sampleAssets.delete(sample.id);
+      this.soundFontAssets.delete(sample.id);
+      this.soundFontPresets.delete(sample.id);
       this.assetLoadErrors.set(sample.id, message);
       this.setAssetLoadStatus(sample.id, "error");
       console.warn(`Failed to load asset ${sample.url}: ${message}`);

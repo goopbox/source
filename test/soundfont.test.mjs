@@ -480,22 +480,19 @@ test("native SoundFont playback emits PCM and restarts after the song ends", asy
 test("song rendering loads SoundFonts and emits their PCM", async (context) => {
   const { module, cleanup } = await loadRendererModule();
   context.after(cleanup);
-  const { song } = makeSong(module, "normal");
+  const { song, soundFontId } = makeSong(module, "normal");
   const soundFont = makeSoundFont({ sampleModes: 1 });
-  const originalFetch = globalThis.fetch;
   const originalRequestAnimationFrame = globalThis.requestAnimationFrame;
-  globalThis.fetch = async (url) => {
-    assert.equal(url, "test.sf2");
-    return new Response(soundFont);
-  };
   globalThis.requestAnimationFrame = (callback) =>
     setImmediate(() => callback(performance.now()));
   context.after(() => {
-    globalThis.fetch = originalFetch;
     globalThis.requestAnimationFrame = originalRequestAnimationFrame;
   });
 
-  const renderer = new module.SongRenderer();
+  const renderer = new module.SongRenderer({
+    loadAssetsInto: async (synth) =>
+      synth.setSoundFont(soundFontId, soundFont.slice(0)),
+  });
   for await (const _completionRate of renderer.generate(
     song,
     8000,
