@@ -6,10 +6,19 @@ import { MidiEventType, MidiMetaEventMessage } from "./Midi.js";
 
 export interface MidiExportSong {
   readonly channels: readonly {
-    readonly instruments: readonly { readonly type: InstrumentType }[];
+    readonly instruments: readonly {
+      readonly type: InstrumentType;
+      readonly soundFontId: string | null;
+      readonly soundFontPreset: number;
+    }[];
   }[];
   getChannelCount(): number;
   getChannelIsNoise(channelIndex: number): boolean;
+}
+
+export interface MidiExportSoundFontPreset {
+  readonly index: number;
+  readonly isDrum: boolean;
 }
 
 export interface MidiExportTrack {
@@ -24,6 +33,9 @@ export interface MidiExportTrack {
 
 export function createMidiExportTracks(
   song: MidiExportSong,
+  getSoundFontPresets: (
+    soundFontId: string,
+  ) => readonly MidiExportSoundFontPreset[] | null = () => null,
 ): MidiExportTrack[] {
   const tracks: MidiExportTrack[] = [
     {
@@ -37,22 +49,42 @@ export function createMidiExportTracks(
     },
   ];
 
-  let midiPort: number = 0;
+  const melodicMidiChannels: readonly number[] = [
+    0, 1, 2, 3, 4, 5, 6, 7, 8, 10, 11, 12, 13, 14, 15,
+  ];
+  let melodicTrackIndex: number = 0;
+  let percussionTrackIndex: number = 0;
   for (let channel: number = 0; channel < song.getChannelCount(); channel++) {
     for (
       let instrumentIndex: number = 0;
       instrumentIndex < song.channels[channel].instruments.length;
       instrumentIndex++
     ) {
-      const isDrumset: boolean =
-        song.channels[channel].instruments[instrumentIndex].type ==
-        InstrumentType.drumset;
+      const instrument = song.channels[channel].instruments[instrumentIndex];
+      const isDrumset: boolean = instrument.type == InstrumentType.drumset;
+      const soundFontPreset: MidiExportSoundFontPreset | undefined =
+        instrument.type == InstrumentType.soundFont &&
+        instrument.soundFontId != null
+          ? (getSoundFontPresets(instrument.soundFontId) ?? []).find(
+              (preset: MidiExportSoundFontPreset): boolean =>
+                preset.index == instrument.soundFontPreset,
+            )
+          : undefined;
+      const isPercussion: boolean = isDrumset || soundFontPreset?.isDrum == true;
+      const midiPort: number = isPercussion
+        ? percussionTrackIndex++
+        : Math.floor(melodicTrackIndex / melodicMidiChannels.length);
+      const midiChannel: number = isPercussion
+        ? 9
+        : melodicMidiChannels[
+            melodicTrackIndex++ % melodicMidiChannels.length
+          ];
       tracks.push({
         isMeta: false,
         channel,
         instrumentIndex,
-        midiPort: midiPort++,
-        midiChannel: isDrumset ? 9 : 0,
+        midiPort,
+        midiChannel,
         isNoise: song.getChannelIsNoise(channel),
         isDrumset,
       });

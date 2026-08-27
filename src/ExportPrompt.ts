@@ -518,7 +518,9 @@ export class ExportPrompt implements Prompt {
       }
     }
 
-    const tracks = createMidiExportTracks(song);
+    const tracks = createMidiExportTracks(song, (soundFontId: string) =>
+      synthController.getSoundFontPresets(soundFontId),
+    );
 
     const writer: ArrayBufferWriter = new ArrayBufferWriter(1024);
     writer.writeUint32(MidiChunkType.header);
@@ -629,8 +631,8 @@ export class ExportPrompt implements Prompt {
           throw new Error("Miscalculated number of bars.");
       } else {
         // For remaining tracks, set up the instruments and write the notes.
-        // Each exported instrument gets its own MIDI device/port namespace.
-        // Melodic tracks use channel 1; GM drumsets use channel 10.
+        // Spread instruments across each port's MIDI channels. Channel 10 is
+        // reserved for drumsets and SoundFont percussion presets.
         writeMidiTrackRouting(writer, midiPort);
 
         let channelName: string =

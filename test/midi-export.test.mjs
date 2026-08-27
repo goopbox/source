@@ -17,6 +17,7 @@ const loadedModule = (async () => {
         'import { InstrumentType } from "./synth/SynthConfig.ts";',
         'export const chipInstrumentType = InstrumentType.chip;',
         'export const drumsetInstrumentType = InstrumentType.drumset;',
+        'export const soundFontInstrumentType = InstrumentType.soundFont;',
       ].join("\n"),
       resolveDir: process.cwd(),
       sourcefile: "midi-export-test-entry.ts",
@@ -63,10 +64,16 @@ test(
     const tracks = module.createMidiExportTracks(song);
 
     assert.equal(tracks.length, 151, "meta track plus all 150 instruments");
+    const melodicChannels = [
+      0, 1, 2, 3, 4, 5, 6, 7, 8, 10, 11, 12, 13, 14, 15,
+    ];
     for (let index = 0; index < 150; index++) {
       const track = tracks[index + 1];
-      assert.equal(track.midiPort, index);
-      assert.equal(track.midiChannel, 0, "melodic tracks use MIDI channel 1");
+      assert.equal(track.midiPort, Math.floor(index / melodicChannels.length));
+      assert.equal(
+        track.midiChannel,
+        melodicChannels[index % melodicChannels.length],
+      );
       assert.equal(track.instrumentIndex, index);
     }
   },
@@ -90,8 +97,54 @@ test("every drumset gets its own port on General MIDI channel 10", async () => {
     })),
     [
       { midiPort: 0, midiChannel: 0, isDrumset: false },
+      { midiPort: 0, midiChannel: 9, isDrumset: true },
       { midiPort: 1, midiChannel: 9, isDrumset: true },
-      { midiPort: 2, midiChannel: 9, isDrumset: true },
+    ],
+  );
+});
+
+test("SoundFont percussion metadata routes the instrument to channel 10", async () => {
+  const { module } = await loadedModule;
+  const instruments = [
+    {
+      type: module.soundFontInstrumentType,
+      soundFontId: "percussion.sf2",
+      soundFontPreset: 7,
+    },
+    {
+      type: module.chipInstrumentType,
+      soundFontId: null,
+      soundFontPreset: 0,
+    },
+  ];
+  const song = {
+    channels: [{ instruments }],
+    getChannelCount: () => 1,
+    getChannelIsNoise: () => false,
+  };
+  const tracks = module.createMidiExportTracks(song, () => [
+    { index: 7, isDrum: true },
+  ]);
+
+  assert.deepEqual(
+    tracks
+      .slice(1)
+      .map(({ midiPort, midiChannel, isDrumset }) => ({
+        midiPort,
+        midiChannel,
+        isDrumset,
+      })),
+    [
+      {
+        midiPort: 0,
+        midiChannel: 9,
+        isDrumset: false,
+      },
+      {
+        midiPort: 0,
+        midiChannel: 0,
+        isDrumset: false,
+      },
     ],
   );
 });

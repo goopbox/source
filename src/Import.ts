@@ -183,6 +183,7 @@ export class ImportFile {
       nextEventMidiTick: number;
       ended: boolean;
       runningStatus: number;
+      midiPort: string;
     }
     const tracks: Track[] = [];
     while (reader.hasMore()) {
@@ -203,6 +204,7 @@ export class ImportFile {
             nextEventMidiTick: trackReader.readMidiVariableLength(),
             ended: false,
             runningStatus: -1,
+            midiPort: "port:0",
           });
         }
       } else {
@@ -257,88 +259,41 @@ export class ImportFile {
       size: number;
     }
 
-    // To read a MIDI file we have to simulate state changing over time.
-    // Keep a record of various parameters for each channel that may
-    // change over time, initialized to default values.
-    // Consider making a MidiChannel class and single array of midiChannels.
-    const channelRPNMSB: number[] = [
-      0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
-      0xff, 0xff, 0xff, 0xff,
-    ];
-    const channelRPNLSB: number[] = [
-      0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
-      0xff, 0xff, 0xff, 0xff,
-    ];
-    const pitchBendRangeMSB: number[] = [
-      2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2,
-    ]; // pitch bend range defaults to 2 semitones.
-    const pitchBendRangeLSB: number[] = [
-      0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-    ]; // and 0 cents.
-    const currentInstrumentProgram: number[] = [
-      0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-    ];
-    const currentInstrumentVolumes: number[] = [
-      100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100,
-      100,
-    ];
-    const currentInstrumentPans: number[] = [
-      64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64,
-    ];
-    const noteEvents: NoteEvent[][] = [
-      [],
-      [],
-      [],
-      [],
-      [],
-      [],
-      [],
-      [],
-      [],
-      [],
-      [],
-      [],
-      [],
-      [],
-      [],
-      [],
-    ];
-    const pitchBendEvents: PitchBendEvent[][] = [
-      [],
-      [],
-      [],
-      [],
-      [],
-      [],
-      [],
-      [],
-      [],
-      [],
-      [],
-      [],
-      [],
-      [],
-      [],
-      [],
-    ];
-    const noteSizeEvents: NoteSizeEvent[][] = [
-      [],
-      [],
-      [],
-      [],
-      [],
-      [],
-      [],
-      [],
-      [],
-      [],
-      [],
-      [],
-      [],
-      [],
-      [],
-      [],
-    ];
+    // MIDI channel state is scoped to a port. Tracks on the same port and
+    // channel share state; equal channel numbers on different ports do not.
+    const midiChannelIndices: Map<string, number> = new Map();
+    const midiChannelNumbers: number[] = [];
+    const channelRPNMSB: number[] = [];
+    const channelRPNLSB: number[] = [];
+    const pitchBendRangeMSB: number[] = [];
+    const pitchBendRangeLSB: number[] = [];
+    const currentInstrumentProgram: number[] = [];
+    const currentInstrumentVolumes: number[] = [];
+    const currentInstrumentPans: number[] = [];
+    const noteEvents: NoteEvent[][] = [];
+    const pitchBendEvents: PitchBendEvent[][] = [];
+    const noteSizeEvents: NoteSizeEvent[][] = [];
+
+    function getMidiChannelIndex(track: Track, midiChannel: number): number {
+      const key: string = track.midiPort + ":channel:" + midiChannel;
+      const existingIndex: number | undefined = midiChannelIndices.get(key);
+      if (existingIndex != undefined) return existingIndex;
+
+      const index: number = midiChannelNumbers.length;
+      midiChannelIndices.set(key, index);
+      midiChannelNumbers.push(midiChannel);
+      channelRPNMSB.push(0xff);
+      channelRPNLSB.push(0xff);
+      pitchBendRangeMSB.push(2);
+      pitchBendRangeLSB.push(0);
+      currentInstrumentProgram.push(0);
+      currentInstrumentVolumes.push(100);
+      currentInstrumentPans.push(64);
+      noteEvents.push([]);
+      pitchBendEvents.push([]);
+      noteSizeEvents.push([]);
+      return index;
+    }
     let microsecondsPerBeat: number = 500000; // Tempo in microseconds per "quarter" note, commonly known as a "beat", default is equivalent to 120 beats per minute.
     let beatsPerBar: number = 8;
     let numSharps: number = 0;
@@ -363,6 +318,10 @@ export class ImportFile {
             peakStatus & 0x80 ? track.reader.readUint8() : track.runningStatus;
           const eventType: number = eventStatus & 0xf0;
           const eventChannel: number = eventStatus & 0x0f;
+          const midiChannelIndex: number =
+            eventType == MidiEventType.metaAndSysex
+              ? -1
+              : getMidiChannelIndex(track, eventChannel);
           if (eventType != MidiEventType.metaAndSysex) {
             track.runningStatus = eventStatus;
           }
@@ -374,7 +333,7 @@ export class ImportFile {
               {
                 const pitch: number = track.reader.readMidi7Bits();
                 /*const velocity: number =*/ track.reader.readMidi7Bits();
-                noteEvents[eventChannel].push({
+                noteEvents[midiChannelIndex].push({
                   midiTick: currentMidiTick,
                   pitch: pitch,
                   velocity: 0.0,
@@ -390,7 +349,7 @@ export class ImportFile {
                 const pitch: number = track.reader.readMidi7Bits();
                 const velocity: number = track.reader.readMidi7Bits();
                 if (velocity == 0) {
-                  noteEvents[eventChannel].push({
+                  noteEvents[midiChannelIndex].push({
                     midiTick: currentMidiTick,
                     pitch: pitch,
                     velocity: 0.0,
@@ -407,7 +366,7 @@ export class ImportFile {
                       Math.round(
                         Synth.volumeMultToInstrumentVolume(
                           midiVolumeToVolumeMult(
-                            currentInstrumentVolumes[eventChannel],
+                            currentInstrumentVolumes[midiChannelIndex],
                           ),
                         ),
                       ),
@@ -418,19 +377,20 @@ export class ImportFile {
                     Math.min(
                       Config.panMax,
                       Math.round(
-                        ((currentInstrumentPans[eventChannel] - 64) / 63 + 1) *
+                        ((currentInstrumentPans[midiChannelIndex] - 64) / 63 +
+                          1) *
                           Config.panCenter,
                       ),
                     ),
                   );
-                  noteEvents[eventChannel].push({
+                  noteEvents[midiChannelIndex].push({
                     midiTick: currentMidiTick,
                     pitch: pitch,
                     velocity: Math.max(
                       0.0,
                       Math.min(1.0, (velocity + 14) / 90.0),
                     ),
-                    program: currentInstrumentProgram[eventChannel],
+                    program: currentInstrumentProgram[midiChannelIndex],
                     instrumentVolume: volume,
                     instrumentPan: pan,
                     on: true,
@@ -454,28 +414,28 @@ export class ImportFile {
                   case MidiControlEventMessage.setParameterMSB:
                     {
                       if (
-                        channelRPNMSB[eventChannel] ==
+                        channelRPNMSB[midiChannelIndex] ==
                           MidiRegisteredParameterNumberMSB.pitchBendRange &&
-                        channelRPNLSB[eventChannel] ==
+                        channelRPNLSB[midiChannelIndex] ==
                           MidiRegisteredParameterNumberLSB.pitchBendRange
                       ) {
-                        pitchBendRangeMSB[eventChannel] = value;
+                        pitchBendRangeMSB[midiChannelIndex] = value;
                       }
                     }
                     break;
                   case MidiControlEventMessage.volumeMSB:
                     {
-                      currentInstrumentVolumes[eventChannel] = value;
+                      currentInstrumentVolumes[midiChannelIndex] = value;
                     }
                     break;
                   case MidiControlEventMessage.panMSB:
                     {
-                      currentInstrumentPans[eventChannel] = value;
+                      currentInstrumentPans[midiChannelIndex] = value;
                     }
                     break;
                   case MidiControlEventMessage.expressionMSB:
                     {
-                      noteSizeEvents[eventChannel].push({
+                      noteSizeEvents[midiChannelIndex].push({
                         midiTick: currentMidiTick,
                         size: Synth.volumeMultToNoteSize(
                           midiExpressionToVolumeMult(value),
@@ -486,23 +446,23 @@ export class ImportFile {
                   case MidiControlEventMessage.setParameterLSB:
                     {
                       if (
-                        channelRPNMSB[eventChannel] ==
+                        channelRPNMSB[midiChannelIndex] ==
                           MidiRegisteredParameterNumberMSB.pitchBendRange &&
-                        channelRPNLSB[eventChannel] ==
+                        channelRPNLSB[midiChannelIndex] ==
                           MidiRegisteredParameterNumberLSB.pitchBendRange
                       ) {
-                        pitchBendRangeLSB[eventChannel] = value;
+                        pitchBendRangeLSB[midiChannelIndex] = value;
                       }
                     }
                     break;
                   case MidiControlEventMessage.registeredParameterNumberLSB:
                     {
-                      channelRPNLSB[eventChannel] = value;
+                      channelRPNLSB[midiChannelIndex] = value;
                     }
                     break;
                   case MidiControlEventMessage.registeredParameterNumberMSB:
                     {
-                      channelRPNMSB[eventChannel] = value;
+                      channelRPNMSB[midiChannelIndex] = value;
                     }
                     break;
                 }
@@ -511,7 +471,7 @@ export class ImportFile {
             case MidiEventType.programChange:
               {
                 const program: number = track.reader.readMidi7Bits();
-                currentInstrumentProgram[eventChannel] = program;
+                currentInstrumentProgram[midiChannelIndex] = program;
               }
               break;
             case MidiEventType.channelPressure:
@@ -526,11 +486,11 @@ export class ImportFile {
 
                 const pitchBend: number = ((msb << 7) | lsb) / 0x2000 - 1.0;
                 const pitchBendRange: number =
-                  pitchBendRangeMSB[eventChannel] +
-                  pitchBendRangeLSB[eventChannel] * 0.01;
+                  pitchBendRangeMSB[midiChannelIndex] +
+                  pitchBendRangeLSB[midiChannelIndex] * 0.01;
                 const interval: number = pitchBend * pitchBendRange;
 
-                pitchBendEvents[eventChannel].push({
+                pitchBendEvents[midiChannelIndex].push({
                   midiTick: currentMidiTick,
                   interval: interval,
                 });
@@ -580,6 +540,16 @@ export class ImportFile {
                     numSharps = track.reader.readInt8(); // Note: can be negative for flats.
                     isMinor = track.reader.readUint8() == 1; // 0: major, 1: minor
                     track.reader.skipBytes(length - 2);
+                  } else if (message == MidiMetaEventMessage.deviceName) {
+                    let deviceName: string = "";
+                    for (let index: number = 0; index < length; index++)
+                      deviceName += String.fromCharCode(track.reader.readUint8());
+                    track.midiPort = "device:" + deviceName;
+                  } else if (message == MidiMetaEventMessage.midiPort) {
+                    if (length > 0) {
+                      track.midiPort = "port:" + track.reader.readMidi7Bits();
+                      track.reader.skipBytes(length - 1);
+                    }
                   } else {
                     // Ignore other meta event message types.
                     track.reader.skipBytes(length);
@@ -669,14 +639,19 @@ export class ImportFile {
     // Convert each midi channel into a editor channel.
     const pitchChannels: Channel[] = [];
     const noiseChannels: Channel[] = [];
-    for (let midiChannel: number = 0; midiChannel < 16; midiChannel++) {
-      if (noteEvents[midiChannel].length == 0) continue;
+    for (
+      let midiChannelIndex: number = 0;
+      midiChannelIndex < midiChannelNumbers.length;
+      midiChannelIndex++
+    ) {
+      if (noteEvents[midiChannelIndex].length == 0) continue;
+      const midiChannel: number = midiChannelNumbers[midiChannelIndex];
 
       const channel: Channel = new Channel();
 
       const channelPresetValue: number | null =
         EditorConfig.midiProgramToPresetValue(
-          noteEvents[midiChannel][0].program,
+          noteEvents[midiChannelIndex][0].program,
         );
       const channelPreset: Preset | null =
         channelPresetValue == null
@@ -728,14 +703,14 @@ export class ImportFile {
 
         for (
           let noteEventIndex: number = 0;
-          noteEventIndex <= noteEvents[midiChannel].length;
+          noteEventIndex <= noteEvents[midiChannelIndex].length;
           noteEventIndex++
         ) {
           const noMoreNotes: boolean =
-            noteEventIndex == noteEvents[midiChannel].length;
+            noteEventIndex == noteEvents[midiChannelIndex].length;
           const noteEvent: NoteEvent | null = noMoreNotes
             ? null
-            : noteEvents[midiChannel][noteEventIndex];
+            : noteEvents[midiChannelIndex][noteEventIndex];
           const nextEventPart: number =
             noteEvent == null
               ? Number.MAX_SAFE_INTEGER
@@ -854,22 +829,23 @@ export class ImportFile {
         let noteSizeEventIndex: number = 0;
         function updateCurrentMidiInterval(midiTick: number) {
           while (
-            pitchBendEventIndex < pitchBendEvents[midiChannel].length &&
-            pitchBendEvents[midiChannel][pitchBendEventIndex].midiTick <=
+            pitchBendEventIndex < pitchBendEvents[midiChannelIndex].length &&
+            pitchBendEvents[midiChannelIndex][pitchBendEventIndex].midiTick <=
               midiTick
           ) {
             currentMidiInterval =
-              pitchBendEvents[midiChannel][pitchBendEventIndex].interval;
+              pitchBendEvents[midiChannelIndex][pitchBendEventIndex].interval;
             pitchBendEventIndex++;
           }
         }
         function updateCurrentMidiNoteSize(midiTick: number) {
           while (
-            noteSizeEventIndex < noteSizeEvents[midiChannel].length &&
-            noteSizeEvents[midiChannel][noteSizeEventIndex].midiTick <= midiTick
+            noteSizeEventIndex < noteSizeEvents[midiChannelIndex].length &&
+            noteSizeEvents[midiChannelIndex][noteSizeEventIndex].midiTick <=
+              midiTick
           ) {
             currentMidiNoteSize =
-              noteSizeEvents[midiChannel][noteSizeEventIndex].size;
+              noteSizeEvents[midiChannelIndex][noteSizeEventIndex].size;
             noteSizeEventIndex++;
           }
         }
@@ -883,7 +859,7 @@ export class ImportFile {
         let pitchSum: number = 0;
         let pitchCount: number = 0;
 
-        for (let noteEvent of noteEvents[midiChannel]) {
+        for (let noteEvent of noteEvents[midiChannelIndex]) {
           const nextEventMidiTick: number = noteEvent.midiTick;
           const nextEventPart: number =
             quantizeMidiTickToPart(nextEventMidiTick);
