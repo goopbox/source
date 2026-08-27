@@ -13,6 +13,7 @@ import { type Prompt } from "./Prompt.js";
 import { HTML } from "imperative-html/dist/esm/elements-strict.js";
 import { SongRenderer } from "./SongRenderer.js";
 import { ArrayBufferWriter } from "./ArrayBufferWriter.js";
+import { createMidiExportTracks, writeMidiTrackRouting } from "./MidiExport.js";
 import {
   MidiChunkType,
   MidiFileFormat,
@@ -517,56 +518,7 @@ export class ExportPrompt implements Prompt {
       }
     }
 
-    const tracks = [
-      {
-        isMeta: true,
-        channel: -1,
-        instrumentIndex: -1,
-        midiChannel: -1,
-        isNoise: false,
-        isDrumset: false,
-      },
-    ];
-    let midiChannelCounter: number = 0;
-    let foundADrumset: boolean = false;
-    for (
-      let channel: number = 0;
-      channel < this._doc.song.getChannelCount();
-      channel++
-    ) {
-      for (
-        let instrumentIndex: number = 0;
-        instrumentIndex < this._doc.song.channels[channel].instruments.length;
-        instrumentIndex++
-      ) {
-        if (
-          !foundADrumset &&
-          this._doc.song.channels[channel].instruments[instrumentIndex].type ==
-            InstrumentType.drumset
-        ) {
-          tracks.push({
-            isMeta: false,
-            channel,
-            instrumentIndex,
-            midiChannel: 9,
-            isNoise: true,
-            isDrumset: true,
-          });
-          foundADrumset = true; // There can only be one drumset channel, and it's always channel 9 (seen as 10 in most UIs). :/
-        } else {
-          if (midiChannelCounter >= 16) continue; // The MIDI standard only supports 16 channels.
-          tracks.push({
-            isMeta: false,
-            channel,
-            instrumentIndex,
-            midiChannel: midiChannelCounter++,
-            isNoise: this._doc.song.getChannelIsNoise(channel),
-            isDrumset: false,
-          });
-          if (midiChannelCounter == 9) midiChannelCounter++; // skip midi drum channel.
-        }
-      }
-    }
+    const tracks = createMidiExportTracks(song);
 
     const writer: ArrayBufferWriter = new ArrayBufferWriter(1024);
     writer.writeUint32(MidiChunkType.header);
@@ -582,6 +534,7 @@ export class ExportPrompt implements Prompt {
         isMeta,
         channel,
         instrumentIndex,
+        midiPort,
         midiChannel,
         isNoise,
         isDrumset,
@@ -675,7 +628,10 @@ export class ExportPrompt implements Prompt {
         if (barStartTime != midiTicksPerBar * unrolledBars.length)
           throw new Error("Miscalculated number of bars.");
       } else {
-        // For remaining tracks, set up the instruments and write the notes:
+        // For remaining tracks, set up the instruments and write the notes.
+        // Each exported instrument gets its own MIDI device/port namespace.
+        // Melodic tracks use channel 1; GM drumsets use channel 10.
+        writeMidiTrackRouting(writer, midiPort);
 
         let channelName: string =
           ColorConfig.getChannelColor(song, channel).name +
