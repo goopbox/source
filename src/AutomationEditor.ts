@@ -311,12 +311,9 @@ export class AutomationSettings {
     if (document.activeElement != this._rowsInput)
       this._rowsInput.value = String(channel.automationRows.length);
     const rowCountControl: HTMLDivElement = HTML.div(
-      { class: "settingsGroup" },
-      HTML.div(
-        { class: "selectRow" },
-        HTML.label("Rows"),
-        this._rowsInput,
-      ),
+      { class: "selectRow" },
+      HTML.label("Rows"),
+      this._rowsInput,
     );
     const groups: HTMLDivElement[] = [rowCountControl];
     for (let rowIndex: number = 0; rowIndex < channel.automationRows.length; rowIndex++) {
