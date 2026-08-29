@@ -14,6 +14,7 @@ export interface MidiExportSong {
   }[];
   getChannelCount(): number;
   getChannelIsNoise(channelIndex: number): boolean;
+  getChannelIsAutomation?(channelIndex: number): boolean;
 }
 
 export interface MidiExportSoundFontPreset {
@@ -55,6 +56,7 @@ export function createMidiExportTracks(
   let melodicTrackIndex: number = 0;
   let percussionTrackIndex: number = 0;
   for (let channel: number = 0; channel < song.getChannelCount(); channel++) {
+    if (song.getChannelIsAutomation?.(channel) === true) continue;
     for (
       let instrumentIndex: number = 0;
       instrumentIndex < song.channels[channel].instruments.length;

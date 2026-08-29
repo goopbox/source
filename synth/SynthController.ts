@@ -104,6 +104,7 @@ export class SynthController {
   private desiredPlaying: boolean = false;
   private desiredRecording: boolean = false;
   private reportedPlayhead: number = 0;
+  private reportedTempo: number = 120;
   private reportContextTime: number = 0;
   private reportedCountIn: boolean = false;
   private loopRepeatCountInternal: number = -1;
@@ -118,11 +119,13 @@ export class SynthController {
 
   public constructor(song: Song | Uint8Array | null = null) {
     this.song = song instanceof Song ? song : new Song(song ?? undefined);
+    this.reportedTempo = this.song.tempo;
     this.refreshAssetLoads();
   }
 
   public setSong(song: Song | Uint8Array): void {
     this.song = song instanceof Song ? song : new Song(song);
+    this.reportedTempo = this.song.tempo;
     this.reportedPlayhead = Math.min(this.reportedPlayhead, this.song.barCount);
     this.lastSerializedSong = null;
     this.lastMutedChannels = null;
@@ -302,7 +305,7 @@ export class SynthController {
       );
       const estimated: number =
         this.reportedPlayhead +
-        (elapsed * this.song.tempo) / (60 * this.song.beatsPerBar);
+        (elapsed * this.reportedTempo) / (60 * this.song.beatsPerBar);
       return Math.max(0, Math.min(this.song.barCount, estimated));
     }
     return this.reportedPlayhead;
@@ -686,6 +689,7 @@ export class SynthController {
 
   private applySnapshot(snapshot: TransportSnapshot): void {
     this.reportedPlayhead = snapshot.playhead;
+    this.reportedTempo = snapshot.tempo;
     this.desiredPlaying = snapshot.playing;
     this.desiredRecording = snapshot.recording;
     this.reportedCountIn = snapshot.countIn;
@@ -755,14 +759,23 @@ export class SynthController {
     channel: number = this.liveChannel,
     instruments: readonly number[] = this.liveInstruments,
   ): void {
-    this.livePitches.length = Math.min(pitches.length, Config.maxChordSize);
+    const acceptsNotes: boolean =
+      channel >= 0 &&
+      channel < this.song.getChannelCount() &&
+      !this.song.getChannelIsAutomation(channel);
+    const safePitches: readonly number[] = acceptsNotes ? pitches : [];
+    const safeInstruments: readonly number[] = acceptsNotes ? instruments : [];
+    this.livePitches.length = Math.min(
+      safePitches.length,
+      Config.maxChordSize,
+    );
     for (let i: number = 0; i < this.livePitches.length; i++)
-      this.livePitches[i] = pitches[i]!;
-    this.liveInstruments.length = instruments.length;
-    for (let i: number = 0; i < instruments.length; i++)
-      this.liveInstruments[i] = instruments[i]!;
-    this.liveDuration = duration;
-    this.liveStarted = started;
+      this.livePitches[i] = safePitches[i]!;
+    this.liveInstruments.length = safeInstruments.length;
+    for (let i: number = 0; i < safeInstruments.length; i++)
+      this.liveInstruments[i] = safeInstruments[i]!;
+    this.liveDuration = acceptsNotes ? duration : 0;
+    this.liveStarted = acceptsNotes && started;
     this.liveChannel = channel;
     this.post({ type: "setLiveInput", state: this.liveInputState() });
     if (this.livePitches.length > 0) this.activateAudio();
@@ -779,10 +792,15 @@ export class SynthController {
 
   public setLiveInputChannel(channel: number): void {
     this.liveChannel = channel;
-    this.post({ type: "setLiveInputChannel", channel });
+    if (this.song.getChannelIsAutomation(channel)) {
+      this.setLiveInputState([], 0, false, channel, []);
+    } else {
+      this.post({ type: "setLiveInputChannel", channel });
+    }
   }
 
   public setLiveInputInstruments(instruments: readonly number[]): void {
+    if (this.song.getChannelIsAutomation(this.liveChannel)) instruments = [];
     this.liveInstruments.length = instruments.length;
     for (let i: number = 0; i < instruments.length; i++)
       this.liveInstruments[i] = instruments[i]!;

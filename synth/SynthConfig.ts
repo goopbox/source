@@ -306,6 +306,62 @@ export interface AutomationTarget extends NamedOption {
   readonly maxCount: number;
   readonly effect: EffectType | null;
   readonly compatibleInstruments: InstrumentType[] | null;
+  /** Stable runtime binding shared by envelopes and Automation channels. */
+  readonly property?: AutomationProperty;
+  readonly scope?: AutomationTargetScope;
+  readonly supportsEnvelope?: boolean;
+  readonly supportsAutomation?: boolean;
+  readonly valueMin?: number;
+  readonly valueMax?: number;
+  readonly integer?: boolean;
+}
+
+export type AutomationTargetScope = "song" | "instrument";
+
+export type AutomationProperty =
+  | "tempo"
+  | "mixVolume"
+  | "pan"
+  | "noteFilterFrequency"
+  | "noteFilterGain"
+  | "eqFilterFrequency"
+  | "eqFilterGain"
+  | "distortion"
+  | "chorus"
+  | "reverb"
+  | "echoSustain"
+  | "echoDelay"
+  | "bitcrusherFrequency"
+  | "bitcrusherQuantization"
+  | "pitchShift"
+  | "detune"
+  | "vibrato"
+  | "pulseWidth"
+  | "stringSustain"
+  | "operatorFrequency"
+  | "operatorAmplitude"
+  | "feedbackAmplitude"
+  | "supersawDynamism"
+  | "supersawSpread"
+  | "supersawShape";
+
+export interface AutomationValueDomain {
+  readonly min: number;
+  readonly max: number;
+  readonly integer: boolean;
+}
+
+export interface AutomationInstrumentLike {
+  readonly type: InstrumentType;
+  readonly effects: number;
+  readonly noteFilter: { readonly controlPointCount: number };
+  readonly eqFilter: { readonly controlPointCount: number };
+}
+
+export interface AutomationTargetChoice {
+  readonly target: AutomationTarget;
+  readonly index: number;
+  readonly displayName: string;
 }
 
 export class Config {
@@ -1362,6 +1418,23 @@ export class Config {
   public static readonly pitchChannelCountMax: number = 1024;
   public static readonly noiseChannelCountMin: number = 0;
   public static readonly noiseChannelCountMax: number = 1024;
+  public static readonly automationChannelCountMin: number = 0;
+  public static readonly automationChannelCountDefault: number = 0;
+  public static readonly automationChannelCountMax: number = 64;
+  public static readonly channelCountMax: number =
+    Config.pitchChannelCountMax +
+    Config.noiseChannelCountMax +
+    Config.automationChannelCountMax;
+  public static readonly automationRowCountMin: number = 1;
+  public static readonly automationRowCountDefault: number = 4;
+  public static readonly automationRowCountMax: number = 32;
+  public static readonly automationEventsPerRowMax: number = 4096;
+  public static readonly automationPointsPerEventMax: number = 4096;
+  public static readonly automationTargetIdLengthMax: number = 64;
+  public static readonly automationTargetIndexMax: number = 4095;
+  public static readonly automationValueMagnitudeMax: number = 1.0e9;
+  public static readonly automationMultiplyMin: number = 0;
+  public static readonly automationMultiplyMax: number = 4;
   public static readonly noiseInterval: number = 6;
   public static readonly pitchesPerOctave: number = 12; // TODO: Use this for converting pitch to frequency.
   public static readonly drumCount: number = 12;
@@ -1455,7 +1528,7 @@ export class Config {
 
   public static readonly maxEnvelopeCount: number = 12;
   public static readonly defaultAutomationRange: number = 13;
-  public static readonly instrumentAutomationTargets: DictionaryArray<AutomationTarget> =
+  public static readonly automationTargets: DictionaryArray<AutomationTarget> =
     toNameMap([
       {
         name: "none",
@@ -1631,21 +1704,125 @@ export class Config {
         effect: null,
         compatibleInstruments: [InstrumentType.supersaw],
       },
-      /*
-		{name: "distortion",             computeIndex: InstrumentAutomationIndex.distortion,             displayName: "distortion",       perNote: false, interleave: false, isFilter: false, range: Config.distortionRange,             maxCount: 1,    effect: EffectType.distortion,   compatibleInstruments: null},
-		{name: "bitcrusherQuantization", computeIndex: InstrumentAutomationIndex.bitcrusherQuantization, displayName: "bit crush",        perNote: false, interleave: false, isFilter: false, range: Config.bitcrusherQuantizationRange, maxCount: 1,    effect: EffectType.bitcrusher,   compatibleInstruments: null},
-		{name: "bitcrusherFrequency",    computeIndex: InstrumentAutomationIndex.bitcrusherFrequency,    displayName: "freq crush",       perNote: false, interleave: false, isFilter: false, range: Config.bitcrusherFreqRange,         maxCount: 1,    effect: EffectType.bitcrusher,   compatibleInstruments: null},
-		{name: "eqFilterAllFreqs",       computeIndex: InstrumentAutomationIndex.eqFilterAllFreqs,       displayName: "eq filter freqs",  perNote: false, interleave: false, isFilter:  true, range: null,                               maxCount: 1,    effect: null,                    compatibleInstruments: null},
-		{name: "eqFilterFreq",           computeIndex: InstrumentAutomationIndex.eqFilterFreq0,          displayName: "eq filter # freq", perNote: false, interleave:  true, isFilter:  true, range: Config.filterFreqRange,             maxCount: Config.filterMaxPoints, effect: null,  compatibleInstruments: null},
-		{name: "eqFilterGain",           computeIndex: InstrumentAutomationIndex.eqFilterGain0,          displayName: "eq filter # vol",  perNote: false, interleave: false, isFilter:  true, range: Config.filterGainRange,             maxCount: Config.filterMaxPoints, effect: null,  compatibleInstruments: null},
-		{name: "chorus",                 computeIndex: InstrumentAutomationIndex.chorus,                 displayName: "chorus",           perNote: false, interleave: false, isFilter: false, range: Config.chorusRange,                 maxCount: 1,    effect: EffectType.chorus,       compatibleInstruments: null},
-		{name: "echoSustain",            computeIndex: InstrumentAutomationIndex.echoSustain,            displayName: "echo",             perNote: false, interleave: false, isFilter: false, range: Config.echoSustainRange,            maxCount: 1,    effect: EffectType.echo,         compatibleInstruments: null},
-		{name: "echoDelay",              computeIndex: InstrumentAutomationIndex.echoDelay,              displayName: "echo delay",       perNote: false, interleave: false, isFilter: false, range: Config.echoDelayRange,              maxCount: 1,    effect: EffectType.echo,         compatibleInstruments: null}, // wait until after we're computing a tick's settings for multiple run lengths.
-		{name: "reverb",                 computeIndex: InstrumentAutomationIndex.reverb,                 displayName: "reverb",           perNote: false, interleave: false, isFilter: false, range: Config.reverbRange,                 maxCount: 1,    effect: EffectType.reverb,       compatibleInstruments: null},
-		{name: "mixVolume",              computeIndex: InstrumentAutomationIndex.mixVolume,              displayName: "mix volume",       perNote: false, interleave: false, isFilter: false, range: Config.volumeRange,                 maxCount: 1,    effect: null,                    compatibleInstruments: null},
-		{name: "envelope#",              computeIndex: null,                                             displayName: "envelope",         perNote: false, interleave: false, isFilter: false, range: Config.defaultAutomationRange,      maxCount: Config.maxEnvelopeCount, effect: null, compatibleInstruments: null}, // maxCount special case for envelopes to be allowed to target earlier ones.
-		*/
+      { name: "mixVolume", computeIndex: null, displayName: "mix volume", interleave: false, isFilter: false, maxCount: 1, effect: null, compatibleInstruments: null, property: "mixVolume", scope: "instrument", supportsEnvelope: false, supportsAutomation: true, valueMin: 0, valueMax: Config.volumeRange - 1, integer: false },
+      { name: "pan", computeIndex: null, displayName: "pan", interleave: false, isFilter: false, maxCount: 1, effect: null, compatibleInstruments: null, property: "pan", scope: "instrument", supportsEnvelope: false, supportsAutomation: true, valueMin: 0, valueMax: Config.panMax, integer: false },
+      { name: "eqFilterFreq", computeIndex: null, displayName: "eq filter # freq", interleave: true, isFilter: true, maxCount: Config.filterMaxPoints, effect: EffectType.eqFilter, compatibleInstruments: null, property: "eqFilterFrequency", scope: "instrument", supportsEnvelope: false, supportsAutomation: true, valueMin: 0, valueMax: Config.filterFreqRange - 1, integer: false },
+      { name: "eqFilterGain", computeIndex: null, displayName: "eq filter # gain", interleave: false, isFilter: true, maxCount: Config.filterMaxPoints, effect: EffectType.eqFilter, compatibleInstruments: null, property: "eqFilterGain", scope: "instrument", supportsEnvelope: false, supportsAutomation: true, valueMin: 0, valueMax: Config.filterGainRange - 1, integer: false },
+      { name: "distortion", computeIndex: null, displayName: "distortion", interleave: false, isFilter: false, maxCount: 1, effect: EffectType.distortion, compatibleInstruments: null, property: "distortion", scope: "instrument", supportsEnvelope: false, supportsAutomation: true, valueMin: 0, valueMax: Config.distortionRange - 1, integer: false },
+      { name: "bitcrusherQuantization", computeIndex: null, displayName: "bit crush", interleave: false, isFilter: false, maxCount: 1, effect: EffectType.bitcrusher, compatibleInstruments: null, property: "bitcrusherQuantization", scope: "instrument", supportsEnvelope: false, supportsAutomation: true, valueMin: 0, valueMax: Config.bitcrusherQuantizationRange - 1, integer: false },
+      { name: "bitcrusherFrequency", computeIndex: null, displayName: "frequency crush", interleave: false, isFilter: false, maxCount: 1, effect: EffectType.bitcrusher, compatibleInstruments: null, property: "bitcrusherFrequency", scope: "instrument", supportsEnvelope: false, supportsAutomation: true, valueMin: 0, valueMax: Config.bitcrusherFreqRange - 1, integer: false },
+      { name: "chorus", computeIndex: null, displayName: "chorus", interleave: false, isFilter: false, maxCount: 1, effect: EffectType.chorus, compatibleInstruments: null, property: "chorus", scope: "instrument", supportsEnvelope: false, supportsAutomation: true, valueMin: 0, valueMax: Config.chorusRange - 1, integer: false },
+      { name: "echoSustain", computeIndex: null, displayName: "echo amount", interleave: false, isFilter: false, maxCount: 1, effect: EffectType.echo, compatibleInstruments: null, property: "echoSustain", scope: "instrument", supportsEnvelope: false, supportsAutomation: true, valueMin: 0, valueMax: (Config.echoSustainRange - 1) * 2, integer: false },
+      { name: "echoDelay", computeIndex: null, displayName: "echo delay", interleave: false, isFilter: false, maxCount: 1, effect: EffectType.echo, compatibleInstruments: null, property: "echoDelay", scope: "instrument", supportsEnvelope: false, supportsAutomation: true, valueMin: 0, valueMax: Config.echoDelayRange - 1, integer: false },
+      { name: "reverb", computeIndex: null, displayName: "reverb", interleave: false, isFilter: false, maxCount: 1, effect: EffectType.reverb, compatibleInstruments: null, property: "reverb", scope: "instrument", supportsEnvelope: false, supportsAutomation: true, valueMin: 0, valueMax: Config.reverbRange - 1, integer: false },
+      { name: "vibrato", computeIndex: null, displayName: "vibrato", interleave: false, isFilter: false, maxCount: 1, effect: EffectType.vibrato, compatibleInstruments: null, property: "vibrato", scope: "instrument", supportsEnvelope: false, supportsAutomation: true, valueMin: 0, valueMax: Config.vibratos.length - 1, integer: true },
+      { name: "tempo", computeIndex: null, displayName: "Tempo", interleave: false, isFilter: false, maxCount: 1, effect: null, compatibleInstruments: null, property: "tempo", scope: "song", supportsEnvelope: false, supportsAutomation: true, valueMin: Config.tempoMin, valueMax: Config.tempoMax, integer: false },
     ]);
+
+  /** Backward-compatible name. Both editors use the same metadata objects. */
+  public static readonly instrumentAutomationTargets: DictionaryArray<AutomationTarget> =
+    Config.automationTargets;
+
+  static {
+    for (const target of Config.automationTargets) {
+      Object.assign(target, {
+        scope: target.scope ?? "instrument",
+        supportsEnvelope:
+          target.supportsEnvelope ??
+          (target.computeIndex != null || target.name == "none"),
+        supportsAutomation: target.supportsAutomation ?? false,
+      });
+    }
+    const instrumentTarget = (
+      name: string,
+      property: AutomationProperty,
+      valueMin: number,
+      valueMax: number,
+      integer: boolean = false,
+    ): void => {
+      Object.assign(Config.automationTargets.dictionary[name], {
+        property,
+        scope: "instrument",
+        supportsAutomation: true,
+        valueMin,
+        valueMax,
+        integer,
+      });
+    };
+    instrumentTarget("pulseWidth", "pulseWidth", 0, Config.pulseWidthRange - 1);
+    instrumentTarget("stringSustain", "stringSustain", 0, Config.stringSustainRange - 1);
+    instrumentTarget("operatorFrequency", "operatorFrequency", 0, Config.operatorFrequencyMax);
+    instrumentTarget("operatorAmplitude", "operatorAmplitude", 0, Config.operatorAmplitudeMax, true);
+    instrumentTarget("feedbackAmplitude", "feedbackAmplitude", 0, Config.operatorAmplitudeMax, true);
+    instrumentTarget("pitchShift", "pitchShift", 0, Config.pitchShiftRange - 1);
+    instrumentTarget("detune", "detune", 0, Config.detuneMax);
+    instrumentTarget("noteFilterFreq", "noteFilterFrequency", 0, Config.filterFreqRange - 1);
+    instrumentTarget("noteFilterGain", "noteFilterGain", 0, Config.filterGainRange - 1);
+    instrumentTarget("supersawDynamism", "supersawDynamism", 0, Config.supersawDynamismMax);
+    instrumentTarget("supersawSpread", "supersawSpread", 0, Config.supersawSpreadMax);
+    instrumentTarget("supersawShape", "supersawShape", 0, Config.supersawShapeMax);
+  }
+
+  public static getAutomationValueDomain(
+    target: AutomationTarget,
+    operation: number,
+  ): AutomationValueDomain {
+    const targetMin: number = target.valueMin ?? 0;
+    const targetMax: number = target.valueMax ?? Config.defaultAutomationRange;
+    if (operation == 0) {
+      return {
+        min: Config.automationMultiplyMin,
+        max: Config.automationMultiplyMax,
+        integer: target.integer === true,
+      };
+    }
+    if (operation == 1) {
+      const span: number = Math.max(Math.abs(targetMin), Math.abs(targetMax), targetMax - targetMin);
+      return { min: -span, max: span, integer: target.integer === true };
+    }
+    return { min: targetMin, max: targetMax, integer: target.integer === true };
+  }
+
+  public static automationTargetIsValidForInstrument(
+    target: AutomationTarget,
+    instrument: AutomationInstrumentLike,
+    index: number,
+  ): boolean {
+    if (target.scope == "song" || target.supportsAutomation !== true) return false;
+    if (!Number.isInteger(index) || index < 0 || index >= target.maxCount) return false;
+    if (
+      target.compatibleInstruments != null &&
+      !target.compatibleInstruments.includes(instrument.type)
+    ) return false;
+    if (target.effect != null && (instrument.effects & (1 << target.effect)) == 0) return false;
+    if (target.property == "noteFilterFrequency" || target.property == "noteFilterGain") {
+      return index < instrument.noteFilter.controlPointCount;
+    }
+    if (target.property == "eqFilterFrequency" || target.property == "eqFilterGain") {
+      return index < instrument.eqFilter.controlPointCount;
+    }
+    return true;
+  }
+
+  public static getAutomationTargetsForInstrument(
+    instrument: AutomationInstrumentLike,
+  ): AutomationTargetChoice[] {
+    const choices: AutomationTargetChoice[] = [];
+    for (const target of Config.automationTargets) {
+      if (target.scope == "song" || target.supportsAutomation !== true) continue;
+      for (let index: number = 0; index < target.maxCount; index++) {
+        if (!Config.automationTargetIsValidForInstrument(target, instrument, index)) continue;
+        choices.push({
+          target,
+          index,
+          displayName: target.maxCount > 1
+            ? target.displayName.replace("#", String(index + 1))
+            : target.displayName,
+        });
+      }
+    }
+    return choices;
+  }
 }
 
 function centerWave(wave: Array<number>): Float32Array {

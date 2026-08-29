@@ -16,6 +16,8 @@ import {
   type Vibrato,
   type Envelope,
   type AutomationTarget,
+  type AutomationProperty,
+  type AutomationValueDomain,
   Config,
   getDrumWave,
   drawNoiseSpectrum,
@@ -63,7 +65,8 @@ const maximumSongAssetCount: number = 64;
 const maximumAssetSourceLength: number = 8192;
 const maximumSoundFontIdLength: number =
   "asset:".length + maximumAssetSourceLength;
-const compactSongValueVersion: number = 1;
+const compactSongValueVersion: number = 2;
+const legacyCompactSongValueVersion: number = 1;
 const compactInstrumentLowFieldCount: number = 31;
 const compactInstrumentFields: ReadonlyArray<string> = [
   "chipWave",
@@ -466,6 +469,238 @@ export function makeNotePin(
   return { interval: interval, time: time, size: size };
 }
 
+export enum ChannelKind {
+  pitch = "pitch",
+  noise = "noise",
+  automation = "automation",
+}
+
+export enum AutomationOperation {
+  Multiply = 0,
+  Add = 1,
+  Set = 2,
+}
+
+export interface AutomationContribution {
+  readonly operation: AutomationOperation;
+  readonly value: number;
+}
+
+export function sanitizeAutomationValue(
+  value: number,
+  domain: AutomationValueDomain,
+): number {
+  if (!Number.isFinite(value)) value = value > 0 ? domain.max : domain.min;
+  value = Math.max(domain.min, Math.min(domain.max, value));
+  return domain.integer ? Math.round(value) : value;
+}
+
+export function applyAutomationContributions(
+  baseValue: number,
+  contributions: readonly AutomationContribution[],
+  targetDomain: AutomationValueDomain,
+): number {
+  let value: number = Number.isFinite(baseValue) ? baseValue : targetDomain.min;
+  for (const contribution of contributions) {
+    if (!Number.isFinite(contribution.value)) continue;
+    switch (contribution.operation) {
+      case AutomationOperation.Multiply:
+        value *= contribution.value;
+        break;
+      case AutomationOperation.Add:
+        value += contribution.value;
+        break;
+      case AutomationOperation.Set:
+        value = contribution.value;
+        break;
+      default:
+        continue;
+    }
+    if (!Number.isFinite(value))
+      value = value > 0 ? targetDomain.max : targetDomain.min;
+  }
+  return sanitizeAutomationValue(value, targetDomain);
+}
+
+export function mapAutomationValueBetweenDomains(
+  value: number,
+  source: AutomationValueDomain,
+  destination: AutomationValueDomain,
+): number {
+  const sourceSpan: number = source.max - source.min;
+  const normalized: number =
+    sourceSpan <= 0 ? 0 : (value - source.min) / sourceSpan;
+  return sanitizeAutomationValue(
+    destination.min +
+      Math.max(0, Math.min(1, normalized)) *
+        (destination.max - destination.min),
+    destination,
+  );
+}
+
+export function mapAutomationClipboardValue(
+  value: number,
+  compatibleTarget: boolean,
+  source: AutomationValueDomain | null,
+  destination: AutomationValueDomain | null,
+): number {
+  if (compatibleTarget) return value;
+  if (destination == null) return 0;
+  if (source == null) return sanitizeAutomationValue(0, destination);
+  return mapAutomationValueBetweenDomains(value, source, destination);
+}
+
+export class AutomationPoint {
+  public constructor(
+    public time: number,
+    public value: number,
+  ) {}
+
+  public clone(): AutomationPoint {
+    return new AutomationPoint(this.time, this.value);
+  }
+}
+
+export class AutomationEvent {
+  public readonly points: AutomationPoint[];
+
+  public constructor(
+    public start: number,
+    public end: number,
+    points: readonly AutomationPoint[] = [
+      new AutomationPoint(0, 0),
+      new AutomationPoint(Math.max(0, end - start), 0),
+    ],
+  ) {
+    this.points = points.map((point: AutomationPoint): AutomationPoint =>
+      point.clone(),
+    );
+  }
+
+  public clone(): AutomationEvent {
+    return new AutomationEvent(this.start, this.end, this.points);
+  }
+
+  public getFinalValue(): number {
+    return this.points[this.points.length - 1]?.value ?? 0;
+  }
+
+  public getValueAt(part: number): number {
+    if (this.points.length == 0) return 0;
+    const eventTime: number = Math.max(0, Math.min(this.end - this.start, part - this.start));
+    if (eventTime <= this.points[0].time) return this.points[0].value;
+    for (let index: number = 1; index < this.points.length; index++) {
+      const next: AutomationPoint = this.points[index];
+      if (eventTime <= next.time) {
+        const previous: AutomationPoint = this.points[index - 1];
+        const duration: number = next.time - previous.time;
+        if (duration <= 0) return next.value;
+        const ratio: number = (eventTime - previous.time) / duration;
+        return previous.value + (next.value - previous.value) * ratio;
+      }
+    }
+    return this.getFinalValue();
+  }
+}
+
+export class AutomationRow {
+  /** -1 means Song. Other values are absolute pitch/noise channel indexes. */
+  public targetChannel: number = -1;
+  public targetChannelKind: ChannelKind = ChannelKind.pitch;
+  public targetInstrument: number = -1;
+  public targetId: string = "tempo";
+  public targetIndex: number = 0;
+  public operation: AutomationOperation = AutomationOperation.Set;
+  public targetChannelMissing: boolean = false;
+  public targetInstrumentMissing: boolean = false;
+  public targetElementMissing: boolean = false;
+
+  public clone(): AutomationRow {
+    const row: AutomationRow = new AutomationRow();
+    row.targetChannel = this.targetChannel;
+    row.targetChannelKind = this.targetChannelKind;
+    row.targetInstrument = this.targetInstrument;
+    row.targetId = this.targetId;
+    row.targetIndex = this.targetIndex;
+    row.operation = this.operation;
+    row.targetChannelMissing = this.targetChannelMissing;
+    row.targetInstrumentMissing = this.targetInstrumentMissing;
+    row.targetElementMissing = this.targetElementMissing;
+    return row;
+  }
+
+  public setSongTarget(targetId: string = "tempo", targetIndex: number = 0): void {
+    this.targetChannel = -1;
+    this.targetInstrument = -1;
+    this.targetId = targetId;
+    this.targetIndex = targetIndex;
+    this.targetChannelMissing = false;
+    this.targetInstrumentMissing = false;
+    this.targetElementMissing = false;
+  }
+
+  public setInstrumentTarget(
+    song: Song,
+    channel: number,
+    instrument: number,
+    targetId: string,
+    targetIndex: number = 0,
+  ): void {
+    if (song.getChannelIsAutomation(channel))
+      throw new Error("Automation channels cannot be automation targets.");
+    this.targetChannel = channel;
+    this.targetChannelKind = song.getChannelKind(channel);
+    this.targetInstrument = instrument;
+    this.targetId = targetId;
+    this.targetIndex = targetIndex;
+    this.targetChannelMissing = false;
+    this.targetInstrumentMissing = false;
+    this.targetElementMissing = false;
+  }
+
+  public getTarget(): AutomationTarget | null {
+    return Config.automationTargets.dictionary[this.targetId] ?? null;
+  }
+
+  public getValueDomain(): AutomationValueDomain | null {
+    const target: AutomationTarget | null = this.getTarget();
+    return target == null
+      ? null
+      : Config.getAutomationValueDomain(target, this.operation);
+  }
+
+  public isTargetValid(song: Song): boolean {
+    const target: AutomationTarget | null = this.getTarget();
+    if (
+      target == null ||
+      target.supportsAutomation !== true ||
+      this.targetElementMissing
+    ) return false;
+    if (this.targetChannel == -1) {
+      return target.scope == "song" && this.targetIndex == 0;
+    }
+    if (
+      target.scope != "instrument" ||
+      this.targetChannelMissing ||
+      this.targetInstrumentMissing ||
+      this.targetChannel < 0 ||
+      this.targetChannel >= song.getChannelCount() ||
+      song.getChannelIsAutomation(this.targetChannel) ||
+      song.getChannelKind(this.targetChannel) != this.targetChannelKind
+    ) return false;
+    const channel: Channel = song.channels[this.targetChannel];
+    if (
+      this.targetInstrument < 0 ||
+      this.targetInstrument >= channel.instruments.length
+    ) return false;
+    return Config.automationTargetIsValidForInstrument(
+      target,
+      channel.instruments[this.targetInstrument],
+      this.targetIndex,
+    );
+  }
+}
+
 export class Note {
   public pitches: number[];
   public pins: NotePin[];
@@ -544,6 +779,7 @@ export class Note {
 
 export class Pattern {
   public notes: Note[] = [];
+  public automationEvents: AutomationEvent[][] = [];
 
   public cloneNotes(): Note[] {
     const result: Note[] = [];
@@ -555,6 +791,114 @@ export class Pattern {
 
   public reset(): void {
     this.notes.length = 0;
+    this.automationEvents.length = 0;
+  }
+
+  public ensureAutomationRowCount(rowCount: number): void {
+    while (this.automationEvents.length < rowCount)
+      this.automationEvents.push([]);
+  }
+
+  public cloneAutomationEvents(): AutomationEvent[][] {
+    return this.automationEvents.map(
+      (events: AutomationEvent[]): AutomationEvent[] =>
+        events.map((event: AutomationEvent): AutomationEvent => event.clone()),
+    );
+  }
+
+  public clone(): Pattern {
+    const pattern: Pattern = new Pattern();
+    pattern.notes = this.cloneNotes();
+    pattern.automationEvents = this.cloneAutomationEvents();
+    return pattern;
+  }
+
+  public copyContentsFrom(pattern: Pattern): void {
+    this.notes = pattern.cloneNotes();
+    this.automationEvents = pattern.cloneAutomationEvents();
+  }
+
+  public hasContent(kind?: ChannelKind): boolean {
+    if (kind == ChannelKind.automation)
+      return this.automationEvents.some(
+        (events: AutomationEvent[]): boolean => events.length > 0,
+      );
+    if (kind == ChannelKind.pitch || kind == ChannelKind.noise)
+      return this.notes.length > 0;
+    return (
+      this.notes.length > 0 ||
+      this.automationEvents.some(
+        (events: AutomationEvent[]): boolean => events.length > 0,
+      )
+    );
+  }
+
+  public contentEquals(pattern: Pattern, kind: ChannelKind): boolean {
+    if (kind != ChannelKind.automation) {
+      if (this.notes.length != pattern.notes.length) return false;
+      for (let noteIndex: number = 0; noteIndex < this.notes.length; noteIndex++) {
+        const left: Note = this.notes[noteIndex];
+        const right: Note = pattern.notes[noteIndex];
+        if (
+          left.start != right.start ||
+          left.end != right.end ||
+          left.continuesLastPattern != right.continuesLastPattern ||
+          left.pitches.length != right.pitches.length ||
+          left.pins.length != right.pins.length ||
+          left.pitches.some(
+            (pitch: number, index: number): boolean =>
+              pitch != right.pitches[index],
+          ) ||
+          left.pins.some((pin: NotePin, index: number): boolean => {
+            const other: NotePin = right.pins[index];
+            return (
+              pin.interval != other.interval ||
+              pin.time != other.time ||
+              pin.size != other.size
+            );
+          })
+        ) return false;
+      }
+      return true;
+    }
+    if (this.automationEvents.length != pattern.automationEvents.length)
+      return false;
+    for (let rowIndex: number = 0; rowIndex < this.automationEvents.length; rowIndex++) {
+      const leftEvents: AutomationEvent[] = this.automationEvents[rowIndex];
+      const rightEvents: AutomationEvent[] = pattern.automationEvents[rowIndex];
+      if (leftEvents.length != rightEvents.length) return false;
+      for (let eventIndex: number = 0; eventIndex < leftEvents.length; eventIndex++) {
+        const left: AutomationEvent = leftEvents[eventIndex];
+        const right: AutomationEvent = rightEvents[eventIndex];
+        if (
+          left.start != right.start ||
+          left.end != right.end ||
+          left.points.length != right.points.length ||
+          left.points.some(
+            (point: AutomationPoint, index: number): boolean =>
+              point.time != right.points[index].time ||
+              point.value != right.points[index].value,
+          )
+        ) return false;
+      }
+    }
+    return true;
+  }
+
+  public toAutomationBinaryObject(): Object {
+    return {
+      rows: this.automationEvents.map(
+        (events: AutomationEvent[]): Object[] =>
+          events.map((event: AutomationEvent): Object => ({
+            start: event.start,
+            end: event.end,
+            points: event.points.map((point: AutomationPoint): Object => ({
+              time: point.time,
+              value: point.value,
+            })),
+          })),
+      ),
+    };
   }
 
   public toBinaryObject(): Object {
@@ -677,6 +1021,76 @@ export class Pattern {
       note.continuesLastPattern = noteObject.continuesLastPattern;
       this.notes.push(note);
       previousEnd = end;
+    }
+  }
+
+  public fromAutomationBinaryObject(
+    patternObject: any,
+    song: Song,
+    rows: readonly AutomationRow[],
+  ): void {
+    if (
+      patternObject == null ||
+      typeof patternObject != "object" ||
+      Array.isArray(patternObject) ||
+      !Array.isArray(patternObject.rows) ||
+      patternObject.rows.length != rows.length
+    ) throw new Error("Invalid .goop automation pattern.");
+    const maximumParts: number = song.beatsPerBar * Config.partsPerBeat;
+    this.automationEvents.length = 0;
+    for (let rowIndex: number = 0; rowIndex < rows.length; rowIndex++) {
+      const eventObjects: unknown = patternObject.rows[rowIndex];
+      if (
+        !Array.isArray(eventObjects) ||
+        eventObjects.length > Config.automationEventsPerRowMax
+      ) throw new Error("Invalid .goop automation event count.");
+      const events: AutomationEvent[] = [];
+      let previousEnd: number = 0;
+      const domain: AutomationValueDomain | null = rows[rowIndex].getValueDomain();
+      for (const eventObject of eventObjects) {
+        if (
+          eventObject == null ||
+          typeof eventObject != "object" ||
+          Array.isArray(eventObject) ||
+          typeof eventObject.start != "number" ||
+          !Number.isFinite(eventObject.start) ||
+          typeof eventObject.end != "number" ||
+          !Number.isFinite(eventObject.end) ||
+          eventObject.start < previousEnd ||
+          eventObject.start < 0 ||
+          eventObject.end <= eventObject.start ||
+          eventObject.end > maximumParts ||
+          !Array.isArray(eventObject.points) ||
+          eventObject.points.length < 1 ||
+          eventObject.points.length > Config.automationPointsPerEventMax
+        ) throw new Error("Invalid .goop automation event.");
+        const points: AutomationPoint[] = [];
+        const duration: number = eventObject.end - eventObject.start;
+        let previousTime: number = -1;
+        for (const pointObject of eventObject.points) {
+          if (
+            pointObject == null ||
+            typeof pointObject != "object" ||
+            Array.isArray(pointObject) ||
+            typeof pointObject.time != "number" ||
+            !Number.isFinite(pointObject.time) ||
+            pointObject.time <= previousTime ||
+            pointObject.time < 0 ||
+            pointObject.time > duration ||
+            (points.length == 0 && pointObject.time != 0) ||
+            typeof pointObject.value != "number" ||
+            !Number.isFinite(pointObject.value) ||
+            Math.abs(pointObject.value) > Config.automationValueMagnitudeMax ||
+            (domain != null &&
+              (pointObject.value < domain.min || pointObject.value > domain.max))
+          ) throw new Error("Invalid .goop automation point.");
+          points.push(new AutomationPoint(pointObject.time, pointObject.value));
+          previousTime = pointObject.time;
+        }
+        events.push(new AutomationEvent(eventObject.start, eventObject.end, points));
+        previousEnd = eventObject.end;
+      }
+      this.automationEvents.push(events);
     }
   }
 }
@@ -2684,6 +3098,7 @@ export class Instrument {
 export class Channel {
   public octave: number = 0;
   public readonly instruments: Instrument[] = [];
+  public readonly automationRows: AutomationRow[] = [];
   public readonly patterns: Pattern[] = [];
   public readonly bars: number[] = [];
   public muted: boolean = false;
@@ -2703,6 +3118,7 @@ export class Song {
   public loopLength!: number;
   public pitchChannelCount!: number;
   public noiseChannelCount!: number;
+  public automationChannelCount!: number;
   public readonly channels: Channel[] = [];
   public readonly assets: AssetDefinition[] = [];
 
@@ -2715,7 +3131,11 @@ export class Song {
   }
 
   public getChannelCount(): number {
-    return this.pitchChannelCount + this.noiseChannelCount;
+    return (
+      this.pitchChannelCount +
+      this.noiseChannelCount +
+      this.automationChannelCount
+    );
   }
 
   public getMaxInstrumentsPerChannel(): number {
@@ -2723,7 +3143,151 @@ export class Song {
   }
 
   public getChannelIsNoise(channelIndex: number): boolean {
-    return channelIndex >= this.pitchChannelCount;
+    return (
+      channelIndex >= this.pitchChannelCount &&
+      channelIndex < this.pitchChannelCount + this.noiseChannelCount
+    );
+  }
+
+  public getChannelIsPitch(channelIndex: number): boolean {
+    return channelIndex >= 0 && channelIndex < this.pitchChannelCount;
+  }
+
+  public getChannelIsAutomation(channelIndex: number): boolean {
+    return (
+      channelIndex >= this.pitchChannelCount + this.noiseChannelCount &&
+      channelIndex < this.getChannelCount()
+    );
+  }
+
+  public getChannelKind(channelIndex: number): ChannelKind {
+    if (this.getChannelIsPitch(channelIndex)) return ChannelKind.pitch;
+    if (this.getChannelIsNoise(channelIndex)) return ChannelKind.noise;
+    if (this.getChannelIsAutomation(channelIndex)) return ChannelKind.automation;
+    throw new RangeError("Channel index out of range.");
+  }
+
+  public getChannelIndexInKind(channelIndex: number): number {
+    const kind: ChannelKind = this.getChannelKind(channelIndex);
+    if (kind == ChannelKind.pitch) return channelIndex;
+    if (kind == ChannelKind.noise) return channelIndex - this.pitchChannelCount;
+    return channelIndex - this.pitchChannelCount - this.noiseChannelCount;
+  }
+
+  public createChannel(kind: ChannelKind): Channel {
+    const channel: Channel = new Channel();
+    channel.octave = kind == ChannelKind.pitch ? 3 : 0;
+    if (kind == ChannelKind.automation) {
+      for (
+        let rowIndex: number = 0;
+        rowIndex < Config.automationRowCountDefault;
+        rowIndex++
+      ) channel.automationRows.push(new AutomationRow());
+    } else {
+      const isNoise: boolean = kind == ChannelKind.noise;
+      for (
+        let instrumentIndex: number = 0;
+        instrumentIndex < Config.instrumentCountMin;
+        instrumentIndex++
+      ) {
+        const instrument: Instrument = new Instrument(isNoise);
+        instrument.setTypeAndReset(
+          isNoise ? InstrumentType.noise : InstrumentType.chip,
+          isNoise,
+        );
+        channel.instruments.push(instrument);
+      }
+    }
+    for (
+      let patternIndex: number = 0;
+      patternIndex < this.patternsPerChannel;
+      patternIndex++
+    ) {
+      const pattern: Pattern = new Pattern();
+      if (kind == ChannelKind.automation)
+        pattern.ensureAutomationRowCount(channel.automationRows.length);
+      channel.patterns.push(pattern);
+    }
+    for (let bar: number = 0; bar < this.barCount; bar++) channel.bars.push(0);
+    return channel;
+  }
+
+  public setAutomationRowCount(channelIndex: number, rowCount: number): void {
+    if (!this.getChannelIsAutomation(channelIndex))
+      throw new Error("Only Automation channels have automation rows.");
+    if (
+      !Number.isInteger(rowCount) ||
+      rowCount < Config.automationRowCountMin ||
+      rowCount > Config.automationRowCountMax
+    ) throw new RangeError("Automation row count out of range.");
+    const channel: Channel = this.channels[channelIndex];
+    while (channel.automationRows.length < rowCount)
+      channel.automationRows.push(new AutomationRow());
+    channel.automationRows.length = rowCount;
+    for (const pattern of channel.patterns) {
+      pattern.ensureAutomationRowCount(rowCount);
+      pattern.automationEvents.length = rowCount;
+    }
+  }
+
+  public forEachAutomationRow(
+    callback: (row: AutomationRow, channelIndex: number, rowIndex: number) => void,
+  ): void {
+    const firstAutomation: number =
+      this.pitchChannelCount + this.noiseChannelCount;
+    for (
+      let channelIndex: number = firstAutomation;
+      channelIndex < this.getChannelCount();
+      channelIndex++
+    ) {
+      const rows: AutomationRow[] = this.channels[channelIndex].automationRows;
+      for (let rowIndex: number = 0; rowIndex < rows.length; rowIndex++)
+        callback(rows[rowIndex], channelIndex, rowIndex);
+    }
+  }
+
+  /** Remaps live references. A null entry means the exact target was deleted. */
+  public remapAutomationChannelReferences(
+    oldToNew: readonly (number | null)[],
+  ): void {
+    this.forEachAutomationRow((row: AutomationRow): void => {
+      if (row.targetChannel < 0 || row.targetChannelMissing) return;
+      const replacement: number | null | undefined = oldToNew[row.targetChannel];
+      if (replacement == null) {
+        row.targetChannelMissing = true;
+        row.targetInstrumentMissing = true;
+      } else {
+        row.targetChannel = replacement;
+      }
+    });
+  }
+
+  public remapAutomationInstrumentReferences(
+    channelIndex: number,
+    oldToNew: readonly (number | null)[],
+  ): void {
+    this.forEachAutomationRow((row: AutomationRow): void => {
+      if (
+        row.targetChannel != channelIndex ||
+        row.targetChannelMissing ||
+        row.targetInstrumentMissing
+      ) return;
+      const replacement: number | null | undefined =
+        oldToNew[row.targetInstrument];
+      if (replacement == null) {
+        row.targetInstrumentMissing = true;
+      } else {
+        row.targetInstrument = replacement;
+      }
+    });
+  }
+
+  public referencesChannel(channelIndex: number): AutomationRow[] {
+    const result: AutomationRow[] = [];
+    this.forEachAutomationRow((row: AutomationRow): void => {
+      if (row.targetChannel == channelIndex) result.push(row);
+    });
+    return result;
   }
 
   public initToDefault(andResetChannels: boolean = true): void {
@@ -2743,12 +3307,14 @@ export class Song {
     if (andResetChannels) {
       this.pitchChannelCount = 3;
       this.noiseChannelCount = 1;
+      this.automationChannelCount = Config.automationChannelCountDefault;
       for (
         let channelIndex: number = 0;
         channelIndex < this.getChannelCount();
         channelIndex++
       ) {
-        const isNoiseChannel: boolean = channelIndex >= this.pitchChannelCount;
+        const kind: ChannelKind = this.getChannelKind(channelIndex);
+        const isNoiseChannel: boolean = kind == ChannelKind.noise;
         if (this.channels.length <= channelIndex) {
           this.channels[channelIndex] = new Channel();
         }
@@ -2765,23 +3331,38 @@ export class Song {
           } else {
             channel.patterns[pattern].reset();
           }
+          if (kind == ChannelKind.automation)
+            channel.patterns[pattern].ensureAutomationRowCount(
+              Config.automationRowCountDefault,
+            );
         }
         channel.patterns.length = this.patternsPerChannel;
 
-        for (
-          let instrument: number = 0;
-          instrument < Config.instrumentCountMin;
-          instrument++
-        ) {
-          if (channel.instruments.length <= instrument) {
-            channel.instruments[instrument] = new Instrument(isNoiseChannel);
+        if (kind == ChannelKind.automation) {
+          channel.instruments.length = 0;
+          channel.automationRows.length = 0;
+          for (
+            let rowIndex: number = 0;
+            rowIndex < Config.automationRowCountDefault;
+            rowIndex++
+          ) channel.automationRows.push(new AutomationRow());
+        } else {
+          channel.automationRows.length = 0;
+          for (
+            let instrument: number = 0;
+            instrument < Config.instrumentCountMin;
+            instrument++
+          ) {
+            if (channel.instruments.length <= instrument) {
+              channel.instruments[instrument] = new Instrument(isNoiseChannel);
+            }
+            channel.instruments[instrument].setTypeAndReset(
+              isNoiseChannel ? InstrumentType.noise : InstrumentType.chip,
+              isNoiseChannel,
+            );
           }
-          channel.instruments[instrument].setTypeAndReset(
-            isNoiseChannel ? InstrumentType.noise : InstrumentType.chip,
-            isNoiseChannel,
-          );
+          channel.instruments.length = Config.instrumentCountMin;
         }
-        channel.instruments.length = Config.instrumentCountMin;
 
         for (let bar: number = 0; bar < this.barCount; bar++) {
           channel.bars[bar] = 0;
@@ -2820,18 +3401,43 @@ export class Song {
       channelIndex++
     ) {
       const channel: Channel = this.channels[channelIndex];
-      const instrumentArray: Object[] = channel.instruments.map(
-        (instrument: Instrument): Object => instrument.toBinaryState(),
-      );
+      const kind: ChannelKind = this.getChannelKind(channelIndex);
+      const instrumentArray: Object[] =
+        kind == ChannelKind.automation
+          ? []
+          : channel.instruments.map(
+              (instrument: Instrument): Object => instrument.toBinaryState(),
+            );
       const patternArray: Object[] = [];
-      for (const pattern of channel.patterns)
-        patternArray.push(pattern.toBinaryObject());
-      channelArray.push({
+      for (const pattern of channel.patterns) {
+        patternArray.push(
+          kind == ChannelKind.automation
+            ? pattern.toAutomationBinaryObject()
+            : pattern.toBinaryObject(),
+        );
+      }
+      const channelObject: any = {
         octave: channel.octave,
         instruments: instrumentArray,
         patterns: patternArray,
         bars: channel.bars.concat(),
-      });
+      };
+      if (kind == ChannelKind.automation) {
+        channelObject.automationRows = channel.automationRows.map(
+          (row: AutomationRow): Object => ({
+            targetChannel: row.targetChannel,
+            targetChannelKind: row.targetChannelKind,
+            targetInstrument: row.targetInstrument,
+            targetId: row.targetId,
+            targetIndex: row.targetIndex,
+            operation: row.operation,
+            targetChannelMissing: row.targetChannelMissing,
+            targetInstrumentMissing: row.targetInstrumentMissing,
+            targetElementMissing: row.targetElementMissing,
+          }),
+        );
+      }
+      channelArray.push(channelObject);
     }
 
     return {
@@ -2847,6 +3453,7 @@ export class Song {
       loopLength: this.loopLength,
       pitchChannelCount: this.pitchChannelCount,
       noiseChannelCount: this.noiseChannelCount,
+      automationChannelCount: this.automationChannelCount,
       assets: this.assets.map((asset: AssetDefinition): string => asset.source),
       channels: channelArray,
     };
@@ -2900,7 +3507,13 @@ export class Song {
     let fractionalNoteSizeCount: number = 0;
     const durationDivisors: readonly number[] = [1, 2, 3, 4, 6, 8, 12];
     const durationCounts: Map<number, number> = new Map();
-    for (const channel of this.channels) {
+    for (
+      let channelIndex: number = 0;
+      channelIndex < this.getChannelCount();
+      channelIndex++
+    ) {
+      if (this.getChannelIsAutomation(channelIndex)) continue;
+      const channel: Channel = this.channels[channelIndex];
       const recentShapeKeys: string[] = [];
       for (const pattern of channel.patterns) {
         let currentPart: number = 0;
@@ -3051,6 +3664,8 @@ export class Song {
     ) {
       const channel: Channel = this.channels[channelIndex];
       const isNoiseChannel: boolean = this.getChannelIsNoise(channelIndex);
+      const isAutomationChannel: boolean =
+        this.getChannelIsAutomation(channelIndex);
       const instruments: unknown[] = [];
       for (const instrument of channel.instruments) {
         const state: any = instrument.toBinaryState();
@@ -3117,6 +3732,8 @@ export class Song {
       channels.push([channel.octave, instruments]);
 
       for (const bar of channel.bars) barBits.write(barBitCount, bar);
+
+      if (isAutomationChannel) continue;
 
       const octaveOffset: number = isNoiseChannel
         ? 0
@@ -3252,8 +3869,10 @@ export class Song {
       }
     }
 
-    return [
-      compactSongValueVersion,
+    const commonPrefix: unknown[] = [
+      this.automationChannelCount == 0
+        ? legacyCompactSongValueVersion
+        : compactSongValueVersion,
       this.scale,
       this.key,
       this.composingKey,
@@ -3266,11 +3885,66 @@ export class Song {
       this.loopLength,
       this.pitchChannelCount,
       this.noiseChannelCount,
+    ];
+    if (this.automationChannelCount == 0) {
+      return [
+        ...commonPrefix,
+        assetSources,
+        channels,
+        barBits.finish(),
+        patternBits.finish(),
+      ];
+    }
+    return [
+      ...commonPrefix,
+      this.automationChannelCount,
       assetSources,
       channels,
       barBits.finish(),
       patternBits.finish(),
+      this._toCompactAutomationValue(),
     ];
+  }
+
+  private _toCompactAutomationValue(): unknown[] {
+    const result: unknown[] = [];
+    const firstAutomation: number =
+      this.pitchChannelCount + this.noiseChannelCount;
+    for (
+      let channelIndex: number = firstAutomation;
+      channelIndex < this.getChannelCount();
+      channelIndex++
+    ) {
+      const channel: Channel = this.channels[channelIndex];
+      const rows: unknown[] = channel.automationRows.map(
+        (row: AutomationRow): unknown[] => [
+          row.targetChannel,
+          row.targetChannelKind == ChannelKind.pitch ? 0 : 1,
+          row.targetInstrument,
+          row.targetId,
+          row.targetIndex,
+          row.operation,
+          (row.targetChannelMissing ? 1 : 0) |
+            (row.targetInstrumentMissing ? 2 : 0) |
+            (row.targetElementMissing ? 4 : 0),
+        ],
+      );
+      const patterns: unknown[] = channel.patterns.map(
+        (pattern: Pattern): unknown[] =>
+          pattern.automationEvents.map(
+            (events: AutomationEvent[]): unknown[] =>
+              events.map((event: AutomationEvent): unknown[] => [
+                event.start,
+                event.end,
+                event.points.flatMap(
+                  (point: AutomationPoint): number[] => [point.time, point.value],
+                ),
+              ]),
+          ),
+      );
+      result.push([rows, patterns]);
+    }
+    return result;
   }
 
   private static _expandCompactInstruments(
@@ -3576,22 +4250,128 @@ export class Song {
     return decodedChannels;
   }
 
+  private static _expandCompactAutomationValue(
+    value: unknown,
+    automationChannelCount: number,
+    patternsPerChannel: number,
+  ): Object[] {
+    if (!Array.isArray(value) || value.length != automationChannelCount)
+      throw new Error("Invalid compact .goop automation data.");
+    return value.map((channelValue: unknown): Object => {
+      if (!Array.isArray(channelValue) || channelValue.length != 2)
+        throw new Error("Invalid compact .goop automation channel.");
+      const rowValues: unknown = channelValue[0];
+      const patternValues: unknown = channelValue[1];
+      if (
+        !Array.isArray(rowValues) ||
+        rowValues.length < Config.automationRowCountMin ||
+        rowValues.length > Config.automationRowCountMax ||
+        !Array.isArray(patternValues) ||
+        patternValues.length != patternsPerChannel
+      ) throw new Error("Invalid compact .goop automation structure.");
+      const automationRows: Object[] = rowValues.map(
+        (rowValue: unknown): Object => {
+          if (!Array.isArray(rowValue) || rowValue.length != 7)
+            throw new Error("Invalid compact .goop automation row.");
+          const [targetChannel, targetKind, targetInstrument, targetId, targetIndex, operation, flags] = rowValue;
+          if (
+            typeof targetChannel != "number" ||
+            !Number.isInteger(targetChannel) ||
+            targetChannel < -1 ||
+            targetChannel >= Config.pitchChannelCountMax + Config.noiseChannelCountMax ||
+            (targetKind != 0 && targetKind != 1) ||
+            typeof targetInstrument != "number" ||
+            !Number.isInteger(targetInstrument) ||
+            targetInstrument < -1 ||
+            targetInstrument > Config.instrumentCountMax ||
+            typeof targetId != "string" ||
+            targetId.length == 0 ||
+            targetId.length > Config.automationTargetIdLengthMax ||
+            typeof targetIndex != "number" ||
+            !Number.isInteger(targetIndex) ||
+            targetIndex < 0 ||
+            targetIndex > Config.automationTargetIndexMax ||
+            typeof operation != "number" ||
+            !Number.isInteger(operation) ||
+            operation < AutomationOperation.Multiply ||
+            operation > AutomationOperation.Set ||
+            typeof flags != "number" ||
+            !Number.isInteger(flags) ||
+            flags < 0 ||
+            flags > 7
+          ) throw new Error("Invalid compact .goop automation row.");
+          return {
+            targetChannel,
+            targetChannelKind:
+              targetKind == 0 ? ChannelKind.pitch : ChannelKind.noise,
+            targetInstrument,
+            targetId,
+            targetIndex,
+            operation,
+            targetChannelMissing: (flags & 1) != 0,
+            targetInstrumentMissing: (flags & 2) != 0,
+            targetElementMissing: (flags & 4) != 0,
+          };
+        },
+      );
+      const patterns: Object[] = patternValues.map(
+        (patternValue: unknown): Object => {
+          if (!Array.isArray(patternValue) || patternValue.length != rowValues.length)
+            throw new Error("Invalid compact .goop automation pattern.");
+          const rows: Object[][] = patternValue.map(
+            (eventsValue: unknown): Object[] => {
+              if (
+                !Array.isArray(eventsValue) ||
+                eventsValue.length > Config.automationEventsPerRowMax
+              ) throw new Error("Invalid compact .goop automation event count.");
+              return eventsValue.map((eventValue: unknown): Object => {
+                if (!Array.isArray(eventValue) || eventValue.length != 3)
+                  throw new Error("Invalid compact .goop automation event.");
+                const [start, end, pointValues] = eventValue;
+                if (
+                  typeof start != "number" ||
+                  !Number.isFinite(start) ||
+                  typeof end != "number" ||
+                  !Number.isFinite(end) ||
+                  !Array.isArray(pointValues) ||
+                  pointValues.length < 2 ||
+                  pointValues.length % 2 != 0 ||
+                  pointValues.length > Config.automationPointsPerEventMax * 2
+                ) throw new Error("Invalid compact .goop automation event.");
+                const points: Object[] = [];
+                for (let index: number = 0; index < pointValues.length; index += 2) {
+                  const time: unknown = pointValues[index];
+                  const operand: unknown = pointValues[index + 1];
+                  if (
+                    typeof time != "number" ||
+                    !Number.isFinite(time) ||
+                    typeof operand != "number" ||
+                    !Number.isFinite(operand) ||
+                    Math.abs(operand) > Config.automationValueMagnitudeMax
+                  ) throw new Error("Invalid compact .goop automation point.");
+                  points.push({ time, value: operand });
+                }
+                return { start, end, points };
+              });
+            },
+          );
+          return { rows };
+        },
+      );
+      return { automationRows, patterns };
+    });
+  }
+
   private static _expandCompactBinaryValue(value: unknown): Object {
-    if (
-      !Array.isArray(value) ||
-      value.length != 17 ||
-      value[0] != compactSongValueVersion
-    )
+    if (!Array.isArray(value) || value.length == 0)
       throw new Error("Invalid compact .goop song data.");
-    const compactChannels: unknown = value[14];
-    const barData: unknown = value[15];
-    const patternData: unknown = value[16];
+    const version: unknown = value[0];
+    const isVersion1: boolean = version == legacyCompactSongValueVersion;
+    const isVersion2: boolean = version == compactSongValueVersion;
     if (
-      !Array.isArray(compactChannels) ||
-      !(barData instanceof Uint8Array) ||
-      !(patternData instanceof Uint8Array)
-    )
-      throw new Error("Invalid compact .goop channel data.");
+      (!isVersion1 && !isVersion2) ||
+      value.length != (isVersion1 ? 17 : 19)
+    ) throw new Error("Invalid compact .goop song data.");
     const compactInteger = (
       candidate: unknown,
       minimum: number,
@@ -3637,7 +4417,28 @@ export class Song {
       Config.noiseChannelCountMax,
       "noise channel count",
     );
-    const channelCount: number = pitchChannelCount + noiseChannelCount;
+    const automationChannelCount: number = isVersion2
+      ? compactInteger(
+          value[13],
+          Config.automationChannelCountMin,
+          Config.automationChannelCountMax,
+          "automation channel count",
+        )
+      : 0;
+    const assetsIndex: number = isVersion2 ? 14 : 13;
+    const channelsIndex: number = isVersion2 ? 15 : 14;
+    const barsIndex: number = isVersion2 ? 16 : 15;
+    const patternsIndex: number = isVersion2 ? 17 : 16;
+    const compactChannels: unknown = value[channelsIndex];
+    const barData: unknown = value[barsIndex];
+    const patternData: unknown = value[patternsIndex];
+    if (
+      !Array.isArray(compactChannels) ||
+      !(barData instanceof Uint8Array) ||
+      !(patternData instanceof Uint8Array)
+    ) throw new Error("Invalid compact .goop channel data.");
+    const musicalChannelCount: number = pitchChannelCount + noiseChannelCount;
+    const channelCount: number = musicalChannelCount + automationChannelCount;
     if (compactChannels.length != channelCount)
       throw new Error("Invalid compact .goop channel count.");
     const bars: number[][] = Song._decodeCompactBars(
@@ -3648,20 +4449,43 @@ export class Song {
     );
     const patterns: Object[][] = Song._decodeCompactPatterns(
       patternData,
-      compactChannels,
+      compactChannels.slice(0, musicalChannelCount),
       pitchChannelCount,
       beatsPerBar,
       patternsPerChannel,
     );
+    const compactAutomationChannels: Object[] = isVersion2
+      ? Song._expandCompactAutomationValue(
+          value[18],
+          automationChannelCount,
+          patternsPerChannel,
+        )
+      : [];
     const channels: Object[] = compactChannels.map(
       (compactChannel: unknown, channelIndex: number): Object => {
         if (!Array.isArray(compactChannel) || compactChannel.length != 2)
           throw new Error("Invalid compact .goop channel data.");
+        if (channelIndex >= musicalChannelCount) {
+          if (
+            compactChannel[0] != 0 ||
+            !Array.isArray(compactChannel[1]) ||
+            compactChannel[1].length != 0
+          ) throw new Error("Invalid compact .goop automation channel data.");
+          const automationChannel: any =
+            compactAutomationChannels[channelIndex - musicalChannelCount];
+          return {
+            octave: 0,
+            instruments: [],
+            automationRows: automationChannel.automationRows,
+            patterns: automationChannel.patterns,
+            bars: bars[channelIndex],
+          };
+        }
         return {
           octave: compactChannel[0],
           instruments: Song._expandCompactInstruments(
             compactChannel[1],
-            value[13],
+            value[assetsIndex],
           ),
           patterns: patterns[channelIndex],
           bars: bars[channelIndex],
@@ -3681,7 +4505,8 @@ export class Song {
       loopLength: value[10],
       pitchChannelCount: pitchChannelCount,
       noiseChannelCount: noiseChannelCount,
-      assets: value[13],
+      automationChannelCount: automationChannelCount,
+      assets: value[assetsIndex],
       channels: channels,
     };
   }
@@ -3725,6 +4550,7 @@ export class Song {
     this.loopLength = song.loopLength;
     this.pitchChannelCount = song.pitchChannelCount;
     this.noiseChannelCount = song.noiseChannelCount;
+    this.automationChannelCount = song.automationChannelCount;
     this.assets.splice(0, this.assets.length, ...song.assets);
     this.channels.splice(0, this.channels.length, ...song.channels);
   }
@@ -3798,6 +4624,14 @@ export class Song {
       Config.noiseChannelCountMin,
       Config.noiseChannelCountMax,
     );
+    this.automationChannelCount =
+      songObject.automationChannelCount == undefined
+        ? Config.automationChannelCountDefault
+        : integer(
+            "automationChannelCount",
+            Config.automationChannelCountMin,
+            Config.automationChannelCountMax,
+          );
     if (
       !Array.isArray(songObject.channels) ||
       songObject.channels.length != this.getChannelCount()
@@ -3813,13 +4647,17 @@ export class Song {
       channelIndex++
     ) {
       const channelObject: any = songObject.channels[channelIndex];
+      const kind: ChannelKind = this.getChannelKind(channelIndex);
+      const isAutomationChannel: boolean = kind == ChannelKind.automation;
       if (
         channelObject == null ||
         typeof channelObject != "object" ||
         Array.isArray(channelObject) ||
         !Array.isArray(channelObject.instruments) ||
-        channelObject.instruments.length < Config.instrumentCountMin ||
-        channelObject.instruments.length > Config.instrumentCountMax ||
+        (isAutomationChannel
+          ? channelObject.instruments.length != 0
+          : channelObject.instruments.length < Config.instrumentCountMin ||
+            channelObject.instruments.length > Config.instrumentCountMax) ||
         !Array.isArray(channelObject.patterns) ||
         channelObject.patterns.length != this.patternsPerChannel ||
         !Array.isArray(channelObject.bars) ||
@@ -3827,20 +4665,70 @@ export class Song {
       ) {
         throw new Error("Invalid .goop channel or instrument structure.");
       }
-      const isNoiseChannel: boolean = channelIndex >= this.pitchChannelCount;
+      const isNoiseChannel: boolean = kind == ChannelKind.noise;
       const octave: unknown = channelObject.octave;
       if (
         typeof octave != "number" ||
         !Number.isInteger(octave) ||
         octave < 0 ||
         octave >= Config.pitchOctaves ||
-        (isNoiseChannel && octave != 0)
+        ((isNoiseChannel || isAutomationChannel) && octave != 0)
       ) {
         throw new Error("Invalid .goop channel octave.");
       }
 
       const channel: Channel = new Channel();
       channel.octave = octave;
+      if (isAutomationChannel) {
+        if (
+          !Array.isArray(channelObject.automationRows) ||
+          channelObject.automationRows.length < Config.automationRowCountMin ||
+          channelObject.automationRows.length > Config.automationRowCountMax
+        ) throw new Error("Invalid .goop automation row count.");
+        for (const rowObject of channelObject.automationRows) {
+          if (
+            rowObject == null ||
+            typeof rowObject != "object" ||
+            Array.isArray(rowObject) ||
+            typeof rowObject.targetChannel != "number" ||
+            !Number.isInteger(rowObject.targetChannel) ||
+            rowObject.targetChannel < -1 ||
+            rowObject.targetChannel >=
+              Config.pitchChannelCountMax + Config.noiseChannelCountMax ||
+            (rowObject.targetChannelKind != ChannelKind.pitch &&
+              rowObject.targetChannelKind != ChannelKind.noise) ||
+            typeof rowObject.targetInstrument != "number" ||
+            !Number.isInteger(rowObject.targetInstrument) ||
+            rowObject.targetInstrument < -1 ||
+            rowObject.targetInstrument > Config.instrumentCountMax ||
+            typeof rowObject.targetId != "string" ||
+            rowObject.targetId.length == 0 ||
+            rowObject.targetId.length > Config.automationTargetIdLengthMax ||
+            typeof rowObject.targetIndex != "number" ||
+            !Number.isInteger(rowObject.targetIndex) ||
+            rowObject.targetIndex < 0 ||
+            rowObject.targetIndex > Config.automationTargetIndexMax ||
+            typeof rowObject.operation != "number" ||
+            !Number.isInteger(rowObject.operation) ||
+            rowObject.operation < AutomationOperation.Multiply ||
+            rowObject.operation > AutomationOperation.Set ||
+            typeof rowObject.targetChannelMissing != "boolean" ||
+            typeof rowObject.targetInstrumentMissing != "boolean" ||
+            typeof rowObject.targetElementMissing != "boolean"
+          ) throw new Error("Invalid .goop automation row.");
+          const row: AutomationRow = new AutomationRow();
+          row.targetChannel = rowObject.targetChannel;
+          row.targetChannelKind = rowObject.targetChannelKind;
+          row.targetInstrument = rowObject.targetInstrument;
+          row.targetId = rowObject.targetId;
+          row.targetIndex = rowObject.targetIndex;
+          row.operation = rowObject.operation;
+          row.targetChannelMissing = rowObject.targetChannelMissing;
+          row.targetInstrumentMissing = rowObject.targetInstrumentMissing;
+          row.targetElementMissing = rowObject.targetElementMissing;
+          channel.automationRows.push(row);
+        }
+      }
       for (const instrumentState of channelObject.instruments) {
         if (
           instrumentState == null ||
@@ -3871,7 +4759,15 @@ export class Song {
       }
       for (const patternObject of channelObject.patterns) {
         const pattern: Pattern = new Pattern();
-        pattern.fromBinaryObject(patternObject, this, isNoiseChannel);
+        if (isAutomationChannel) {
+          pattern.fromAutomationBinaryObject(
+            patternObject,
+            this,
+            channel.automationRows,
+          );
+        } else {
+          pattern.fromBinaryObject(patternObject, this, isNoiseChannel);
+        }
         channel.patterns.push(pattern);
       }
       for (const bar of channelObject.bars) {
@@ -4968,7 +5864,7 @@ class InstrumentState {
   public allocateNecessaryBuffers(
     synth: Synth,
     instrument: Instrument,
-    samplesPerTick: number,
+    _samplesPerTick: number,
   ): void {
     if (
       this.panningDelayLine == null ||
@@ -4991,15 +5887,14 @@ class InstrumentState {
       }
     }
     if (effectsIncludeEcho(instrument.effects)) {
-      // account for tempo and delay automation changing delay length during a tick?
-      const safeEchoDelaySteps: number = Math.max(
-        Config.echoDelayRange >> 1,
-        instrument.echoDelay + 1,
-      ); // The delay may be very short now, but if it increases later make sure we have enough sample history.
+      const safeEchoDelaySteps: number = Config.echoDelayRange;
+      const maximumSamplesPerTick: number =
+        synth.samplesPerSecond /
+        ((Config.tempoMin / 60) * Config.partsPerBeat * Config.ticksPerPart);
       const baseEchoDelayBufferSize: number = Synth.fittingPowerOfTwo(
-        safeEchoDelaySteps * Config.echoDelayStepTicks * samplesPerTick,
+        safeEchoDelaySteps * Config.echoDelayStepTicks * maximumSamplesPerTick,
       );
-      const safeEchoDelayBufferSize: number = baseEchoDelayBufferSize * 2; // If the tempo or delay changes and we suddenly need a longer delay, make sure that we have enough sample history to accomodate the longer delay.
+      const safeEchoDelayBufferSize: number = baseEchoDelayBufferSize;
 
       if (this.echoDelayLineL == null || this.echoDelayLineR == null) {
         this.echoDelayLineL = new Float32Array(safeEchoDelayBufferSize);
@@ -5008,9 +5903,8 @@ class InstrumentState {
         this.echoDelayLineL.length < safeEchoDelayBufferSize ||
         this.echoDelayLineR.length < safeEchoDelayBufferSize
       ) {
-        // The echo delay length may change whlie the song is playing if tempo changes,
-        // so buffers may need to be reallocated, but we don't want to lose any echoes
-        // so we need to copy the contents of the old buffer to the new one.
+        // A sample-rate change can require a larger legal-maximum buffer. Preserve
+        // both channels while growing it; tempo automation itself never reallocates.
         const newDelayLineL: Float32Array = new Float32Array(
           safeEchoDelayBufferSize,
         );
@@ -5023,7 +5917,7 @@ class InstrumentState {
           newDelayLineL[i] =
             this.echoDelayLineL[(this.echoDelayPos + i) & oldMask];
           newDelayLineR[i] =
-            this.echoDelayLineL[(this.echoDelayPos + i) & oldMask];
+            this.echoDelayLineR[(this.echoDelayPos + i) & oldMask];
         }
 
         this.echoDelayPos = this.echoDelayLineL.length;
@@ -5662,6 +6556,381 @@ class InstrumentState {
   }
 }
 
+interface ResolvedAutomationValue {
+  readonly channelIndex: number;
+  readonly instrumentIndex: number;
+  readonly target: AutomationTarget;
+  readonly targetIndex: number;
+  value: number;
+}
+
+export class AutomationRuntime {
+  private _song: Song | null = null;
+  private readonly _latchedValues: Array<Array<number | null>> = [];
+  private readonly _muted: boolean[] = [];
+  private readonly _effectiveInstruments: Array<Array<Instrument | null>> = [];
+  private _effectiveTempo: number = Config.tempoMin;
+  private _needsReconstruction: boolean = true;
+
+  public reset(song: Song | null): void {
+    this._song = song;
+    this._latchedValues.length = 0;
+    this._muted.length = 0;
+    this._effectiveInstruments.length = 0;
+    this._effectiveTempo = song?.tempo ?? Config.tempoMin;
+    this._needsReconstruction = true;
+  }
+
+  public invalidatePosition(): void {
+    this._needsReconstruction = true;
+  }
+
+  public getEffectiveTempo(): number {
+    return this._effectiveTempo;
+  }
+
+  public getEffectiveInstrument(
+    song: Song,
+    channelIndex: number,
+    instrumentIndex: number,
+  ): Instrument {
+    return (
+      this._effectiveInstruments[channelIndex]?.[instrumentIndex] ??
+      song.channels[channelIndex].instruments[instrumentIndex]
+    );
+  }
+
+  public getLatchedOperand(
+    automationChannelIndex: number,
+    rowIndex: number,
+  ): number | null {
+    return this._latchedValues[automationChannelIndex]?.[rowIndex] ?? null;
+  }
+
+  private _findValueInPattern(
+    pattern: Pattern | null,
+    rowIndex: number,
+    part: number,
+  ): { found: boolean; value: number } {
+    const events: AutomationEvent[] | undefined =
+      pattern?.automationEvents[rowIndex];
+    if (events == undefined) return { found: false, value: 0 };
+    let found: boolean = false;
+    let value: number = 0;
+    for (const event of events) {
+      if (part < event.start) break;
+      if (part < event.end) {
+        return { found: true, value: event.getValueAt(part) };
+      }
+      found = true;
+      value = event.getFinalValue();
+    }
+    return { found, value };
+  }
+
+  private _reconstructRow(
+    song: Song,
+    channelIndex: number,
+    rowIndex: number,
+    bar: number,
+    part: number,
+  ): number | null {
+    const current: { found: boolean; value: number } = this._findValueInPattern(
+      song.getPattern(channelIndex, bar),
+      rowIndex,
+      part,
+    );
+    if (current.found) return Number.isFinite(current.value) ? current.value : null;
+    for (let previousBar: number = bar - 1; previousBar >= 0; previousBar--) {
+      const events: AutomationEvent[] | undefined =
+        song.getPattern(channelIndex, previousBar)?.automationEvents[rowIndex];
+      if (events != undefined && events.length > 0) {
+        const value: number = events[events.length - 1].getFinalValue();
+        return Number.isFinite(value) ? value : null;
+      }
+    }
+    return null;
+  }
+
+  private _applyOperation(
+    value: number,
+    operation: AutomationOperation,
+    operand: number,
+    domain: AutomationValueDomain,
+  ): number {
+    if (!Number.isFinite(operand)) return value;
+    switch (operation) {
+      case AutomationOperation.Multiply:
+        value *= operand;
+        break;
+      case AutomationOperation.Add:
+        value += operand;
+        break;
+      case AutomationOperation.Set:
+        value = operand;
+        break;
+    }
+    if (Number.isFinite(value)) return value;
+    return value > 0 ? domain.max : domain.min;
+  }
+
+  private _getInstrumentTargetValue(
+    instrument: Instrument,
+    property: AutomationProperty,
+    index: number,
+  ): number | null {
+    switch (property) {
+      case "mixVolume": return instrument.volume;
+      case "pan": return instrument.pan;
+      case "noteFilterFrequency": return instrument.noteFilter.controlPoints[index]?.freq ?? null;
+      case "noteFilterGain": return instrument.noteFilter.controlPoints[index]?.gain ?? null;
+      case "eqFilterFrequency": return instrument.eqFilter.controlPoints[index]?.freq ?? null;
+      case "eqFilterGain": return instrument.eqFilter.controlPoints[index]?.gain ?? null;
+      case "distortion": return instrument.distortion;
+      case "chorus": return instrument.chorus;
+      case "reverb": return instrument.reverb;
+      case "echoSustain": return instrument.echoSustain;
+      case "echoDelay": return instrument.echoDelay;
+      case "bitcrusherFrequency": return instrument.bitcrusherFreq;
+      case "bitcrusherQuantization": return instrument.bitcrusherQuantization;
+      case "pitchShift": return instrument.pitchShift;
+      case "detune": return instrument.detune;
+      case "vibrato": return instrument.vibrato;
+      case "pulseWidth": return instrument.pulseWidth;
+      case "stringSustain": return instrument.stringSustain;
+      case "operatorFrequency": return instrument.operators[index]?.frequency ?? null;
+      case "operatorAmplitude": return instrument.operators[index]?.amplitude ?? null;
+      case "feedbackAmplitude": return instrument.feedbackAmplitude;
+      case "supersawDynamism": return instrument.supersawDynamism;
+      case "supersawSpread": return instrument.supersawSpread;
+      case "supersawShape": return instrument.supersawShape;
+      case "tempo": return null;
+    }
+  }
+
+  private _cloneFilter(settings: FilterSettings): FilterSettings {
+    const clone: FilterSettings = Object.create(settings) as FilterSettings;
+    const points: FilterControlPoint[] = [];
+    for (let index: number = 0; index < settings.controlPointCount; index++) {
+      points.push(Object.create(settings.controlPoints[index]) as FilterControlPoint);
+    }
+    (clone as { controlPoints: FilterControlPoint[] }).controlPoints = points;
+    return clone;
+  }
+
+  private _setInstrumentTargetValue(
+    effective: Instrument,
+    base: Instrument,
+    property: AutomationProperty,
+    index: number,
+    value: number,
+  ): void {
+    switch (property) {
+      case "mixVolume": effective.volume = value; return;
+      case "pan": effective.pan = value; return;
+      case "distortion": effective.distortion = value; return;
+      case "chorus": effective.chorus = value; return;
+      case "reverb": effective.reverb = value; return;
+      case "echoSustain": effective.echoSustain = value; return;
+      case "echoDelay": effective.echoDelay = value; return;
+      case "bitcrusherFrequency": effective.bitcrusherFreq = value; return;
+      case "bitcrusherQuantization": effective.bitcrusherQuantization = value; return;
+      case "pitchShift": effective.pitchShift = value; return;
+      case "detune": effective.detune = value; return;
+      case "vibrato": effective.vibrato = value; return;
+      case "pulseWidth": effective.pulseWidth = value; return;
+      case "stringSustain": effective.stringSustain = value; return;
+      case "feedbackAmplitude": effective.feedbackAmplitude = value; return;
+      case "supersawDynamism": effective.supersawDynamism = value; return;
+      case "supersawSpread": effective.supersawSpread = value; return;
+      case "supersawShape": effective.supersawShape = value; return;
+      case "noteFilterFrequency":
+      case "noteFilterGain": {
+        if (effective.noteFilter === base.noteFilter)
+          effective.noteFilter = this._cloneFilter(base.noteFilter);
+        const point: FilterControlPoint | undefined =
+          effective.noteFilter.controlPoints[index];
+        if (point != undefined) {
+          if (property == "noteFilterFrequency") point.freq = value;
+          else point.gain = value;
+        }
+        return;
+      }
+      case "eqFilterFrequency":
+      case "eqFilterGain": {
+        if (effective.eqFilter === base.eqFilter)
+          effective.eqFilter = this._cloneFilter(base.eqFilter);
+        const point: FilterControlPoint | undefined =
+          effective.eqFilter.controlPoints[index];
+        if (point != undefined) {
+          if (property == "eqFilterFrequency") point.freq = value;
+          else point.gain = value;
+        }
+        return;
+      }
+      case "operatorFrequency":
+      case "operatorAmplitude": {
+        if (effective.operators === base.operators) {
+          (effective as { operators: Operator[] }).operators =
+            base.operators.map(
+              (operator: Operator): Operator => Object.create(operator) as Operator,
+            );
+        }
+        const operator: Operator | undefined = effective.operators[index];
+        if (operator != undefined) {
+          if (property == "operatorFrequency") operator.frequency = value;
+          else operator.amplitude = value;
+        }
+        return;
+      }
+      case "tempo": return;
+    }
+  }
+
+  public update(
+    song: Song,
+    bar: number,
+    part: number,
+    continuous: boolean,
+  ): void {
+    if (this._song !== song) this.reset(song);
+    const reconstructAll: boolean = this._needsReconstruction || !continuous;
+    const firstAutomation: number = song.pitchChannelCount + song.noiseChannelCount;
+    for (let channelIndex: number = 0; channelIndex < song.getChannelCount(); channelIndex++) {
+      const channel: Channel = song.channels[channelIndex];
+      while (this._effectiveInstruments.length <= channelIndex)
+        this._effectiveInstruments.push([]);
+      const instruments: Array<Instrument | null> =
+        this._effectiveInstruments[channelIndex];
+      instruments.length = channel.instruments.length;
+      instruments.fill(null);
+      if (channelIndex < firstAutomation) continue;
+      while (this._latchedValues.length <= channelIndex)
+        this._latchedValues.push([]);
+      const latches: Array<number | null> = this._latchedValues[channelIndex];
+      const wasMuted: boolean = this._muted[channelIndex] === true;
+      const reconstructChannel: boolean = reconstructAll || (wasMuted && !channel.muted);
+      latches.length = channel.automationRows.length;
+      for (let rowIndex: number = 0; rowIndex < channel.automationRows.length; rowIndex++) {
+        if (reconstructChannel || latches[rowIndex] === undefined) {
+          latches[rowIndex] = this._reconstructRow(
+            song,
+            channelIndex,
+            rowIndex,
+            bar,
+            part,
+          );
+        } else if (!channel.muted) {
+          const current = this._findValueInPattern(
+            song.getPattern(channelIndex, bar),
+            rowIndex,
+            part,
+          );
+          if (current.found && Number.isFinite(current.value))
+            latches[rowIndex] = current.value;
+        }
+      }
+      this._muted[channelIndex] = channel.muted;
+    }
+
+    const resolvedValues: Map<number, ResolvedAutomationValue> = new Map();
+    const targetStride: number = Config.automationTargetIndexMax + 1;
+    let tempoValue: number = song.tempo;
+    const tempoTarget: AutomationTarget =
+      Config.automationTargets.dictionary["tempo"];
+    const tempoDomain: AutomationValueDomain = {
+      min: tempoTarget.valueMin!,
+      max: tempoTarget.valueMax!,
+      integer: tempoTarget.integer === true,
+    };
+    for (
+      let channelIndex: number = song.getChannelCount() - 1;
+      channelIndex >= firstAutomation;
+      channelIndex--
+    ) {
+      const channel: Channel = song.channels[channelIndex];
+      if (channel.muted) continue;
+      for (let rowIndex: number = channel.automationRows.length - 1; rowIndex >= 0; rowIndex--) {
+        const row: AutomationRow = channel.automationRows[rowIndex];
+        const operand: number | null = this._latchedValues[channelIndex]?.[rowIndex] ?? null;
+        if (operand == null || !row.isTargetValid(song)) continue;
+        const target: AutomationTarget = row.getTarget()!;
+        if (target.scope == "song") {
+          tempoValue = this._applyOperation(
+            tempoValue,
+            row.operation,
+            operand,
+            tempoDomain,
+          );
+          continue;
+        }
+        const base: Instrument =
+          song.channels[row.targetChannel].instruments[row.targetInstrument];
+        const property: AutomationProperty | undefined = target.property;
+        if (property == undefined) continue;
+        const address: number =
+          (((row.targetChannel * Config.instrumentCountMax + row.targetInstrument) *
+            Config.automationTargets.length + target.index) * targetStride) +
+          row.targetIndex;
+        let resolved: ResolvedAutomationValue | undefined =
+          resolvedValues.get(address);
+        if (resolved == undefined) {
+          const baseValue: number | null = this._getInstrumentTargetValue(
+            base,
+            property,
+            row.targetIndex,
+          );
+          if (baseValue == null) continue;
+          resolved = {
+            channelIndex: row.targetChannel,
+            instrumentIndex: row.targetInstrument,
+            target,
+            targetIndex: row.targetIndex,
+            value: baseValue,
+          };
+          resolvedValues.set(address, resolved);
+        }
+        const domain: AutomationValueDomain = {
+          min: target.valueMin!,
+          max: target.valueMax!,
+          integer: target.integer === true,
+        };
+        resolved.value = this._applyOperation(
+          resolved.value,
+          row.operation,
+          operand,
+          domain,
+        );
+      }
+    }
+    this._effectiveTempo = sanitizeAutomationValue(tempoValue, tempoDomain);
+    for (const resolved of resolvedValues.values()) {
+      const base: Instrument =
+        song.channels[resolved.channelIndex].instruments[resolved.instrumentIndex];
+      let effective: Instrument | null =
+        this._effectiveInstruments[resolved.channelIndex][resolved.instrumentIndex];
+      if (effective == null) {
+        effective = Object.create(base) as Instrument;
+        this._effectiveInstruments[resolved.channelIndex][resolved.instrumentIndex] =
+          effective;
+      }
+      const targetDomain: AutomationValueDomain = {
+        min: resolved.target.valueMin!,
+        max: resolved.target.valueMax!,
+        integer: resolved.target.integer === true,
+      };
+      this._setInstrumentTargetValue(
+        effective,
+        base,
+        resolved.target.property!,
+        resolved.targetIndex,
+        sanitizeAutomationValue(resolved.value, targetDomain),
+      );
+    }
+    this._needsReconstruction = false;
+  }
+}
+
 class ChannelState {
   public readonly instruments: InstrumentState[] = [];
   public muted: boolean = false;
@@ -5675,13 +6944,18 @@ interface AssetData {
 export class Synth {
   private syncSongState(): void {
     const channelCount: number = this.song!.getChannelCount();
-    for (let i: number = this.channels.length; i < channelCount; i++) {
-      this.channels[i] = new ChannelState();
-    }
     this.channels.length = channelCount;
     for (let i: number = 0; i < channelCount; i++) {
       const channel: Channel = this.song!.channels[i];
-      const channelState: ChannelState = this.channels[i];
+      if (this.song!.getChannelIsAutomation(i)) {
+        this.channels[i] = null;
+        continue;
+      }
+      let channelState: ChannelState | null | undefined = this.channels[i];
+      if (channelState == null) {
+        channelState = new ChannelState();
+        this.channels[i] = channelState;
+      }
       for (
         let j: number = channelState.instruments.length;
         j < channel.instruments.length;
@@ -5705,12 +6979,20 @@ export class Synth {
   private warmUpSynthesizer(song: Song | null): void {
     if (song != null) {
       this.syncSongState();
+      this.automationRuntime.update(
+        song,
+        this.bar,
+        this.getCurrentPart() + this.tick / Config.ticksPerPart,
+        true,
+      );
       const samplesPerTick: number = this.getSamplesPerTick();
       for (let j: number = 0; j < song.getChannelCount(); j++) {
+        if (song.getChannelIsAutomation(j)) continue;
         for (let i: number = 0; i < song.channels[j].instruments.length; i++) {
-          const instrument: Instrument = song.channels[j].instruments[i];
+          const instrument: Instrument =
+            this.automationRuntime.getEffectiveInstrument(song, j, i);
           const instrumentState: InstrumentState =
-            this.channels[j].instruments[i];
+            this.channels[j]!.instruments[i];
           Synth.getInstrumentSynthFunction(instrument);
           instrumentState.updateWaves(instrument, this.samplesPerSecond);
           instrumentState.allocateNecessaryBuffers(
@@ -5749,8 +7031,14 @@ export class Synth {
   public liveInputChannel: number = 0;
   public liveInputInstruments: number[] = [];
   public loopRepeatCount: number = -1;
+  /** Optional exact musical endpoint for offline rendering. */
+  public renderTicksRemaining: number | null = null;
+  public songEnded: boolean = false;
+  public lastSynthesizeSampleCount: number = 0;
   public enableMetronome: boolean = false;
   public countInMetronome: boolean = false;
+  public readonly automationRuntime: AutomationRuntime =
+    new AutomationRuntime();
 
   private playheadInternal: number = 0.0;
   private bar: number = 0;
@@ -5779,7 +7067,7 @@ export class Synth {
   private static readonly pickedStringFunctionCache: Function[] =
     Array(3).fill(undefined); // keep in sync with the number of unison voices.
 
-  private readonly channels: ChannelState[] = [];
+  private readonly channels: Array<ChannelState | null> = [];
   private readonly tonePool: Deque<Tone> = new Deque<Tone>();
   private readonly tempMatchedPitchTones: Array<Tone | null> = Array(
     Config.maxChordSize,
@@ -5822,6 +7110,8 @@ export class Synth {
       this.tickSampleCountdown = 0;
       this.isAtStartOfTick = true;
       this.prevBar = null;
+      this.automationRuntime.invalidatePosition();
+      this.songEnded = false;
     }
   }
 
@@ -5877,6 +7167,9 @@ export class Synth {
         this.soundFontBanks.delete(soundFontId);
     }
     this.prevBar = null;
+    this.songEnded = false;
+    this.renderTicksRemaining = null;
+    this.automationRuntime.reset(this.song);
   }
 
   public setAsset(
@@ -5916,6 +7209,7 @@ export class Synth {
 
   public play(): void {
     if (this.isPlayingSong) return;
+    this.songEnded = false;
     this.isPlayingSong = true;
     this.warmUpSynthesizer(this.song);
   }
@@ -5941,6 +7235,8 @@ export class Synth {
     this.bar = bar;
     this.playheadInternal = this.bar;
     this.prevBar = null;
+    this.songEnded = false;
+    this.automationRuntime.invalidatePosition();
   }
 
   public snapToBar(): void {
@@ -5951,6 +7247,8 @@ export class Synth {
     this.tickSampleCountdown = 0;
     this.isAtStartOfTick = true;
     this.prevBar = null;
+    this.songEnded = false;
+    this.automationRuntime.invalidatePosition();
   }
 
   public resetEffects(): void {
@@ -5958,6 +7256,7 @@ export class Synth {
     this.freeAllTones();
     if (this.song != null) {
       for (const channelState of this.channels) {
+        if (channelState == null) continue;
         for (const instrumentState of channelState.instruments) {
           instrumentState.resetAllEffects();
         }
@@ -5975,6 +7274,7 @@ export class Synth {
       this.bar = this.song.loopStart;
       this.playheadInternal += this.bar - oldBar;
       this.prevBar = null;
+      this.automationRuntime.invalidatePosition();
     }
   }
 
@@ -5987,6 +7287,7 @@ export class Synth {
       this.bar = 0;
     }
     this.playheadInternal += this.bar - oldBar;
+    this.automationRuntime.invalidatePosition();
   }
 
   public goToPrevBar(): void {
@@ -5998,6 +7299,7 @@ export class Synth {
       this.bar = this.song.barCount - 1;
     }
     this.playheadInternal += this.bar - oldBar;
+    this.automationRuntime.invalidatePosition();
   }
 
   private getNextBar(): number {
@@ -6021,6 +7323,12 @@ export class Synth {
     outputBufferLength: number,
     playSong: boolean = true,
   ): void {
+    this.lastSynthesizeSampleCount = 0;
+    if (this.songEnded) {
+      outputDataL.fill(0, 0, outputBufferLength);
+      outputDataR.fill(0, 0, outputBufferLength);
+      return;
+    }
     if (this.song == null) {
       for (let i: number = 0; i < outputBufferLength; i++) {
         outputDataL[i] = 0.0;
@@ -6030,23 +7338,16 @@ export class Synth {
     }
 
     const song: Song = this.song;
-    const samplesPerTick: number = this.getSamplesPerTick();
+    let samplesPerTick: number = this.getSamplesPerTick();
     let ended: boolean = false;
 
     // Check the bounds of the playhead:
-    if (
-      this.tickSampleCountdown <= 0 ||
-      this.tickSampleCountdown > samplesPerTick
-    ) {
-      this.tickSampleCountdown = samplesPerTick;
-      this.isAtStartOfTick = true;
-    }
     if (playSong) {
       if (this.beat >= song.beatsPerBar) {
         this.beat = 0;
         this.part = 0;
         this.tick = 0;
-        this.tickSampleCountdown = samplesPerTick;
+        this.tickSampleCountdown = 0;
         this.isAtStartOfTick = true;
 
         this.prevBar = this.bar;
@@ -6058,11 +7359,29 @@ export class Synth {
         if (this.loopRepeatCount != -1) {
           this.bar = song.barCount - 1;
           ended = true;
+          this.songEnded = true;
           this.pause();
         } else {
           this.bar = 0;
         }
       }
+    }
+
+    if (this.isAtStartOfTick || this.tickSampleCountdown <= 0) {
+      this.automationRuntime.update(
+        song,
+        this.bar,
+        this.getCurrentPart() + this.tick / Config.ticksPerPart,
+        true,
+      );
+      samplesPerTick = this.getSamplesPerTick();
+    }
+    if (
+      this.tickSampleCountdown <= 0 ||
+      this.tickSampleCountdown > samplesPerTick
+    ) {
+      this.tickSampleCountdown = samplesPerTick;
+      this.isAtStartOfTick = true;
     }
 
     //const synthStartTime: number = performance.now();
@@ -6101,8 +7420,9 @@ export class Synth {
         channelIndex < song.getChannelCount();
         channelIndex++
       ) {
+        if (song.getChannelIsAutomation(channelIndex)) continue;
         const channel: Channel = song.channels[channelIndex];
-        const channelState: ChannelState = this.channels[channelIndex];
+        const channelState: ChannelState = this.channels[channelIndex]!;
 
         if (this.isAtStartOfTick) {
           this.determineCurrentActiveTones(
@@ -6119,7 +7439,12 @@ export class Synth {
           instrumentIndex < channel.instruments.length;
           instrumentIndex++
         ) {
-          const instrument: Instrument = channel.instruments[instrumentIndex];
+          const instrument: Instrument =
+            this.automationRuntime.getEffectiveInstrument(
+              song,
+              channelIndex,
+              instrumentIndex,
+            );
           const instrumentState: InstrumentState =
             channelState.instruments[instrumentIndex];
 
@@ -6277,6 +7602,7 @@ export class Synth {
         // Track how long tones have been released, and free ones that are marked as ending.
         // Also reset awake InstrumentStates that didn't have any Tones during this tick.
         for (const channelState of this.channels) {
+          if (channelState == null) continue;
           for (const instrumentState of channelState.instruments) {
             for (
               let i: number = 0;
@@ -6299,7 +7625,6 @@ export class Synth {
         }
 
         this.tick++;
-        this.tickSampleCountdown += samplesPerTick;
         if (this.tick == Config.ticksPerPart) {
           this.tick = 0;
           this.part++;
@@ -6326,6 +7651,7 @@ export class Synth {
                     if (this.loopRepeatCount != -1) {
                       this.bar = song.barCount - 1;
                       ended = true;
+                      this.songEnded = true;
                       this.resetEffects();
                       this.pause();
                     } else {
@@ -6337,8 +7663,26 @@ export class Synth {
             }
           }
         }
+        this.automationRuntime.update(
+          song,
+          this.bar,
+          this.getCurrentPart() + this.tick / Config.ticksPerPart,
+          true,
+        );
+        samplesPerTick = this.getSamplesPerTick();
+        this.tickSampleCountdown += samplesPerTick;
+        if (this.renderTicksRemaining != null) {
+          this.renderTicksRemaining--;
+          if (this.renderTicksRemaining <= 0) {
+            this.renderTicksRemaining = 0;
+            ended = true;
+            this.songEnded = true;
+          }
+        }
       }
     }
+
+    this.lastSynthesizeSampleCount = bufferIndex;
 
     // Avoid persistent denormal or NaN values.
     if (!Number.isFinite(limit) || Math.abs(limit) < epsilon) limit = 0.0;
@@ -6399,6 +7743,7 @@ export class Synth {
 
   public freeAllTones(): void {
     for (const channelState of this.channels) {
+      if (channelState == null) continue;
       for (const instrumentState of channelState.instruments) {
         while (instrumentState.activeTones.count() > 0)
           this.freeTone(instrumentState.activeTones.popBack());
@@ -6415,8 +7760,9 @@ export class Synth {
     channelIndex: number,
     samplesPerTick: number,
   ): void {
+    if (song.getChannelIsAutomation(channelIndex)) return;
     const channel: Channel = song.channels[channelIndex];
-    const channelState: ChannelState = this.channels[channelIndex];
+    const channelState: ChannelState = this.channels[channelIndex]!;
     const pitches: number[] = this.liveInputPitches;
 
     for (
@@ -6434,7 +7780,12 @@ export class Synth {
         pitches.length > 0 &&
         this.liveInputInstruments.indexOf(instrumentIndex) != -1
       ) {
-        const instrument: Instrument = channel.instruments[instrumentIndex];
+        const instrument: Instrument =
+          this.automationRuntime.getEffectiveInstrument(
+            song,
+            channelIndex,
+            instrumentIndex,
+          );
 
         if (instrument.getChord().singleTone) {
           let tone: Tone;
@@ -6590,7 +7941,7 @@ export class Synth {
     playSong: boolean,
   ): void {
     const channel: Channel = song.channels[channelIndex];
-    const channelState: ChannelState = this.channels[channelIndex];
+    const channelState: ChannelState = this.channels[channelIndex]!;
     const pattern: Pattern | null = song.getPattern(channelIndex, this.bar);
     const currentPart: number = this.getCurrentPart();
     const currentTick: number = this.tick + Config.ticksPerPart * currentPart;
@@ -6634,7 +7985,12 @@ export class Synth {
       const toneList: Deque<Tone> = instrumentState.activeTones;
       let toneCount: number = 0;
       if (note != null) {
-        const instrument: Instrument = channel.instruments[instrumentIndex];
+        const instrument: Instrument =
+          this.automationRuntime.getEffectiveInstrument(
+            song,
+            channelIndex,
+            instrumentIndex,
+          );
         let prevNoteForThisInstrument: Note | null = prevNote;
         let nextNoteForThisInstrument: Note | null = nextNote;
 
@@ -6934,7 +8290,7 @@ export class Synth {
     runLength: number,
     tone: Tone,
   ): void {
-    const channelState: ChannelState = this.channels[channelIndex];
+    const channelState: ChannelState = this.channels[channelIndex]!;
     const instrumentState: InstrumentState =
       channelState.instruments[tone.instrumentIndex];
 
@@ -6961,9 +8317,13 @@ export class Synth {
     shouldFadeOutFast: boolean,
   ): void {
     const roundedSamplesPerTick: number = Math.ceil(samplesPerTick);
-    const channel: Channel = song.channels[channelIndex];
-    const channelState: ChannelState = this.channels[channelIndex];
-    const instrument: Instrument = channel.instruments[tone.instrumentIndex];
+    const channelState: ChannelState = this.channels[channelIndex]!;
+    const instrument: Instrument =
+      this.automationRuntime.getEffectiveInstrument(
+        song,
+        channelIndex,
+        tone.instrumentIndex,
+      );
     const instrumentState: InstrumentState =
       channelState.instruments[tone.instrumentIndex];
     instrumentState.awake = true;
@@ -7882,7 +9242,6 @@ export class Synth {
           2.0,
           Math.log2(minFirstVoiceAmplitude) * curvedDynamismEnd,
         );
-        // TODO: automation
         const dynamismStart: number = Math.sqrt(
           (1.0 / Math.pow(firstVoiceAmplitudeStart, 2.0) - 1.0) /
             (Config.supersawVoiceCount - 1.0),
@@ -7970,7 +9329,6 @@ export class Synth {
 
         const baseSpreadSlider: number =
           instrument.supersawSpread / Config.supersawSpreadMax;
-        // TODO: automation
         const spreadSliderStart: number =
           baseSpreadSlider *
           envelopeStarts[EnvelopeComputeIndex.supersawSpread];
@@ -8002,7 +9360,6 @@ export class Synth {
 
         const baseShape: number =
           instrument.supersawShape / Config.supersawShapeMax;
-        // TODO: automation
         const shapeStart: number =
           baseShape * envelopeStarts[EnvelopeComputeIndex.supersawShape];
         const shapeEnd: number =
@@ -8014,7 +9371,6 @@ export class Synth {
         const basePulseWidth: number = getPulseWidthRatio(
           instrument.pulseWidth,
         );
-        // TODO: automation
         const pulseWidthStart: number =
           basePulseWidth * envelopeStarts[EnvelopeComputeIndex.pulseWidth];
         const pulseWidthEnd: number =
@@ -9551,7 +10907,6 @@ export class Synth {
     runLength: number,
     instrumentState: InstrumentState,
   ): void {
-    // TODO: If automation is involved, don't assume sliders will stay at zero.
     const usesDistortion: boolean = effectsIncludeDistortion(
       instrumentState.effects,
     );
@@ -10902,7 +12257,10 @@ export class Synth {
 
   private getSamplesPerTick(): number {
     if (this.song == null) return 0;
-    const beatsPerMinute: number = this.song.getBeatsPerMinute();
+    const beatsPerMinute: number =
+      this.song.automationChannelCount > 0
+        ? this.automationRuntime.getEffectiveTempo()
+        : this.song.getBeatsPerMinute();
     const beatsPerSecond: number = beatsPerMinute / 60.0;
     const partsPerSecond: number = Config.partsPerBeat * beatsPerSecond;
     const ticksPerSecond: number = Config.ticksPerPart * partsPerSecond;

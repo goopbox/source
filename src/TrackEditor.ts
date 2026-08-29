@@ -220,8 +220,13 @@ export class TrackEditor {
     if (source < this._doc.song.pitchChannelCount) {
       return [0, this._doc.song.pitchChannelCount - 1];
     }
+    const automationStart: number =
+      this._doc.song.pitchChannelCount + this._doc.song.noiseChannelCount;
+    if (source < automationStart) {
+      return [this._doc.song.pitchChannelCount, automationStart - 1];
+    }
     return [
-      this._doc.song.pitchChannelCount,
+      automationStart,
       this._doc.song.getChannelCount() - 1,
     ];
   }
@@ -540,7 +545,10 @@ export class TrackEditor {
         channel++
       ) {
         const pattern = this._doc.song.getPattern(channel, bar);
-        if (pattern != null && pattern.notes.length > 0) {
+        if (
+          pattern != null &&
+          pattern.hasContent(this._doc.song.getChannelKind(channel))
+        ) {
           hasContent = true;
           break;
         }

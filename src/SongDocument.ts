@@ -286,10 +286,10 @@ export class SongDocument {
       typeof entry.recoveryUid != "string" ||
       entry.recoveryUid.length == 0 ||
       !Array.isArray(entry.viewedInstruments) ||
-      entry.viewedInstruments.length > 64 ||
+      entry.viewedInstruments.length > Config.channelCountMax ||
       !entry.viewedInstruments.every(finiteInteger) ||
       !Array.isArray(entry.mutedChannels) ||
-      entry.mutedChannels.length > 64 ||
+      entry.mutedChannels.length > Config.channelCountMax ||
       !entry.mutedChannels.every(
         (muted: unknown): boolean => typeof muted == "boolean",
       )

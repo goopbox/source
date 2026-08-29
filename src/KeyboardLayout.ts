@@ -1,7 +1,7 @@
 // Copyright (c) John Nesky and contributing authors, distributed under the MIT license, see accompanying the LICENSE.md file.
 
 import { Config } from "../synth/SynthConfig.js";
-import { SongDocument } from "./SongDocument.js";
+import type { SongDocument } from "./SongDocument.js";
 
 export class KeyboardLayout {
   private static _pianoAtC: ReadonlyArray<ReadonlyArray<number | null>> = [
@@ -23,6 +23,7 @@ export class KeyboardLayout {
     y: number,
     keyboardLayout: string,
   ): number | null {
+    if (doc.song.getChannelIsAutomation(doc.channel)) return null;
     let pitchOffset: number | null = null;
     let forcedKey: number | null = null;
     switch (keyboardLayout) {
@@ -267,6 +268,7 @@ export class KeyboardLayout {
   }
 
   public handleKey(x: number, y: number, pressed: boolean): void {
+    if (this._doc.song.getChannelIsAutomation(this._doc.channel)) return;
     const isDrum: boolean = this._doc.song.getChannelIsNoise(this._doc.channel);
     if (isDrum) {
       if (x >= 0 && x < Config.drumCount) {

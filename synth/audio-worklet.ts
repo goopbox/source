@@ -44,19 +44,31 @@ class SynthProcessor extends AudioWorkletProcessor {
   }
 
   private setLiveInput(state: LiveInputState): void {
-    this.synth.liveInputPitches.length = state.pitches.length;
-    for (let i: number = 0; i < state.pitches.length; i++)
-      this.synth.liveInputPitches[i] = state.pitches[i]!;
-    this.synth.liveInputInstruments.length = state.instruments.length;
-    for (let i: number = 0; i < state.instruments.length; i++)
-      this.synth.liveInputInstruments[i] = state.instruments[i]!;
     this.synth.liveInputChannel = state.channel;
-    this.synth.liveInputDuration = state.duration;
-    this.synth.liveInputStarted = state.started;
+    const acceptsNotes: boolean =
+      this.synth.song != null &&
+      state.channel >= 0 &&
+      state.channel < this.synth.song.getChannelCount() &&
+      !this.synth.song.getChannelIsAutomation(state.channel);
+    const pitches: readonly number[] = acceptsNotes ? state.pitches : [];
+    const instruments: readonly number[] = acceptsNotes
+      ? state.instruments
+      : [];
+    this.synth.liveInputPitches.length = pitches.length;
+    for (let i: number = 0; i < pitches.length; i++)
+      this.synth.liveInputPitches[i] = pitches[i]!;
+    this.synth.liveInputInstruments.length = instruments.length;
+    for (let i: number = 0; i < instruments.length; i++)
+      this.synth.liveInputInstruments[i] = instruments[i]!;
+    this.synth.liveInputDuration = acceptsNotes ? state.duration : 0;
+    this.synth.liveInputStarted = acceptsNotes && state.started;
     this.maintainLiveInput();
   }
 
   private setLiveInputInstruments(instruments: readonly number[]): void {
+    if (
+      this.synth.song?.getChannelIsAutomation(this.synth.liveInputChannel)
+    ) instruments = [];
     this.synth.liveInputInstruments.length = instruments.length;
     for (let i: number = 0; i < instruments.length; i++)
       this.synth.liveInputInstruments[i] = instruments[i]!;
@@ -163,6 +175,12 @@ class SynthProcessor extends AudioWorkletProcessor {
           break;
         case "setLiveInputChannel":
           this.synth.liveInputChannel = command.channel;
+          if (this.synth.song?.getChannelIsAutomation(command.channel)) {
+            this.synth.liveInputPitches.length = 0;
+            this.synth.liveInputInstruments.length = 0;
+            this.synth.liveInputDuration = 0;
+            this.synth.liveInputStarted = false;
+          }
           break;
         case "setLiveInputInstruments":
           this.setLiveInputInstruments(command.instruments);
@@ -189,6 +207,10 @@ class SynthProcessor extends AudioWorkletProcessor {
   private snapshot(): TransportSnapshot {
     return {
       playhead: this.synth.playhead,
+      tempo:
+        this.synth.song?.automationChannelCount
+          ? this.synth.automationRuntime.getEffectiveTempo()
+          : (this.synth.song?.tempo ?? 120),
       playing: this.synth.playing,
       recording: this.synth.recording,
       countIn: this.synth.countInMetronome,

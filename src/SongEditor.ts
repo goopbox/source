@@ -44,6 +44,7 @@ import { SongDocument } from "./SongDocument.js";
 import { encodeSongUrl } from "./SongUrl.js";
 import { mountPrompt, unmountPrompt, type Prompt } from "./Prompt.js";
 import { PatternEditor } from "./PatternEditor.js";
+import { AutomationEditor, AutomationSettings } from "./AutomationEditor.js";
 import { EnvelopeEditor, EnvelopeParameterEditor } from "./EnvelopeEditor.js";
 import { FadeInOutEditor } from "./FadeInOutEditor.js";
 import { FilterEditor } from "./FilterEditor.js";
@@ -672,6 +673,14 @@ export class SongEditor {
     false,
     1,
   );
+  private readonly _automationEditorPrev: AutomationEditor =
+    new AutomationEditor(this.doc, false, -1);
+  private readonly _automationEditor: AutomationEditor =
+    new AutomationEditor(this.doc, true, 0);
+  private readonly _automationEditorNext: AutomationEditor =
+    new AutomationEditor(this.doc, false, 1);
+  private readonly _automationSettings: AutomationSettings =
+    new AutomationSettings(this.doc);
   private readonly _muteEditor: MuteEditor = new MuteEditor(this.doc);
   private readonly _trackEditor: TrackEditor = new TrackEditor(this.doc);
   private readonly _loopEditor: LoopEditor = new LoopEditor(this.doc);
@@ -922,6 +931,13 @@ export class SongEditor {
     type: "number",
     min: Config.noiseChannelCountMin,
     max: Config.noiseChannelCountMax,
+    step: "1",
+  });
+  private readonly _automationChannelsStepper: HTMLInputElement = input({
+    style: "width: 4.5em;",
+    type: "number",
+    min: Config.automationChannelCountMin,
+    max: Config.automationChannelCountMax,
     step: "1",
   });
   private readonly _maxPatternsStepper: HTMLInputElement = input({
@@ -1521,10 +1537,17 @@ export class SongEditor {
     this._patternEditor.container,
     this._patternEditorNext.container,
   );
+  private readonly _automationEditorRow: HTMLDivElement = div(
+    { class: "automation-editor-row" },
+    this._automationEditorPrev.container,
+    this._automationEditor.container,
+    this._automationEditorNext.container,
+  );
   private readonly _patternArea: HTMLDivElement = div(
     { class: "pattern-area" },
     this._piano.container,
     this._patternEditorRow,
+    this._automationEditorRow,
     this._octaveScrollBar.container,
     this._zoomInButton,
     this._zoomOutButton,
@@ -1625,6 +1648,11 @@ export class SongEditor {
         ),
         div(
           { class: "selectRow" },
+          label("Auto channels"),
+          this._automationChannelsStepper,
+        ),
+        div(
+          { class: "selectRow" },
           label("Max patterns"),
           this._maxPatternsStepper,
         ),
@@ -1634,6 +1662,7 @@ export class SongEditor {
   private readonly _instrumentSettingsArea: HTMLDivElement = div(
     { class: "instrument-settings-area" },
     this._instrumentSettingsControls,
+    this._automationSettings.container,
   );
   private readonly _settingsArea: HTMLDivElement = div(
     { class: "settings-area noSelection" },
@@ -1669,7 +1698,7 @@ export class SongEditor {
   private _renderedInstrumentCount: number = 0;
   private _renderedIsPlaying: boolean = false;
   private _renderedIsRecording: boolean = false;
-  private _renderedShowRecordButton: boolean = false;
+  private _renderedShowRecordButton: boolean | null = null;
   private _renderedCtrlHeld: boolean = false;
   private readonly _operatorRows: HTMLDivElement[] = [];
   private readonly _operatorAmplitudeSliders: Slider[] = [];
@@ -1894,6 +1923,10 @@ export class SongEditor {
     this._drumChannelsStepper.addEventListener(
       "change",
       this._whenSetDrumChannels,
+    );
+    this._automationChannelsStepper.addEventListener(
+      "change",
+      this._whenSetAutomationChannels,
     );
     this._maxPatternsStepper.addEventListener(
       "change",
@@ -2278,42 +2311,110 @@ export class SongEditor {
     this._trackAndMuteContainer.scrollTop =
       this.doc.channelScrollPos * ChannelRow.patternHeight;
 
-    this._piano.container.style.display = "";
-    this._octaveScrollBar.container.style.display = "";
     this._barScrollBar.container.style.display =
       this.doc.song.barCount > this.doc.trackVisibleBars ? "" : "none";
-
-    const semitoneHeight: number =
-      this._patternEditorRow.clientHeight / this.doc.getVisiblePitchCount();
-    const targetBeatWidth: number = semitoneHeight * 5;
-    const minBeatWidth: number =
-      this._patternEditorRow.clientWidth / (this.doc.song.beatsPerBar * 3);
-    const maxBeatWidth: number =
-      this._patternEditorRow.clientWidth / (this.doc.song.beatsPerBar + 2);
-    const beatWidth: number = Math.max(
-      minBeatWidth,
-      Math.min(maxBeatWidth, targetBeatWidth),
-    );
-    const patternEditorWidth: number = beatWidth * this.doc.song.beatsPerBar;
-
-    this._patternEditorPrev.container.style.width = patternEditorWidth + "px";
-    this._patternEditor.container.style.width = patternEditorWidth + "px";
-    this._patternEditorNext.container.style.width = patternEditorWidth + "px";
-    this._patternEditorPrev.container.style.flexShrink = "0";
-    this._patternEditor.container.style.flexShrink = "0";
-    this._patternEditorNext.container.style.flexShrink = "0";
-    this._patternEditorPrev.container.style.display = "";
-    this._patternEditorNext.container.style.display = "";
-    this._patternEditorPrev.render();
-    this._patternEditorNext.render();
+    const isAutomationChannel: boolean =
+      this.doc.song.getChannelIsAutomation(this.doc.channel);
     const isDrumChannel: boolean = this.doc.song.getChannelIsNoise(
       this.doc.channel,
     );
-    this._zoomInButton.style.display = isDrumChannel ? "none" : "";
-    this._zoomOutButton.style.display = isDrumChannel ? "none" : "";
+    this._piano.container.style.display = isAutomationChannel ? "none" : "";
+    this._octaveScrollBar.container.style.display =
+      isAutomationChannel ? "none" : "";
+    this._patternEditorRow.style.display = isAutomationChannel ? "none" : "flex";
+    this._automationEditorRow.style.display = isAutomationChannel ? "flex" : "none";
+    this._zoomInButton.style.display =
+      isAutomationChannel || isDrumChannel ? "none" : "";
+    this._zoomOutButton.style.display =
+      isAutomationChannel || isDrumChannel ? "none" : "";
     this._zoomInButton.style.right = "24px";
     this._zoomOutButton.style.right = "24px";
-    this._patternEditor.render();
+
+    if (isAutomationChannel) {
+      const automationColors: ChannelColors = ColorConfig.getChannelColor(
+        this.doc.song,
+        this.doc.channel,
+      );
+      this._automationEditorRow.style.setProperty(
+        "--automation-primary-note",
+        automationColors.primaryNote,
+      );
+      this._automationEditorRow.style.setProperty(
+        "--automation-primary-channel",
+        automationColors.primaryChannel,
+      );
+      const automationWidth: number = Math.max(
+        320,
+        this._automationEditorRow.clientWidth * 0.85,
+      );
+      for (const editor of [
+        this._automationEditorPrev,
+        this._automationEditor,
+        this._automationEditorNext,
+      ]) {
+        editor.container.style.width = `${automationWidth}px`;
+        editor.container.style.flexShrink = "0";
+        editor.render();
+      }
+    } else {
+      const semitoneHeight: number =
+        this._patternEditorRow.clientHeight / this.doc.getVisiblePitchCount();
+      const targetBeatWidth: number = semitoneHeight * 5;
+      const minBeatWidth: number =
+        this._patternEditorRow.clientWidth / (this.doc.song.beatsPerBar * 3);
+      const maxBeatWidth: number =
+        this._patternEditorRow.clientWidth / (this.doc.song.beatsPerBar + 2);
+      const beatWidth: number = Math.max(
+        minBeatWidth,
+        Math.min(maxBeatWidth, targetBeatWidth),
+      );
+      const patternEditorWidth: number = beatWidth * this.doc.song.beatsPerBar;
+      for (const editor of [
+        this._patternEditorPrev,
+        this._patternEditor,
+        this._patternEditorNext,
+      ]) {
+        editor.container.style.width = `${patternEditorWidth}px`;
+        editor.container.style.flexShrink = "0";
+      }
+      this._patternEditorPrev.container.style.display = "";
+      this._patternEditorNext.container.style.display = "";
+      this._patternEditorPrev.render();
+      this._patternEditorNext.render();
+      this._patternEditor.render();
+    }
+
+    this._automationChannelsStepper.value =
+      this.doc.song.automationChannelCount.toString();
+
+    if (isAutomationChannel) {
+      setSelectedValue(this._scaleSelect, this.doc.song.scale);
+      setSelectedValue(
+        this._keySelect,
+        Config.keys.length - 1 - this.doc.song.composingKey,
+      );
+      setSelectedValue(
+        this._legacyKeySelect,
+        Config.keys.length - 1 - this.doc.song.key,
+      );
+      this._tempoStepper.value = this.doc.song.tempo.toString();
+      setSelectedValue(this._rhythmSelect, this.doc.song.rhythm);
+      this._beatsPerBarStepper.value = this.doc.song.beatsPerBar.toString();
+      this._songLengthStepper.value = this.doc.song.barCount.toString();
+      this._pitchChannelsStepper.value = this.doc.song.pitchChannelCount.toString();
+      this._drumChannelsStepper.value = this.doc.song.noiseChannelCount.toString();
+      this._maxPatternsStepper.value = this.doc.song.patternsPerChannel.toString();
+      this._instrumentSettingsControls.style.display = "none";
+      this._automationSettings.container.style.display = "";
+      this._automationSettings.render();
+      this._setPrompt(this.doc.prompt);
+      if (prefs.autoFollow && !this.doc.synth.playing)
+        this.doc.synth.goToBar(this.doc.bar);
+      return;
+    }
+
+    this._instrumentSettingsControls.style.display = "";
+    this._automationSettings.container.style.display = "none";
 
     const channel: Channel = this.doc.song.channels[this.doc.channel];
     const instrumentIndex: number = this.doc.getCurrentInstrument();
@@ -2800,15 +2901,17 @@ export class SongEditor {
   };
 
   public updatePlayButton = (): void => {
+    const showRecordButton: boolean =
+      !this.doc.song.getChannelIsAutomation(this.doc.channel);
     if (
       this._renderedIsPlaying != this.doc.synth.playing ||
       this._renderedIsRecording != this.doc.synth.recording ||
-      !this._renderedShowRecordButton ||
+      this._renderedShowRecordButton != showRecordButton ||
       this._renderedCtrlHeld != activeModifierKeys.ctrl
     ) {
       this._renderedIsPlaying = this.doc.synth.playing;
       this._renderedIsRecording = this.doc.synth.recording;
-      this._renderedShowRecordButton = true;
+      this._renderedShowRecordButton = showRecordButton;
       this._renderedCtrlHeld = activeModifierKeys.ctrl;
 
       if (
@@ -2860,9 +2963,9 @@ export class SongEditor {
         this._pauseButton.style.display = "";
       } else {
         this._playButton.style.display = "";
-        this._recordButton.style.display = "";
-        this._playButton.classList.add("shrunk");
-        this._recordButton.classList.add("shrunk");
+        this._recordButton.style.display = showRecordButton ? "" : "none";
+        this._playButton.classList.toggle("shrunk", showRecordButton);
+        this._recordButton.classList.toggle("shrunk", showRecordButton);
       }
     }
     window.requestAnimationFrame(this.updatePlayButton);
@@ -2952,7 +3055,9 @@ export class SongEditor {
           // Jump to mouse
           if (
             this._trackEditor.movePlayheadToMouse() ||
-            this._patternEditor.movePlayheadToMouse()
+            (this.doc.song.getChannelIsAutomation(this.doc.channel)
+              ? this._automationEditor.movePlayheadToMouse()
+              : this._patternEditor.movePlayheadToMouse())
           ) {
             if (!this.doc.synth.playing) this.doc.performance.play();
           }
@@ -2988,6 +3093,8 @@ export class SongEditor {
         if (canPlayNotes) break;
         if (event.shiftKey) {
           this._copyInstrument();
+        } else if (this.doc.song.getChannelIsAutomation(this.doc.channel)) {
+          this._automationEditor.copy();
         } else {
           this.doc.selection.copy();
         }
@@ -2995,7 +3102,9 @@ export class SongEditor {
         break;
       case 88: // x
         if (canPlayNotes) break;
-        this.doc.selection.cut();
+        if (this.doc.song.getChannelIsAutomation(this.doc.channel))
+          this._automationEditor.cut();
+        else this.doc.selection.cut();
         event.preventDefault();
         break;
       case 81: // q
@@ -3014,6 +3123,8 @@ export class SongEditor {
       case 8: // backspace/delete
         if (event.ctrlKey || event.metaKey) {
           this.doc.selection.deleteChannel();
+        } else if (this.doc.song.getChannelIsAutomation(this.doc.channel)) {
+          this._automationEditor.deleteSelected();
         } else {
           this.doc.selection.deleteBars();
         }
@@ -3101,6 +3212,8 @@ export class SongEditor {
           this.doc.selection.pasteNumbers();
         } else if (event.shiftKey) {
           this._pasteInstrument();
+        } else if (this.doc.song.getChannelIsAutomation(this.doc.channel)) {
+          this._automationEditor.paste();
         } else {
           this.doc.selection.pasteNotes();
         }
@@ -3356,6 +3469,7 @@ export class SongEditor {
   };
 
   private _toggleRecord = (): void => {
+    if (this.doc.song.getChannelIsAutomation(this.doc.channel)) return;
     if (this.doc.synth.playing) {
       this.doc.performance.pause();
     } else {
@@ -3364,6 +3478,7 @@ export class SongEditor {
   };
 
   private _copyInstrument = (): void => {
+    if (this.doc.song.getChannelIsAutomation(this.doc.channel)) return;
     window.localStorage.setItem(
       "instrumentCopy",
       JSON.stringify(this._getInstrumentCopy()),
@@ -3372,6 +3487,7 @@ export class SongEditor {
   };
 
   private _pasteInstrument = (): void => {
+    if (this.doc.song.getChannelIsAutomation(this.doc.channel)) return;
     const instrumentCopy: any = JSON.parse(
       String(window.localStorage.getItem("instrumentCopy")),
     );
@@ -3481,6 +3597,7 @@ export class SongEditor {
   }
 
   private _randomPreset(): void {
+    if (this.doc.song.getChannelIsAutomation(this.doc.channel)) return;
     const choices: string[] = getRandomPresetValues().map(String);
     for (const sample of this._getSamplePresets())
       choices.push(`sample:${encodeURIComponent(sample.id)}`);
@@ -3495,6 +3612,7 @@ export class SongEditor {
   }
 
   private _randomGenerated(): void {
+    if (this.doc.song.getChannelIsAutomation(this.doc.channel)) return;
     this.doc.record(new ChangeRandomGeneratedInstrument(this.doc));
   }
 
@@ -3541,6 +3659,7 @@ export class SongEditor {
         this.doc,
         this._validateNumberInput(this._pitchChannelsStepper),
         this.doc.song.noiseChannelCount,
+        this.doc.song.automationChannelCount,
       ),
     );
   };
@@ -3551,6 +3670,18 @@ export class SongEditor {
         this.doc,
         this.doc.song.pitchChannelCount,
         this._validateNumberInput(this._drumChannelsStepper),
+        this.doc.song.automationChannelCount,
+      ),
+    );
+  };
+
+  private _whenSetAutomationChannels = (): void => {
+    this.doc.record(
+      new ChangeChannelCount(
+        this.doc,
+        this.doc.song.pitchChannelCount,
+        this.doc.song.noiseChannelCount,
+        this._validateNumberInput(this._automationChannelsStepper),
       ),
     );
   };
@@ -3857,16 +3988,22 @@ export class SongEditor {
         this.doc.redo();
         break;
       case "copy":
-        this.doc.selection.copy();
+        if (this.doc.song.getChannelIsAutomation(this.doc.channel))
+          this._automationEditor.copy();
+        else this.doc.selection.copy();
         break;
       case "cut":
-        this.doc.selection.cut();
+        if (this.doc.song.getChannelIsAutomation(this.doc.channel))
+          this._automationEditor.cut();
+        else this.doc.selection.cut();
         break;
       case "insertBars":
         this.doc.selection.insertBars();
         break;
       case "deleteBars":
-        this.doc.selection.deleteBars();
+        if (this.doc.song.getChannelIsAutomation(this.doc.channel))
+          this._automationEditor.deleteSelected();
+        else this.doc.selection.deleteBars();
         break;
       case "insertChannel":
         this.doc.selection.insertChannel();
@@ -3875,7 +4012,9 @@ export class SongEditor {
         this.doc.selection.deleteChannel();
         break;
       case "pasteNotes":
-        this.doc.selection.pasteNotes();
+        if (this.doc.song.getChannelIsAutomation(this.doc.channel))
+          this._automationEditor.paste();
+        else this.doc.selection.pasteNotes();
         break;
       case "pasteNumbers":
         this.doc.selection.pasteNumbers();

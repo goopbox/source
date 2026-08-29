@@ -123,6 +123,7 @@ export class Piano {
   }
 
   private _playLiveInput(): void {
+    if (this._doc.song.getChannelIsAutomation(this._doc.channel)) return;
     const octaveOffset: number =
       this._doc.getBaseVisibleOctave(this._doc.channel) *
         Config.pitchesPerOctave +
@@ -146,6 +147,7 @@ export class Piano {
   };
 
   private _onPointerDown = (_event: PointerEvent): void => {
+    if (this._doc.song.getChannelIsAutomation(this._doc.channel)) return;
     this._doc.synth.maintainLiveInput();
     this._updateCursorPitch();
     this._playLiveInput();
@@ -153,6 +155,7 @@ export class Piano {
   };
 
   private _onPointerMove = (event: PointerEvent): void => {
+    if (this._doc.song.getChannelIsAutomation(this._doc.channel)) return;
     this._doc.synth.maintainLiveInput();
     this._updateCursorPitch();
     if (event.pointer!.isDown) this._playLiveInput();
@@ -191,6 +194,10 @@ export class Piano {
   };
 
   private _updatePreview(): void {
+    if (this._doc.song.getChannelIsAutomation(this._doc.channel)) {
+      this._preview.style.display = "none";
+      return;
+    }
     const previewIsVisible = this._pointers.latest.isHovering;
     this._preview.style.display = previewIsVisible ? "" : "none";
     if (previewIsVisible) {
@@ -226,6 +233,14 @@ export class Piano {
   }
 
   private _documentChanged = (): void => {
+    if (this._doc.song.getChannelIsAutomation(this._doc.channel)) {
+      if (this._playedPitch != -1) this._releaseLiveInput();
+      this._pianoContainer.style.display = "none";
+      this._drumContainer.style.display = "none";
+      this._preview.style.display = "none";
+      this._renderedPitchCount = -1;
+      return;
+    }
     const isDrum: boolean = this._doc.song.getChannelIsNoise(this._doc.channel);
     this._pitchCount = isDrum
       ? Config.drumCount

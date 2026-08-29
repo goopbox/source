@@ -116,7 +116,9 @@ export class ChannelRow {
       const patternIndex: number = this._doc.song.channels[this.index].bars[i];
       const selected: boolean =
         i == this._doc.bar && this.index == this._doc.channel;
-      const dim: boolean = pattern == null || pattern.notes.length == 0;
+      const dim: boolean =
+        pattern == null ||
+        !pattern.hasContent(this._doc.song.getChannelKind(this.index));
       const empty: boolean = patternIndex != 0 && dim;
       hasContent = hasContent || !dim;
 

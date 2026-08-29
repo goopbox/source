@@ -1,7 +1,7 @@
 // Copyright (c) John Nesky and contributing authors, distributed under the MIT license, see accompanying the LICENSE.md file.
 
 import { Config } from "../synth/SynthConfig.js";
-import { SongDocument } from "./SongDocument.js";
+import type { SongDocument } from "./SongDocument.js";
 import { type AnalogousDrum, analogousDrumMap, MidiEventType } from "./Midi.js";
 
 // A unique id for this tab.
@@ -65,6 +65,7 @@ export class MidiInputHandler {
   private _onMidiMessage = (event: MIDIMessageEvent) => {
     // Ignore midi events if disabled or a different tab is handling them.
     if (localStorage.getItem("midiHandlerId") != id) return;
+    if (this._doc.song.getChannelIsAutomation(this._doc.channel)) return;
 
     const data = event.data;
     if (data == null) return;

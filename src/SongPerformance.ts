@@ -2,7 +2,7 @@
 
 import { Config } from "../synth/SynthConfig.js";
 import { Note, Pattern } from "../synth/synth.js";
-import { SongDocument } from "./SongDocument.js";
+import type { SongDocument } from "./SongDocument.js";
 import { ChangeGroup } from "./Change.js";
 import {
   ChangeChannelBar,
@@ -85,6 +85,7 @@ export class SongPerformance {
   }
 
   public record(): void {
+    if (this._doc.song.getChannelIsAutomation(this._doc.channel)) return;
     this._doc.synth.snapToBar();
     const playheadBar: number = Math.floor(this._doc.synth.playhead);
     if (playheadBar != this._doc.bar) {
@@ -163,6 +164,16 @@ export class SongPerformance {
   // Returns true if the full interface needs to be rerendered.
   private _updateRecordedNotes(): boolean {
     if (this._recordingChange == null) return false;
+    if (
+      this._doc.synth.liveInputChannel >= 0 &&
+      this._doc.synth.liveInputChannel < this._doc.song.getChannelCount() &&
+      this._doc.song.getChannelIsAutomation(
+        this._doc.synth.liveInputChannel,
+      )
+    ) {
+      this.abortRecording();
+      return false;
+    }
     if (!this._doc.lastChangeWas(this._recordingChange)) {
       this.abortRecording();
       return false;
@@ -315,6 +326,7 @@ export class SongPerformance {
   }
 
   public setTemporaryPitches(pitches: number[], duration: number): void {
+    if (this._doc.song.getChannelIsAutomation(this._doc.channel)) return;
     this._updateRecordedNotes();
     this._doc.synth.setLiveInputPitches(
       pitches.slice(0, Config.maxChordSize),
@@ -331,6 +343,7 @@ export class SongPerformance {
   }
 
   public addPerformedPitch(pitch: number): void {
+    if (this._doc.song.getChannelIsAutomation(this._doc.channel)) return;
     this._doc.synth.maintainLiveInput();
     this._updateRecordedNotes();
     if (this._pitchesAreTemporary) {

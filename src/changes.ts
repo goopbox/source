@@ -9,6 +9,7 @@ import {
   InstrumentType,
   EffectType,
   type AutomationTarget,
+  type AutomationValueDomain,
   Config,
   effectsIncludeDistortion,
 } from "../synth/SynthConfig.js";
@@ -23,6 +24,12 @@ import {
   HarmonicsWave,
   Instrument,
   Channel,
+  ChannelKind,
+  AutomationEvent,
+  AutomationPoint,
+  AutomationOperation,
+  AutomationRow,
+  mapAutomationClipboardValue,
   Song,
   Synth,
 } from "../synth/synth.js";
@@ -96,6 +103,35 @@ function snapPitchToScale(doc: SongDocument, pitch: number) {
   return distanceUp < distanceDown
     ? Math.round(pitch + distanceUp)
     : Math.round(pitch - distanceDown);
+}
+
+function markInvalidAutomationTargetsForCurrentInstrument(
+  doc: SongDocument,
+): void {
+  if (doc.song.getChannelIsAutomation(doc.channel)) return;
+  const instrumentIndex: number = doc.getCurrentInstrument();
+  const instrument: Instrument | undefined =
+    doc.song.channels[doc.channel]?.instruments[instrumentIndex];
+  if (instrument == undefined) return;
+  doc.song.forEachAutomationRow((row: AutomationRow): void => {
+    if (
+      row.targetChannel != doc.channel ||
+      row.targetInstrument != instrumentIndex ||
+      row.targetChannelMissing ||
+      row.targetInstrumentMissing ||
+      row.targetElementMissing
+    ) return;
+    const target: AutomationTarget | undefined =
+      Config.automationTargets.dictionary[row.targetId];
+    if (
+      target == undefined ||
+      !Config.automationTargetIsValidForInstrument(
+        target,
+        instrument,
+        row.targetIndex,
+      )
+    ) row.targetElementMissing = true;
+  });
 }
 
 function removeRedundantPins(pins: NotePin[]): void {
@@ -239,12 +275,110 @@ function projectNoteIntoBar(
   }
 }
 
+function getOrCreateProjectedPattern(
+  channel: Channel,
+  bar: number,
+  automationRowCount: number = 0,
+): Pattern | null {
+  if (bar < 0 || bar >= Config.barCountMax) return null;
+  while (channel.bars.length <= bar) channel.bars.push(0);
+  const patternNumber: number = channel.bars[bar];
+  if (patternNumber != 0) return channel.patterns[patternNumber - 1];
+  const pattern: Pattern = new Pattern();
+  if (automationRowCount > 0)
+    pattern.ensureAutomationRowCount(automationRowCount);
+  channel.patterns.push(pattern);
+  channel.bars[bar] = channel.patterns.length;
+  return pattern;
+}
+
+function projectAutomationEventIntoBar(
+  oldEvent: AutomationEvent,
+  oldBarStart: number,
+  partsToMove: number,
+  bar: number,
+  partsPerBar: number,
+): AutomationEvent | null {
+  const shiftedStart: number = oldBarStart + oldEvent.start + partsToMove;
+  const shiftedEnd: number = oldBarStart + oldEvent.end + partsToMove;
+  const destinationBarStart: number = bar * partsPerBar;
+  const absoluteStart: number = Math.max(shiftedStart, destinationBarStart);
+  const absoluteEnd: number = Math.min(
+    shiftedEnd,
+    destinationBarStart + partsPerBar,
+  );
+  if (!(absoluteStart < absoluteEnd)) return null;
+
+  const start: number = absoluteStart - destinationBarStart;
+  const end: number = absoluteEnd - destinationBarStart;
+  const sourcePartAtStart: number =
+    oldEvent.start + absoluteStart - shiftedStart;
+  const sourcePartAtEnd: number = oldEvent.start + absoluteEnd - shiftedStart;
+  const points: AutomationPoint[] = [
+    new AutomationPoint(0, oldEvent.getValueAt(sourcePartAtStart)),
+  ];
+  for (const point of oldEvent.points) {
+    const shiftedPoint: number = shiftedStart + point.time;
+    if (shiftedPoint <= absoluteStart || shiftedPoint >= absoluteEnd) continue;
+    points.push(new AutomationPoint(shiftedPoint - absoluteStart, point.value));
+  }
+  points.push(
+    new AutomationPoint(
+      absoluteEnd - absoluteStart,
+      oldEvent.getValueAt(sourcePartAtEnd),
+    ),
+  );
+  return new AutomationEvent(start, end, points);
+}
+
+function truncateAutomationEvents(
+  events: readonly AutomationEvent[],
+  endPart: number,
+): AutomationEvent[] {
+  const result: AutomationEvent[] = [];
+  for (const event of events) {
+    if (event.start >= endPart) break;
+    if (event.end <= endPart) {
+      result.push(event.clone());
+      continue;
+    }
+    const duration: number = endPart - event.start;
+    if (duration <= 0) continue;
+    const points: AutomationPoint[] = event.points
+      .filter((point): boolean => point.time < duration)
+      .map((point): AutomationPoint => point.clone());
+    if (points.length == 0 || points[0].time != 0)
+      points.unshift(new AutomationPoint(0, event.getValueAt(event.start)));
+    points.push(new AutomationPoint(duration, event.getValueAt(endPart)));
+    result.push(new AutomationEvent(event.start, endPart, points));
+  }
+  return result;
+}
+
+function scaleAutomationEvents(
+  events: readonly AutomationEvent[],
+  ratio: number,
+): AutomationEvent[] {
+  return events.map(
+    (event): AutomationEvent =>
+      new AutomationEvent(
+        event.start * ratio,
+        event.end * ratio,
+        event.points.map(
+          (point): AutomationPoint =>
+            new AutomationPoint(point.time * ratio, point.value),
+        ),
+      ),
+  );
+}
+
 export class ChangeMoveAndOverflowNotes extends ChangeGroup {
   constructor(doc: SongDocument, newBeatsPerBar: number, partsToMove: number) {
     super();
 
     const pitchChannels: Channel[] = [];
     const noiseChannels: Channel[] = [];
+    const automationChannels: Channel[] = [];
 
     for (
       let channelIndex: number = 0;
@@ -253,22 +387,20 @@ export class ChangeMoveAndOverflowNotes extends ChangeGroup {
     ) {
       const oldChannel: Channel = doc.song.channels[channelIndex];
       const newChannel: Channel = new Channel();
-      if (channelIndex < doc.song.pitchChannelCount) {
-        pitchChannels.push(newChannel);
-      } else {
-        noiseChannels.push(newChannel);
-      }
+      const kind: ChannelKind = doc.song.getChannelKind(channelIndex);
+      if (kind == ChannelKind.pitch) pitchChannels.push(newChannel);
+      else if (kind == ChannelKind.noise) noiseChannels.push(newChannel);
+      else automationChannels.push(newChannel);
 
       newChannel.muted = oldChannel.muted;
       newChannel.octave = oldChannel.octave;
-      for (const instrument of oldChannel.instruments) {
-        newChannel.instruments.push(instrument);
-      }
+      newChannel.instruments.push(...oldChannel.instruments);
+      newChannel.automationRows.push(
+        ...oldChannel.automationRows.map((row): AutomationRow => row.clone()),
+      );
 
       const oldPartsPerBar: number = Config.partsPerBeat * doc.song.beatsPerBar;
       const newPartsPerBar: number = Config.partsPerBeat * newBeatsPerBar;
-      let currentBar: number = -1;
-      let pattern: Pattern | null = null;
 
       for (let oldBar: number = 0; oldBar < doc.song.barCount; oldBar++) {
         const oldPattern: Pattern | null = doc.song.getPattern(
@@ -277,6 +409,46 @@ export class ChangeMoveAndOverflowNotes extends ChangeGroup {
         );
         if (oldPattern != null) {
           const oldBarStart: number = oldBar * oldPartsPerBar;
+          if (kind == ChannelKind.automation) {
+            for (
+              let rowIndex: number = 0;
+              rowIndex < oldChannel.automationRows.length;
+              rowIndex++
+            ) {
+              const events: readonly AutomationEvent[] =
+                oldPattern.automationEvents[rowIndex] ?? [];
+              for (const oldEvent of events) {
+                const shiftedStart: number =
+                  oldBarStart + oldEvent.start + partsToMove;
+                const shiftedEnd: number =
+                  oldBarStart + oldEvent.end + partsToMove;
+                const startBar: number = Math.floor(
+                  shiftedStart / newPartsPerBar,
+                );
+                const endBar: number = Math.ceil(
+                  shiftedEnd / newPartsPerBar,
+                );
+                for (let bar: number = startBar; bar < endBar; bar++) {
+                  const projected: AutomationEvent | null =
+                    projectAutomationEventIntoBar(
+                      oldEvent,
+                      oldBarStart,
+                      partsToMove,
+                      bar,
+                      newPartsPerBar,
+                    );
+                  if (projected == null) continue;
+                  const pattern: Pattern | null = getOrCreateProjectedPattern(
+                    newChannel,
+                    bar,
+                    oldChannel.automationRows.length,
+                  );
+                  pattern?.automationEvents[rowIndex].push(projected);
+                }
+              }
+            }
+            continue;
+          }
           for (const oldNote of oldPattern.notes) {
             const absoluteNoteStart: number =
               oldNote.start + oldBarStart + partsToMove;
@@ -299,17 +471,9 @@ export class ChangeMoveAndOverflowNotes extends ChangeGroup {
               );
 
               if (noteStartPart < noteEndPart) {
-                // Ensure a pattern exists for the current bar before inserting notes into it.
-                if (currentBar != bar || pattern == null) {
-                  currentBar++;
-                  while (currentBar < bar) {
-                    newChannel.bars[currentBar] = 0;
-                    currentBar++;
-                  }
-                  pattern = new Pattern();
-                  newChannel.patterns.push(pattern);
-                  newChannel.bars[currentBar] = newChannel.patterns.length;
-                }
+                const pattern: Pattern | null =
+                  getOrCreateProjectedPattern(newChannel, bar);
+                if (pattern == null) continue;
 
                 projectNoteIntoBar(
                   oldNote,
@@ -327,7 +491,15 @@ export class ChangeMoveAndOverflowNotes extends ChangeGroup {
 
     removeDuplicatePatterns(pitchChannels);
     removeDuplicatePatterns(noiseChannels);
-    this.append(new ChangeReplacePatterns(doc, pitchChannels, noiseChannels));
+    removeDuplicatePatterns(automationChannels);
+    this.append(
+      new ChangeReplacePatterns(
+        doc,
+        pitchChannels,
+        noiseChannels,
+        automationChannels,
+      ),
+    );
   }
 }
 
@@ -512,6 +684,7 @@ export class ChangePreset extends Change {
         }
       }
       instrument.preset = newValue;
+      markInvalidAutomationTargetsForCurrentInstrument(doc);
       doc.notifier.changed();
       this._didSomething();
     }
@@ -1462,6 +1635,7 @@ export class ChangeRandomGeneratedInstrument extends Change {
       settings.b = Math.round(Math.random() * 200) / 100;
     }
 
+    markInvalidAutomationTargetsForCurrentInstrument(doc);
     doc.notifier.changed();
     this._didSomething();
   }
@@ -1494,7 +1668,18 @@ export class ChangeToggleEffects extends Change {
       : oldValue | (1 << toggleFlag);
     instrument.effects = newValue;
     instrument.preset = instrument.type;
-    if (wasSelected) instrument.clearInvalidEnvelopeTargets();
+    if (wasSelected) {
+      instrument.clearInvalidEnvelopeTargets();
+      const instrumentIndex: number = doc.getCurrentInstrument();
+      doc.song.forEachAutomationRow((row): void => {
+        const target = Config.automationTargets.dictionary[row.targetId];
+        if (
+          row.targetChannel == doc.channel &&
+          row.targetInstrument == instrumentIndex &&
+          target?.effect == toggleFlag
+        ) row.targetElementMissing = true;
+      });
+    }
     this._didSomething();
     doc.notifier.changed();
   }
@@ -1670,6 +1855,14 @@ export class ChangeChannelOrder extends Change {
     ) {
       throw new Error("Channel reorder index out of range.");
     }
+    const kind: ChannelKind = doc.song.getChannelKind(selectionMin);
+    if (
+      doc.song.getChannelKind(selectionMax) != kind ||
+      doc.song.getChannelKind(target) != kind ||
+      doc.song.getChannelKind(target + selectionLength - 1) != kind
+    ) throw new Error("Channels can only be reordered within their group.");
+
+    const oldChannels: Channel[] = doc.song.channels.concat();
 
     doc.song.channels.splice(
       target,
@@ -1683,6 +1876,11 @@ export class ChangeChannelOrder extends Change {
         ...doc.viewedInstrument.splice(selectionMin, selectionLength),
       );
     }
+    doc.song.remapAutomationChannelReferences(
+      oldChannels.map(
+        (channel: Channel): number => doc.song.channels.indexOf(channel),
+      ),
+    );
     doc.notifier.changed();
     this._didSomething();
   }
@@ -1693,12 +1891,26 @@ export class ChangeChannelCount extends Change {
     doc: SongDocument,
     newPitchChannelCount: number,
     newNoiseChannelCount: number,
+    newAutomationChannelCount: number = doc.song.automationChannelCount,
   ) {
     super();
     if (
       doc.song.pitchChannelCount != newPitchChannelCount ||
-      doc.song.noiseChannelCount != newNoiseChannelCount
+      doc.song.noiseChannelCount != newNoiseChannelCount ||
+      doc.song.automationChannelCount != newAutomationChannelCount
     ) {
+      if (
+        newPitchChannelCount < Config.pitchChannelCountMin ||
+        newPitchChannelCount > Config.pitchChannelCountMax ||
+        newNoiseChannelCount < Config.noiseChannelCountMin ||
+        newNoiseChannelCount > Config.noiseChannelCountMax ||
+        newAutomationChannelCount < Config.automationChannelCountMin ||
+        newAutomationChannelCount > Config.automationChannelCountMax
+      ) throw new RangeError("Channel count out of range.");
+      const oldPitchChannelCount: number = doc.song.pitchChannelCount;
+      const oldNoiseChannelCount: number = doc.song.noiseChannelCount;
+      const oldAutomationChannelCount: number =
+        doc.song.automationChannelCount;
       const newChannels: Channel[] = [];
 
       function changeGroup(
@@ -1707,7 +1919,7 @@ export class ChangeChannelCount extends Change {
         newStart: number,
         oldStart: number,
         octave: number,
-        isNoise: boolean,
+        kind: ChannelKind,
       ): void {
         for (let i: number = 0; i < newCount; i++) {
           const channelIndex = i + newStart;
@@ -1715,22 +1927,17 @@ export class ChangeChannelCount extends Change {
           if (i < oldCount) {
             newChannels[channelIndex] = doc.song.channels[oldChannel];
           } else {
-            newChannels[channelIndex] = new Channel();
+            newChannels[channelIndex] = doc.song.createChannel(kind);
             newChannels[channelIndex].octave = octave;
-            for (let j: number = 0; j < Config.instrumentCountMin; j++) {
-              const instrument: Instrument = new Instrument(isNoise);
-              const presetValue: number = pickRandomPresetValue();
-              const preset: Preset = EditorConfig.valueToPreset(presetValue)!;
-              instrument.fromSettingsObject(preset.settings, isNoise);
-              instrument.preset = presetValue;
-              instrument.volume = Config.volumeDefault;
-              newChannels[channelIndex].instruments[j] = instrument;
-            }
-            for (let j: number = 0; j < doc.song.patternsPerChannel; j++) {
-              newChannels[channelIndex].patterns[j] = new Pattern();
-            }
-            for (let j: number = 0; j < doc.song.barCount; j++) {
-              newChannels[channelIndex].bars[j] = 0;
+            if (kind != ChannelKind.automation) {
+              const isNoise: boolean = kind == ChannelKind.noise;
+              for (const instrument of newChannels[channelIndex].instruments) {
+                const presetValue: number = pickRandomPresetValue();
+                const preset: Preset = EditorConfig.valueToPreset(presetValue)!;
+                instrument.fromSettingsObject(preset.settings, isNoise);
+                instrument.preset = presetValue;
+                instrument.volume = Config.volumeDefault;
+              }
             }
           }
         }
@@ -1742,7 +1949,7 @@ export class ChangeChannelCount extends Change {
         0,
         0,
         3,
-        false,
+        ChannelKind.pitch,
       );
       changeGroup(
         newNoiseChannelCount,
@@ -1750,11 +1957,33 @@ export class ChangeChannelCount extends Change {
         newPitchChannelCount,
         doc.song.pitchChannelCount,
         0,
-        true,
+        ChannelKind.noise,
+      );
+      changeGroup(
+        newAutomationChannelCount,
+        oldAutomationChannelCount,
+        newPitchChannelCount + newNoiseChannelCount,
+        oldPitchChannelCount + oldNoiseChannelCount,
+        0,
+        ChannelKind.automation,
       );
 
+      const oldToNew: (number | null)[] = [];
+      for (let index: number = 0; index < oldPitchChannelCount; index++)
+        oldToNew.push(index < newPitchChannelCount ? index : null);
+      for (let index: number = 0; index < oldNoiseChannelCount; index++)
+        oldToNew.push(
+          index < newNoiseChannelCount ? newPitchChannelCount + index : null,
+        );
+      for (let index: number = 0; index < oldAutomationChannelCount; index++)
+        oldToNew.push(
+          index < newAutomationChannelCount
+            ? newPitchChannelCount + newNoiseChannelCount + index
+            : null,
+        );
       doc.song.pitchChannelCount = newPitchChannelCount;
       doc.song.noiseChannelCount = newNoiseChannelCount;
+      doc.song.automationChannelCount = newAutomationChannelCount;
       for (
         let channelIndex: number = 0;
         channelIndex < doc.song.getChannelCount();
@@ -1763,10 +1992,11 @@ export class ChangeChannelCount extends Change {
         doc.song.channels[channelIndex] = newChannels[channelIndex];
       }
       doc.song.channels.length = doc.song.getChannelCount();
+      doc.song.remapAutomationChannelReferences(oldToNew);
 
       doc.channel = Math.min(
         doc.channel,
-        newPitchChannelCount + newNoiseChannelCount - 1,
+        doc.song.getChannelCount() - 1,
       );
       doc.notifier.changed();
 
@@ -1775,22 +2005,429 @@ export class ChangeChannelCount extends Change {
   }
 }
 
-export class ChangeAddChannel extends ChangeGroup {
-  constructor(doc: SongDocument, index: number, isNoise: boolean) {
+function getAutomationRow(doc: SongDocument, rowIndex: number): AutomationRow {
+  if (!doc.song.getChannelIsAutomation(doc.channel))
+    throw new Error("The selected channel is not an Automation channel.");
+  const row: AutomationRow | undefined =
+    doc.song.channels[doc.channel].automationRows[rowIndex];
+  if (row == undefined) throw new RangeError("Automation row index out of range.");
+  return row;
+}
+
+function remapAutomationRowValues(
+  doc: SongDocument,
+  rowIndex: number,
+  sourceDomain: AutomationValueDomain | null,
+  destinationDomain: AutomationValueDomain | null,
+): void {
+  const channel: Channel = doc.song.channels[doc.channel];
+  for (const pattern of channel.patterns) {
+    for (const event of pattern.automationEvents[rowIndex] ?? []) {
+      for (const point of event.points) {
+        point.value = mapAutomationClipboardValue(
+          point.value,
+          false,
+          sourceDomain,
+          destinationDomain,
+        );
+      }
+    }
+  }
+}
+
+export class ChangeAutomationRowCount extends Change {
+  constructor(doc: SongDocument, rowCount: number) {
     super();
+    if (!doc.song.getChannelIsAutomation(doc.channel)) return;
+    const oldCount: number =
+      doc.song.channels[doc.channel].automationRows.length;
+    if (oldCount == rowCount) return;
+    doc.song.setAutomationRowCount(doc.channel, rowCount);
+    doc.notifier.changed();
+    this._didSomething();
+  }
+}
+
+export class ChangeAutomationTargetChannel extends Change {
+  constructor(doc: SongDocument, rowIndex: number, targetChannel: number) {
+    super();
+    const row: AutomationRow = getAutomationRow(doc, rowIndex);
+    if (targetChannel == -1) {
+      if (
+        row.targetChannel == -1 &&
+        row.targetId == "tempo" &&
+        !row.targetChannelMissing
+      ) return;
+      const sourceDomain: AutomationValueDomain | null = row.getValueDomain();
+      const compatibleTarget: boolean =
+        row.targetId == "tempo" && row.targetIndex == 0;
+      row.setSongTarget();
+      if (!compatibleTarget) {
+        remapAutomationRowValues(
+          doc,
+          rowIndex,
+          sourceDomain,
+          row.getValueDomain(),
+        );
+      }
+    } else {
+      if (
+        targetChannel < 0 ||
+        targetChannel >= doc.song.getChannelCount() ||
+        doc.song.getChannelIsAutomation(targetChannel)
+      ) throw new RangeError("Invalid automation target channel.");
+      const instrument = doc.song.channels[targetChannel].instruments[0];
+      row.targetChannel = targetChannel;
+      row.targetChannelKind = doc.song.getChannelKind(targetChannel);
+      row.targetInstrument = 0;
+      row.targetChannelMissing = false;
+      row.targetInstrumentMissing = instrument == undefined;
+      const target = Config.automationTargets.dictionary[row.targetId];
+      row.targetElementMissing =
+        instrument == undefined ||
+        target == undefined ||
+        !Config.automationTargetIsValidForInstrument(
+          target,
+          instrument,
+          row.targetIndex,
+        );
+    }
+    doc.notifier.changed();
+    this._didSomething();
+  }
+}
+
+export class ChangeAutomationTargetInstrument extends Change {
+  constructor(doc: SongDocument, rowIndex: number, instrumentIndex: number) {
+    super();
+    const row: AutomationRow = getAutomationRow(doc, rowIndex);
+    if (
+      row.targetChannel < 0 ||
+      row.targetChannel >= doc.song.getChannelCount() ||
+      doc.song.getChannelIsAutomation(row.targetChannel) ||
+      instrumentIndex < 0 ||
+      instrumentIndex >=
+        doc.song.channels[row.targetChannel].instruments.length
+    ) throw new RangeError("Invalid automation target instrument.");
+    if (
+      row.targetInstrument == instrumentIndex &&
+      !row.targetInstrumentMissing
+    ) return;
+    row.targetInstrument = instrumentIndex;
+    row.targetInstrumentMissing = false;
+    const instrument =
+      doc.song.channels[row.targetChannel].instruments[instrumentIndex];
+    const currentTarget = Config.automationTargets.dictionary[row.targetId];
+    row.targetElementMissing =
+      currentTarget == undefined ||
+      !Config.automationTargetIsValidForInstrument(
+        currentTarget,
+        instrument,
+        row.targetIndex,
+      );
+    doc.notifier.changed();
+    this._didSomething();
+  }
+}
+
+export class ChangeAutomationTargetElement extends Change {
+  constructor(
+    doc: SongDocument,
+    rowIndex: number,
+    targetId: string,
+    targetIndex: number,
+  ) {
+    super();
+    const row: AutomationRow = getAutomationRow(doc, rowIndex);
+    const sourceDomain: AutomationValueDomain | null = row.getValueDomain();
+    const compatibleTarget: boolean =
+      row.targetId == targetId && row.targetIndex == targetIndex;
+    const target = Config.automationTargets.dictionary[targetId];
+    if (target == undefined || target.supportsAutomation !== true)
+      throw new Error("Invalid automation target element.");
+    if (row.targetChannel == -1) {
+      if (target.scope != "song") throw new Error("Invalid song automation target.");
+    } else {
+      const instrument =
+        doc.song.channels[row.targetChannel]?.instruments[row.targetInstrument];
+      if (
+        instrument == undefined ||
+        !Config.automationTargetIsValidForInstrument(
+          target,
+          instrument,
+          targetIndex,
+        )
+      ) throw new Error("Invalid instrument automation target.");
+    }
+    if (
+      row.targetId == targetId &&
+      row.targetIndex == targetIndex &&
+      !row.targetElementMissing
+    ) return;
+    row.targetId = targetId;
+    row.targetIndex = targetIndex;
+    row.targetElementMissing = false;
+    if (!compatibleTarget) {
+      remapAutomationRowValues(
+        doc,
+        rowIndex,
+        sourceDomain,
+        row.getValueDomain(),
+      );
+    }
+    doc.notifier.changed();
+    this._didSomething();
+  }
+}
+
+export class ChangeAutomationOperation extends Change {
+  constructor(
+    doc: SongDocument,
+    rowIndex: number,
+    operation: AutomationOperation,
+  ) {
+    super();
+    if (
+      operation < AutomationOperation.Multiply ||
+      operation > AutomationOperation.Set
+    ) throw new RangeError("Invalid automation operation.");
+    const row: AutomationRow = getAutomationRow(doc, rowIndex);
+    if (row.operation == operation) return;
+    row.operation = operation;
+    const domain = row.getValueDomain();
+    if (domain != null) {
+      const channel: Channel = doc.song.channels[doc.channel];
+      for (const pattern of channel.patterns) {
+        for (const event of pattern.automationEvents[rowIndex]) {
+          for (const point of event.points) {
+            point.value = Math.max(domain.min, Math.min(domain.max, point.value));
+            if (domain.integer) point.value = Math.round(point.value);
+          }
+        }
+      }
+    }
+    doc.notifier.changed();
+    this._didSomething();
+  }
+}
+
+export class ChangeAutomationEvents extends UndoableChange {
+  private readonly _oldEvents: AutomationEvent[];
+  private readonly _newEvents: AutomationEvent[];
+
+  constructor(
+    private readonly _doc: SongDocument,
+    private readonly _pattern: Pattern,
+    private readonly _rowIndex: number,
+    oldEvents: readonly AutomationEvent[],
+    newEvents: readonly AutomationEvent[],
+    reversed: boolean = false,
+  ) {
+    super(reversed);
+    this._oldEvents = oldEvents.map((event): AutomationEvent => event.clone());
+    this._newEvents = newEvents.map((event): AutomationEvent => event.clone());
+    if (!reversed) this._doForwards();
+    else this._doBackwards();
+    this._didSomething();
+  }
+
+  private _replace(events: readonly AutomationEvent[]): void {
+    this._pattern.ensureAutomationRowCount(this._rowIndex + 1);
+    this._pattern.automationEvents[this._rowIndex].splice(
+      0,
+      this._pattern.automationEvents[this._rowIndex].length,
+      ...events.map((event): AutomationEvent => event.clone()),
+    );
+    this._doc.notifier.changed();
+  }
+
+  protected override _doForwards(): void {
+    this._replace(this._newEvents);
+  }
+
+  protected override _doBackwards(): void {
+    this._replace(this._oldEvents);
+  }
+}
+
+export class ChangeAutomationEventCreate extends ChangeAutomationEvents {
+  constructor(
+    doc: SongDocument,
+    pattern: Pattern,
+    rowIndex: number,
+    event: AutomationEvent,
+  ) {
+    const oldEvents: AutomationEvent[] = pattern.automationEvents[rowIndex] ?? [];
+    const newEvents: AutomationEvent[] = oldEvents
+      .concat(event)
+      .sort((a: AutomationEvent, b: AutomationEvent): number => a.start - b.start);
+    super(doc, pattern, rowIndex, oldEvents, newEvents);
+  }
+}
+
+export class ChangeAutomationEventDelete extends ChangeAutomationEvents {
+  constructor(
+    doc: SongDocument,
+    pattern: Pattern,
+    rowIndex: number,
+    eventIndex: number,
+  ) {
+    const oldEvents: AutomationEvent[] = pattern.automationEvents[rowIndex] ?? [];
+    const newEvents: AutomationEvent[] = oldEvents.filter(
+      (_event: AutomationEvent, index: number): boolean => index != eventIndex,
+    );
+    super(doc, pattern, rowIndex, oldEvents, newEvents);
+  }
+}
+
+export class ChangeAutomationEventTiming extends ChangeAutomationEvents {
+  constructor(
+    doc: SongDocument,
+    pattern: Pattern,
+    rowIndex: number,
+    eventIndex: number,
+    start: number,
+    end: number,
+  ) {
+    const oldEvents: AutomationEvent[] = pattern.automationEvents[rowIndex] ?? [];
+    const newEvents: AutomationEvent[] = oldEvents.map(
+      (event: AutomationEvent, index: number): AutomationEvent => {
+        if (index != eventIndex) return event.clone();
+        const replacement: AutomationEvent = event.clone();
+        const oldDuration: number = replacement.end - replacement.start;
+        const newDuration: number = end - start;
+        replacement.start = start;
+        replacement.end = end;
+        if (oldDuration > 0 && oldDuration != newDuration) {
+          for (const point of replacement.points)
+            point.time = (point.time * newDuration) / oldDuration;
+        }
+        return replacement;
+      },
+    );
+    super(doc, pattern, rowIndex, oldEvents, newEvents);
+  }
+}
+
+export class ChangeAutomationPointMove extends ChangeAutomationEvents {
+  constructor(
+    doc: SongDocument,
+    pattern: Pattern,
+    rowIndex: number,
+    eventIndex: number,
+    pointIndex: number,
+    time: number,
+    value: number,
+  ) {
+    const oldEvents: AutomationEvent[] = pattern.automationEvents[rowIndex] ?? [];
+    const newEvents: AutomationEvent[] = oldEvents.map(
+      (event: AutomationEvent, index: number): AutomationEvent => {
+        const replacement: AutomationEvent = event.clone();
+        if (index == eventIndex) {
+          replacement.points[pointIndex].time = time;
+          replacement.points[pointIndex].value = value;
+          replacement.points.sort(
+            (a: AutomationPoint, b: AutomationPoint): number => a.time - b.time,
+          );
+        }
+        return replacement;
+      },
+    );
+    super(doc, pattern, rowIndex, oldEvents, newEvents);
+  }
+}
+
+export class ChangeAutomationPointAdd extends ChangeAutomationEvents {
+  constructor(
+    doc: SongDocument,
+    pattern: Pattern,
+    rowIndex: number,
+    eventIndex: number,
+    point: AutomationPoint,
+  ) {
+    const oldEvents: AutomationEvent[] = pattern.automationEvents[rowIndex] ?? [];
+    const newEvents: AutomationEvent[] = oldEvents.map(
+      (event: AutomationEvent, index: number): AutomationEvent => {
+        const replacement: AutomationEvent = event.clone();
+        if (index == eventIndex) {
+          replacement.points.push(point.clone());
+          replacement.points.sort(
+            (a: AutomationPoint, b: AutomationPoint): number => a.time - b.time,
+          );
+        }
+        return replacement;
+      },
+    );
+    super(doc, pattern, rowIndex, oldEvents, newEvents);
+  }
+}
+
+export class ChangeAutomationPointDelete extends ChangeAutomationEvents {
+  constructor(
+    doc: SongDocument,
+    pattern: Pattern,
+    rowIndex: number,
+    eventIndex: number,
+    pointIndex: number,
+  ) {
+    const oldEvents: AutomationEvent[] = pattern.automationEvents[rowIndex] ?? [];
+    const newEvents: AutomationEvent[] = oldEvents.map(
+      (event: AutomationEvent, index: number): AutomationEvent => {
+        const replacement: AutomationEvent = event.clone();
+        if (
+          index == eventIndex &&
+          replacement.points.length > 2 &&
+          pointIndex > 0 &&
+          pointIndex < replacement.points.length - 1
+        )
+          replacement.points.splice(pointIndex, 1);
+        return replacement;
+      },
+    );
+    super(doc, pattern, rowIndex, oldEvents, newEvents);
+  }
+}
+
+export class ChangeAutomationEventValue extends ChangeAutomationPointMove {}
+
+export class ChangeAddChannel extends ChangeGroup {
+  constructor(
+    doc: SongDocument,
+    index: number,
+    kindOrIsNoise: ChannelKind | boolean,
+  ) {
+    super();
+    const kind: ChannelKind =
+      typeof kindOrIsNoise == "boolean"
+        ? kindOrIsNoise
+          ? ChannelKind.noise
+          : ChannelKind.pitch
+        : kindOrIsNoise;
     const newPitchChannelCount: number =
-      doc.song.pitchChannelCount + (isNoise ? 0 : 1);
+      doc.song.pitchChannelCount + (kind == ChannelKind.pitch ? 1 : 0);
     const newNoiseChannelCount: number =
-      doc.song.noiseChannelCount + (isNoise ? 1 : 0);
+      doc.song.noiseChannelCount + (kind == ChannelKind.noise ? 1 : 0);
+    const newAutomationChannelCount: number =
+      doc.song.automationChannelCount +
+      (kind == ChannelKind.automation ? 1 : 0);
     if (
       newPitchChannelCount <= Config.pitchChannelCountMax &&
-      newNoiseChannelCount <= Config.noiseChannelCountMax
+      newNoiseChannelCount <= Config.noiseChannelCountMax &&
+      newAutomationChannelCount <= Config.automationChannelCountMax
     ) {
-      const addedChannelIndex: number = isNoise
-        ? doc.song.pitchChannelCount + doc.song.noiseChannelCount
-        : doc.song.pitchChannelCount;
+      const addedChannelIndex: number =
+        kind == ChannelKind.pitch
+          ? doc.song.pitchChannelCount
+          : kind == ChannelKind.noise
+            ? doc.song.pitchChannelCount + doc.song.noiseChannelCount
+            : doc.song.getChannelCount();
       this.append(
-        new ChangeChannelCount(doc, newPitchChannelCount, newNoiseChannelCount),
+        new ChangeChannelCount(
+          doc,
+          newPitchChannelCount,
+          newNoiseChannelCount,
+          newAutomationChannelCount,
+        ),
       );
       this.append(new ChangeChannelOrder(doc, index, addedChannelIndex - 1, 1));
     }
@@ -1801,16 +2438,26 @@ export class ChangeRemoveChannel extends ChangeGroup {
   constructor(doc: SongDocument, minIndex: number, maxIndex: number) {
     super();
 
+    const oldChannels: Channel[] = doc.song.channels.concat();
+
     while (maxIndex >= minIndex) {
-      const isNoise: boolean = doc.song.getChannelIsNoise(maxIndex);
+      const kind: ChannelKind = doc.song.getChannelKind(maxIndex);
       doc.song.channels.splice(maxIndex, 1);
-      if (isNoise) {
+      if (kind == ChannelKind.noise) {
         doc.song.noiseChannelCount--;
-      } else {
+      } else if (kind == ChannelKind.pitch) {
         doc.song.pitchChannelCount--;
+      } else {
+        doc.song.automationChannelCount--;
       }
       maxIndex--;
     }
+    doc.song.remapAutomationChannelReferences(
+      oldChannels.map((channel: Channel): number | null => {
+        const index: number = doc.song.channels.indexOf(channel);
+        return index == -1 ? null : index;
+      }),
+    );
 
     if (doc.song.pitchChannelCount < Config.pitchChannelCountMin) {
       this.append(
@@ -2107,6 +2754,9 @@ export class ChangeFilterAddPoint extends UndoableChange {
   private _envelopeIndicesAdd: number[] = [];
   private _envelopeTargetsRemove: number[] = [];
   private _envelopeIndicesRemove: number[] = [];
+  private readonly _automationRows: AutomationRow[] = [];
+  private readonly _automationTargetsAdd: AutomationRow[] = [];
+  private readonly _automationTargetsRemove: AutomationRow[] = [];
   constructor(
     doc: SongDocument,
     filterSettings: FilterSettings,
@@ -2171,6 +2821,39 @@ export class ChangeFilterAddPoint extends UndoableChange {
       this._envelopeIndicesRemove.push(targetIndex);
     }
 
+    const instrumentIndex: number = this._doc.getCurrentInstrument();
+    this._doc.song.forEachAutomationRow((row: AutomationRow): void => {
+      if (
+        row.targetChannel != this._doc.channel ||
+        row.targetInstrument != instrumentIndex ||
+        row.targetChannelMissing ||
+        row.targetInstrumentMissing
+      ) return;
+      const target = Config.automationTargets.dictionary[row.targetId];
+      const targetsThisFilter: boolean = isNoteFilter
+        ? target?.property == "noteFilterFrequency" ||
+          target?.property == "noteFilterGain"
+        : target?.property == "eqFilterFrequency" ||
+          target?.property == "eqFilterGain";
+      if (!targetsThisFilter) return;
+      const present: AutomationRow = row.clone();
+      const absent: AutomationRow = row.clone();
+      if (!row.targetElementMissing) {
+        if (deletion) {
+          if (absent.targetIndex == index) {
+            absent.targetElementMissing = true;
+          } else if (absent.targetIndex > index) {
+            absent.targetIndex--;
+          }
+        } else if (present.targetIndex >= index) {
+          present.targetIndex++;
+        }
+      }
+      this._automationRows.push(row);
+      this._automationTargetsAdd.push(present);
+      this._automationTargetsRemove.push(absent);
+    });
+
     this._didSomething();
     this.redo();
   }
@@ -2191,6 +2874,7 @@ export class ChangeFilterAddPoint extends UndoableChange {
       this._instrument.envelopes[envelopeIndex].index =
         this._envelopeIndicesAdd[envelopeIndex];
     }
+    this._applyAutomationReferences(this._automationTargetsAdd);
     this._doc.notifier.changed();
   }
 
@@ -2210,7 +2894,17 @@ export class ChangeFilterAddPoint extends UndoableChange {
       this._instrument.envelopes[envelopeIndex].index =
         this._envelopeIndicesRemove[envelopeIndex];
     }
+    this._applyAutomationReferences(this._automationTargetsRemove);
     this._doc.notifier.changed();
+  }
+
+  private _applyAutomationReferences(states: readonly AutomationRow[]): void {
+    for (let index: number = 0; index < this._automationRows.length; index++) {
+      const row: AutomationRow = this._automationRows[index];
+      const state: AutomationRow = states[index];
+      row.targetIndex = state.targetIndex;
+      row.targetElementMissing = state.targetElementMissing;
+    }
   }
 }
 
@@ -2469,6 +3163,7 @@ export class ChangeFeedbackAmplitude extends ChangeInstrumentSlider {
 export class ChangeAddChannelInstrument extends Change {
   constructor(doc: SongDocument) {
     super();
+    if (doc.song.getChannelIsAutomation(doc.channel)) return;
     const channel: Channel = doc.song.channels[doc.channel];
     const isNoise: boolean = doc.song.getChannelIsNoise(doc.channel);
     const maxInstruments: number = doc.song.getMaxInstrumentsPerChannel();
@@ -2489,10 +3184,28 @@ export class ChangeAddChannelInstrument extends Change {
 export class ChangeRemoveChannelInstrument extends Change {
   constructor(doc: SongDocument) {
     super();
+    if (doc.song.getChannelIsAutomation(doc.channel)) return;
     const channel: Channel = doc.song.channels[doc.channel];
     if (channel.instruments.length <= Config.instrumentCountMin) return;
     const removedIndex: number = doc.viewedInstrument[doc.channel];
+    const oldInstrumentCount: number = channel.instruments.length;
     channel.instruments.splice(removedIndex, 1);
+    doc.song.remapAutomationInstrumentReferences(
+      doc.channel,
+      Array.from(
+        { length: oldInstrumentCount },
+        (_unused: unknown, index: number): number | null =>
+          index == removedIndex
+            ? null
+            : index < removedIndex
+              ? index
+              : index - 1,
+      ),
+    );
+    doc.viewedInstrument[doc.channel] = Math.min(
+      doc.viewedInstrument[doc.channel],
+      channel.instruments.length - 1,
+    );
     doc.notifier.changed();
     this._didSomething();
   }
@@ -2678,6 +3391,7 @@ export class ChangePasteInstrument extends ChangeGroup {
       instrumentCopy,
       doc.song.getChannelIsNoise(doc.channel),
     );
+    markInvalidAutomationTargetsForCurrentInstrument(doc);
     doc.notifier.changed();
     this._didSomething();
   }
@@ -2695,6 +3409,11 @@ export class ChangePatternsPerChannel extends Change {
         }
         for (let j: number = channelPatterns.length; j < newValue; j++) {
           channelPatterns[j] = new Pattern();
+          if (doc.song.getChannelIsAutomation(i)) {
+            channelPatterns[j].ensureAutomationRowCount(
+              doc.song.channels[i].automationRows.length,
+            );
+          }
         }
         channelPatterns.length = newValue;
       }
@@ -2711,13 +3430,19 @@ export class ChangeRectifyPatterns extends Change {
     const rectifiedPatterns: Pattern[][] = [];
     let patternsPerChannel: number = 0;
 
-    for (const channel of doc.song.channels) {
+    for (
+      let channelIndex: number = 0;
+      channelIndex < doc.song.channels.length;
+      channelIndex++
+    ) {
+      const channel: Channel = doc.song.channels[channelIndex];
+      const kind: ChannelKind = doc.song.getChannelKind(channelIndex);
       // Empty patterns are equivalent to empty cells.
       for (let bar: number = 0; bar < channel.bars.length; bar++) {
         const patternNumber: number = channel.bars[bar];
         if (
           patternNumber != 0 &&
-          channel.patterns[patternNumber - 1].notes.length == 0
+          !channel.patterns[patternNumber - 1].hasContent(kind)
         ) {
           channel.bars[bar] = 0;
           this._didSomething();
@@ -2733,9 +3458,14 @@ export class ChangeRectifyPatterns extends Change {
       ) {
         if (
           !referencedPatterns.has(patternIndex + 1) &&
-          channel.patterns[patternIndex].notes.length > 0
+          channel.patterns[patternIndex].hasContent(kind)
         ) {
-          channel.patterns[patternIndex].notes.length = 0;
+          channel.patterns[patternIndex].reset();
+          if (kind == ChannelKind.automation) {
+            channel.patterns[patternIndex].ensureAutomationRowCount(
+              channel.automationRows.length,
+            );
+          }
           this._didSomething();
         }
       }
@@ -2754,12 +3484,7 @@ export class ChangeRectifyPatterns extends Change {
           patternIndex < newPatterns.length;
           patternIndex++
         ) {
-          if (
-            comparePatternNotes(
-              oldPattern.notes,
-              newPatterns[patternIndex].notes,
-            )
-          ) {
+          if (oldPattern.contentEquals(newPatterns[patternIndex], kind)) {
             newPatternNumber = patternIndex + 1;
             break;
           }
@@ -2788,6 +3513,7 @@ export class ChangeRectifyPatterns extends Change {
     ) {
       const patterns: Pattern[] = doc.song.channels[channelIndex].patterns;
       const newPatterns: Pattern[] = rectifiedPatterns[channelIndex];
+      const kind: ChannelKind = doc.song.getChannelKind(channelIndex);
       for (
         let patternIndex: number = 0;
         patternIndex < patternsPerChannel;
@@ -2795,9 +3521,13 @@ export class ChangeRectifyPatterns extends Change {
       ) {
         const pattern: Pattern =
           newPatterns[patternIndex] ||
-          (patterns[patternIndex]?.notes.length == 0
+          (!patterns[patternIndex]?.hasContent(kind)
             ? patterns[patternIndex]
             : new Pattern());
+        if (kind == ChannelKind.automation)
+          pattern.ensureAutomationRowCount(
+            doc.song.channels[channelIndex].automationRows.length,
+          );
         if (patterns[patternIndex] !== pattern) {
           patterns[patternIndex] = pattern;
           this._didSomething();
@@ -2822,7 +3552,7 @@ export class ChangeEnsurePatternExists extends UndoableChange {
   private _bar!: number;
   private _channelIndex!: number;
   private _patternIndex!: number;
-  private _patternOldNotes: Note[] | null = null;
+  private _oldPattern: Pattern | null = null;
   private _oldPatternCount!: number;
   private _newPatternCount!: number;
 
@@ -2836,6 +3566,7 @@ export class ChangeEnsurePatternExists extends UndoableChange {
     this._channelIndex = channelIndex;
     this._oldPatternCount = song.patternsPerChannel;
     this._newPatternCount = song.patternsPerChannel;
+    const kind: ChannelKind = song.getChannelKind(channelIndex);
 
     let firstEmptyUnusedIndex: number | null = null;
     let firstUnusedIndex: number | null = null;
@@ -2857,7 +3588,7 @@ export class ChangeEnsurePatternExists extends UndoableChange {
       }
       const pattern: Pattern =
         song.channels[channelIndex].patterns[patternIndex - 1];
-      if (pattern.notes.length == 0) {
+      if (!pattern.hasContent(kind)) {
         firstEmptyUnusedIndex = patternIndex;
         break;
       }
@@ -2870,8 +3601,8 @@ export class ChangeEnsurePatternExists extends UndoableChange {
       this._patternIndex = song.patternsPerChannel + 1;
     } else if (firstUnusedIndex != null) {
       this._patternIndex = firstUnusedIndex;
-      this._patternOldNotes =
-        song.channels[channelIndex].patterns[firstUnusedIndex - 1].notes;
+      this._oldPattern =
+        song.channels[channelIndex].patterns[firstUnusedIndex - 1].clone();
     } else {
       throw new Error();
     }
@@ -2889,12 +3620,22 @@ export class ChangeEnsurePatternExists extends UndoableChange {
     ) {
       for (let i: number = 0; i < song.getChannelCount(); i++) {
         song.channels[i].patterns[j] = new Pattern();
+        if (song.getChannelIsAutomation(i)) {
+          song.channels[i].patterns[j].ensureAutomationRowCount(
+            song.channels[i].automationRows.length,
+          );
+        }
       }
     }
     song.patternsPerChannel = this._newPatternCount;
     const pattern: Pattern =
       song.channels[this._channelIndex].patterns[this._patternIndex - 1];
-    pattern.notes = [];
+    pattern.reset();
+    if (song.getChannelIsAutomation(this._channelIndex)) {
+      pattern.ensureAutomationRowCount(
+        song.channels[this._channelIndex].automationRows.length,
+      );
+    }
     song.channels[this._channelIndex].bars[this._bar] = this._patternIndex;
     this._doc.notifier.changed();
   }
@@ -2903,7 +3644,7 @@ export class ChangeEnsurePatternExists extends UndoableChange {
     const song: Song = this._doc.song;
     const pattern: Pattern =
       song.channels[this._channelIndex].patterns[this._patternIndex - 1];
-    if (this._patternOldNotes != null) pattern.notes = this._patternOldNotes;
+    if (this._oldPattern != null) pattern.copyContentsFrom(this._oldPattern);
     song.channels[this._channelIndex].bars[this._bar] = 0;
     for (let i: number = 0; i < song.getChannelCount(); i++) {
       song.channels[i].patterns.length = this._oldPatternCount;
@@ -3134,8 +3875,42 @@ export class ChangeMoveNotesSideways extends ChangeGroup {
         {
           const partsPerBar: number =
             Config.partsPerBeat * doc.song.beatsPerBar;
-          for (const channel of doc.song.channels) {
+          for (
+            let channelIndex: number = 0;
+            channelIndex < doc.song.getChannelCount();
+            channelIndex++
+          ) {
+            const channel: Channel = doc.song.channels[channelIndex];
             for (const pattern of channel.patterns) {
+              if (doc.song.getChannelIsAutomation(channelIndex)) {
+                const newRows: AutomationEvent[][] = channel.automationRows.map(
+                  (): AutomationEvent[] => [],
+                );
+                for (
+                  let rowIndex: number = 0;
+                  rowIndex < channel.automationRows.length;
+                  rowIndex++
+                ) {
+                  for (const oldEvent of pattern.automationEvents[rowIndex] ?? []) {
+                    for (let bar: number = 1; bar >= 0; bar--) {
+                      const projected: AutomationEvent | null =
+                        projectAutomationEventIntoBar(
+                          oldEvent,
+                          0,
+                          partsToMove,
+                          bar,
+                          partsPerBar,
+                        );
+                      if (projected != null) newRows[rowIndex].push(projected);
+                    }
+                  }
+                  newRows[rowIndex].sort(
+                    (left, right): number => left.start - right.start,
+                  );
+                }
+                pattern.automationEvents = newRows;
+                continue;
+              }
               const newNotes: Note[] = [];
 
               for (let bar: number = 1; bar >= 0; bar--) {
@@ -3227,21 +4002,54 @@ export class ChangeBeatsPerBar extends ChangeGroup {
         case "splice":
           {
             if (doc.song.beatsPerBar > newValue) {
-              const sequence: ChangeSequence = new ChangeSequence();
               for (let i: number = 0; i < doc.song.getChannelCount(); i++) {
                 for (
                   let j: number = 0;
                   j < doc.song.channels[i].patterns.length;
                   j++
                 ) {
-                  sequence.append(
-                    new ChangeNoteTruncate(
-                      doc,
-                      doc.song.channels[i].patterns[j],
-                      newValue * Config.partsPerBeat,
-                      doc.song.beatsPerBar * Config.partsPerBeat,
-                    ),
-                  );
+                  const pattern: Pattern = doc.song.channels[i].patterns[j];
+                  if (doc.song.getChannelIsAutomation(i)) {
+                    for (
+                      let rowIndex: number = 0;
+                      rowIndex < pattern.automationEvents.length;
+                      rowIndex++
+                    ) {
+                      const oldEvents: readonly AutomationEvent[] =
+                        pattern.automationEvents[rowIndex];
+                      const newEvents: AutomationEvent[] =
+                        truncateAutomationEvents(
+                          oldEvents,
+                          newValue * Config.partsPerBeat,
+                        );
+                      if (
+                        oldEvents.length != newEvents.length ||
+                        oldEvents.some(
+                          (event, index): boolean =>
+                            event.end != newEvents[index]?.end,
+                        )
+                      ) {
+                        this.append(
+                          new ChangeAutomationEvents(
+                            doc,
+                            pattern,
+                            rowIndex,
+                            oldEvents,
+                            newEvents,
+                          ),
+                        );
+                      }
+                    }
+                  } else {
+                    this.append(
+                      new ChangeNoteTruncate(
+                        doc,
+                        pattern,
+                        newValue * Config.partsPerBeat,
+                        doc.song.beatsPerBar * Config.partsPerBeat,
+                      ),
+                    );
+                  }
                 }
               }
             }
@@ -3264,6 +4072,28 @@ export class ChangeBeatsPerBar extends ChangeGroup {
               ) {
                 const pattern: Pattern =
                   doc.song.channels[channelIndex].patterns[patternIndex];
+                if (doc.song.getChannelIsAutomation(channelIndex)) {
+                  const ratio: number = newValue / doc.song.beatsPerBar;
+                  for (
+                    let rowIndex: number = 0;
+                    rowIndex < pattern.automationEvents.length;
+                    rowIndex++
+                  ) {
+                    const oldEvents: readonly AutomationEvent[] =
+                      pattern.automationEvents[rowIndex];
+                    if (oldEvents.length == 0) continue;
+                    this.append(
+                      new ChangeAutomationEvents(
+                        doc,
+                        pattern,
+                        rowIndex,
+                        oldEvents,
+                        scaleAutomationEvents(oldEvents, ratio),
+                      ),
+                    );
+                  }
+                  continue;
+                }
                 let noteIndex: number = 0;
                 while (noteIndex < pattern.notes.length) {
                   const note: Note = pattern.notes[noteIndex];
@@ -3481,6 +4311,7 @@ export class ChangeReplacePatterns extends ChangeGroup {
     doc: SongDocument,
     pitchChannels: Channel[],
     noiseChannels: Channel[],
+    automationChannels: Channel[] = [],
   ) {
     super();
 
@@ -3513,6 +4344,10 @@ export class ChangeReplacePatterns extends ChangeGroup {
 
     removeExtraSparseChannels(pitchChannels, Config.pitchChannelCountMax);
     removeExtraSparseChannels(noiseChannels, Config.noiseChannelCountMax);
+    removeExtraSparseChannels(
+      automationChannels,
+      Config.automationChannelCountMax,
+    );
 
     while (pitchChannels.length < Config.pitchChannelCountMin)
       pitchChannels.push(new Channel());
@@ -3522,7 +4357,10 @@ export class ChangeReplacePatterns extends ChangeGroup {
     // Set minimum counts.
     song.barCount = 1;
     song.patternsPerChannel = 8;
-    const combinedChannels: Channel[] = pitchChannels.concat(noiseChannels);
+    const combinedChannels: Channel[] = pitchChannels.concat(
+      noiseChannels,
+      automationChannels,
+    );
     for (
       let channelIndex: number = 0;
       channelIndex < combinedChannels.length;
@@ -3539,6 +4377,7 @@ export class ChangeReplacePatterns extends ChangeGroup {
     song.channels.length = combinedChannels.length;
     song.pitchChannelCount = pitchChannels.length;
     song.noiseChannelCount = noiseChannels.length;
+    song.automationChannelCount = automationChannels.length;
 
     song.barCount = Math.min(Config.barCountMax, song.barCount);
     song.patternsPerChannel = Math.min(
@@ -3574,9 +4413,19 @@ export class ChangeReplacePatterns extends ChangeGroup {
       }
 
       while (channel.patterns.length < song.patternsPerChannel) {
-        channel.patterns.push(new Pattern());
+        const pattern: Pattern = new Pattern();
+        if (song.getChannelIsAutomation(channelIndex))
+          pattern.ensureAutomationRowCount(channel.automationRows.length);
+        channel.patterns.push(pattern);
       }
       channel.patterns.length = song.patternsPerChannel;
+      if (song.getChannelIsAutomation(channelIndex)) {
+        channel.instruments.length = 0;
+        for (const pattern of channel.patterns) {
+          pattern.ensureAutomationRowCount(channel.automationRows.length);
+          pattern.automationEvents.length = channel.automationRows.length;
+        }
+      }
     }
 
     song.loopStart = Math.max(0, Math.min(song.barCount - 1, song.loopStart));
@@ -3630,6 +4479,10 @@ export function comparePatternNotes(a: Note[], b: Note[]): boolean {
 
 export function removeDuplicatePatterns(channels: Channel[]): void {
   for (const channel of channels) {
+    const kind: ChannelKind =
+      channel.instruments.length == 0 && channel.automationRows.length > 0
+        ? ChannelKind.automation
+        : ChannelKind.pitch;
     const newPatterns: Pattern[] = [];
     for (let bar: number = 0; bar < channel.bars.length; bar++) {
       if (channel.bars[bar] == 0) continue;
@@ -3644,11 +4497,7 @@ export function removeDuplicatePatterns(channels: Channel[]): void {
       ) {
         const newPattern: Pattern = newPatterns[newPatternIndex];
 
-        if (newPattern.notes.length != oldPattern.notes.length) {
-          continue;
-        }
-
-        if (comparePatternNotes(oldPattern.notes, newPattern.notes)) {
+        if (oldPattern.contentEquals(newPattern, kind)) {
           foundMatchingPattern = true;
           channel.bars[bar] = newPatternIndex + 1;
           break;
@@ -4360,16 +5209,37 @@ export class ChangeDuplicateSelectedReusedPatterns extends ChangeGroup {
               bar,
             );
             if (newPattern == null) throw new Error();
-            this.append(
-              new ChangePaste(
-                doc,
-                newPattern,
-                copiedPattern.notes,
-                0,
-                Config.partsPerBeat * doc.song.beatsPerBar,
-                Config.partsPerBeat * doc.song.beatsPerBar,
-              ),
-            );
+            if (doc.song.getChannelIsAutomation(channelIndex)) {
+              newPattern.ensureAutomationRowCount(
+                doc.song.channels[channelIndex].automationRows.length,
+              );
+              for (
+                let rowIndex: number = 0;
+                rowIndex < newPattern.automationEvents.length;
+                rowIndex++
+              ) {
+                this.append(
+                  new ChangeAutomationEvents(
+                    doc,
+                    newPattern,
+                    rowIndex,
+                    newPattern.automationEvents[rowIndex],
+                    copiedPattern.automationEvents[rowIndex] ?? [],
+                  ),
+                );
+              }
+            } else {
+              this.append(
+                new ChangePaste(
+                  doc,
+                  newPattern,
+                  copiedPattern.notes,
+                  0,
+                  Config.partsPerBeat * doc.song.beatsPerBar,
+                  Config.partsPerBeat * doc.song.beatsPerBar,
+                ),
+              );
+            }
 
             reusablePatterns[String(currentPatternIndex)] =
               doc.song.channels[channelIndex].bars[bar];
@@ -4602,6 +5472,7 @@ export class ChangeSoundFontPresetSelection extends Change {
       doc.song.tempo,
       doc.song.getChannelIsNoise(doc.channel),
     );
+    markInvalidAutomationTargetsForCurrentInstrument(doc);
     doc.notifier.changed();
     this._didSomething();
   }
@@ -4628,6 +5499,7 @@ export class ChangeSamplePresetSelection extends Change {
     instrument.chipWave = chipWave.index;
     instrument.volume = volume;
     instrument.pan = pan;
+    markInvalidAutomationTargetsForCurrentInstrument(doc);
     doc.notifier.changed();
     this._didSomething();
   }

@@ -174,9 +174,10 @@ async function loadSongHistory() {
         'export {SongDocument} from "./src/SongDocument.ts";',
         'export {encodeSongUrl, decodeSongUrl, decodeSongUrlHash} from "./src/SongUrl.ts";',
         'export {encodeSongBinary, decodeSongBinary, extractCompressedSongBody} from "./synth/SongBinary.ts";',
-        'export {Instrument, Note, Pattern, Song} from "./synth/synth.ts";',
+        'export {AutomationEvent, AutomationPoint, ChannelKind, Instrument, Note, Pattern, Song} from "./synth/synth.ts";',
         'export {Config} from "./synth/SynthConfig.ts";',
-        'export {ChangeAddChannelInstrument, ChangeBarCount, ChangeBarOrder, ChangeChannelBar, ChangeChannelOrder, ChangeChipWaveLoop, ChangeChorus, ChangeEnsurePatternExists, ChangeKey, ChangeLoop, ChangeNoteAdded, ChangeOctave, ChangePan, ChangeSong, ChangeTempo, ChangeToggleEffects, ChangeTrackSelection, ChangeVolume} from "./src/changes.ts";',
+        'export {ChangeAutomationEvents, ChangeAddChannelInstrument, ChangeBarCount, ChangeBarOrder, ChangeChannelBar, ChangeChannelCount, ChangeChannelOrder, ChangeChipWaveLoop, ChangeChorus, ChangeEnsurePatternExists, ChangeKey, ChangeLoop, ChangeNoteAdded, ChangeOctave, ChangePan, ChangeSong, ChangeTempo, ChangeToggleEffects, ChangeTrackSelection, ChangeVolume} from "./src/changes.ts";',
+        'export {ChangeGroup} from "./src/Change.ts";',
       ].join("\n"),
       resolveDir: process.cwd(),
       sourcefile: "song-history-entry.ts",
@@ -337,10 +338,14 @@ test("undo history is durable, contiguous, exact, and crash resistant", async (c
   const api = await loadSongHistory();
   context.after(api.cleanup);
   const {
+    AutomationEvent,
+    AutomationPoint,
+    ChangeAutomationEvents,
     ChangeAddChannelInstrument,
     ChangeBarCount,
     ChangeBarOrder,
     ChangeChannelBar,
+    ChangeChannelCount,
     ChangeChannelOrder,
     ChangeChipWaveLoop,
     ChangeChorus,
@@ -355,6 +360,8 @@ test("undo history is durable, contiguous, exact, and crash resistant", async (c
     ChangeToggleEffects,
     ChangeTrackSelection,
     ChangeVolume,
+    ChangeGroup,
+    ChannelKind,
     Config,
     Instrument,
     Note,
@@ -368,6 +375,68 @@ test("undo history is durable, contiguous, exact, and crash resistant", async (c
     encodeSongUrl,
     extractCompressedSongBody,
   } = api;
+
+  await context.test(
+    "Automation channels survive history undo, redo, and reload",
+    () => {
+      const browser = new FakeBrowser();
+      const doc = new SongDocument();
+      const group = new ChangeGroup();
+      group.append(
+        new ChangeChannelCount(
+          doc,
+          doc.song.pitchChannelCount,
+          doc.song.noiseChannelCount,
+          1,
+        ),
+      );
+      const channelIndex = doc.song.getChannelCount() - 1;
+      assert.equal(doc.song.getChannelKind(channelIndex), ChannelKind.automation);
+      group.append(new ChangeChannelBar(doc, channelIndex, 0));
+      group.append(new ChangeEnsurePatternExists(doc, channelIndex, 0));
+      const pattern = doc.song.getPattern(channelIndex, 0);
+      assert.notEqual(pattern, null);
+      const automationEvent = new AutomationEvent(0, 12, [
+        new AutomationPoint(0, 90.25),
+        new AutomationPoint(12, 180.75),
+      ]);
+      group.append(
+        new ChangeAutomationEvents(
+          doc,
+          pattern,
+          0,
+          pattern.automationEvents[0],
+          [automationEvent],
+        ),
+      );
+      assert.deepEqual(
+        doc.song.channels[channelIndex].patterns.map(
+          (candidate) => candidate.automationEvents.length,
+        ),
+        Array(doc.song.patternsPerChannel).fill(
+          doc.song.channels[channelIndex].automationRows.length,
+        ),
+      );
+      recordChange(browser, doc, group);
+      const expected = doc.song.toBinary();
+      assert.doesNotThrow(() => new Song(expected));
+
+      doc.undo();
+      assert.equal(doc.song.automationChannelCount, 0);
+      doc.redo();
+      assert.equal(doc.song.automationChannelCount, 1);
+      assert.deepEqual(doc.song.toBinary(), expected);
+
+      browser.reload();
+      const restored = new SongDocument();
+      assert.deepEqual(restored.song.toBinary(), expected);
+      assert.equal(
+        restored.song.channels.at(-1).patterns[0].automationEvents[0][0]
+          .points[1].value,
+        180.75,
+      );
+    },
+  );
 
   await context.test(
     "large histories survive undo, redo, reload, and branching",

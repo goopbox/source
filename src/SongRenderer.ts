@@ -1,6 +1,7 @@
 // Copyright (c) John Nesky and contributing authors, distributed under the MIT license, see accompanying the LICENSE.md file.
 
 import { Song, SynthEngine } from "../synth/synth.js";
+import { Config } from "../synth/SynthConfig.js";
 
 export interface SongRendererAssetSource {
   loadAssetsInto(synth: SynthEngine): Promise<void>;
@@ -30,27 +31,33 @@ export class SongRenderer {
         synth.goToNextBar();
       }
     }
-    const totalSampleLength: number = Math.ceil(
-      synth.getSamplesPerBar() * synth.getTotalBars(enableIntro, enableOutro),
+    const totalBars: number = synth.getTotalBars(enableIntro, enableOutro);
+    const totalTicks: number =
+      totalBars *
+      song.beatsPerBar *
+      Config.partsPerBeat *
+      Config.ticksPerPart;
+    synth.renderTicksRemaining = totalTicks;
+    const estimatedSampleLength: number = Math.ceil(
+      synth.getSamplesPerBar() * totalBars,
     );
-    this.outputSamplesL = new Float32Array(totalSampleLength);
-    this.outputSamplesR = new Float32Array(totalSampleLength);
-
-    let sampleIndex: number = 0;
+    const chunksL: Float32Array[] = [];
+    const chunksR: Float32Array[] = [];
+    let renderedSampleCount: number = 0;
     let samplesPerNextRender: number = 1000;
-    while (sampleIndex < totalSampleLength) {
-      const stopSample: number = Math.min(
-        sampleIndex + samplesPerNextRender,
-        totalSampleLength,
-      );
-      const samplesToRender: number = stopSample - sampleIndex;
+    while (!synth.songEnded) {
+      const samplesToRender: number = samplesPerNextRender;
+      const chunkL: Float32Array = new Float32Array(samplesToRender);
+      const chunkR: Float32Array = new Float32Array(samplesToRender);
       const startMillis: number = performance.now();
-      synth.synthesize(
-        this.outputSamplesL.subarray(sampleIndex, stopSample),
-        this.outputSamplesR.subarray(sampleIndex, stopSample),
-        samplesToRender,
-      );
+      synth.synthesize(chunkL, chunkR, samplesToRender);
       const stopMillis: number = performance.now();
+      const rendered: number = synth.lastSynthesizeSampleCount;
+      if (rendered > 0) {
+        chunksL.push(rendered == chunkL.length ? chunkL : chunkL.slice(0, rendered));
+        chunksR.push(rendered == chunkR.length ? chunkR : chunkR.slice(0, rendered));
+        renderedSampleCount += rendered;
+      }
       const elapsedMillis: number = stopMillis - startMillis;
       const targetMillis: number = 1000 / 30;
       samplesPerNextRender = Math.ceil(
@@ -59,12 +66,22 @@ export class SongRenderer {
           Math.min(500000, (samplesToRender * targetMillis) / elapsedMillis),
         ),
       );
-      sampleIndex = stopSample;
-      const completionRate: number = sampleIndex / totalSampleLength;
+      const completionRate: number = synth.songEnded
+        ? 1
+        : Math.min(0.99, renderedSampleCount / Math.max(1, estimatedSampleLength));
       yield completionRate;
       // Give the browser a chance to render a progress bar.
       await new Promise((resolve) => requestAnimationFrame(resolve));
       if (this.canceled) return;
+    }
+
+    this.outputSamplesL = new Float32Array(renderedSampleCount);
+    this.outputSamplesR = new Float32Array(renderedSampleCount);
+    let offset: number = 0;
+    for (let index: number = 0; index < chunksL.length; index++) {
+      this.outputSamplesL.set(chunksL[index], offset);
+      this.outputSamplesR.set(chunksR[index], offset);
+      offset += chunksL[index].length;
     }
   }
 }

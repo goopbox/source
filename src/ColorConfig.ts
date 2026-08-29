@@ -31,6 +31,7 @@ interface Theme {
   readonly fifthNote: string;
   readonly pitchChannels: readonly string[];
   readonly noiseChannels: readonly string[];
+  readonly automationChannels: readonly string[];
 }
 
 const mix = (first: string, second: string, firstWeight: number): string => {
@@ -148,6 +149,7 @@ const themeCss = (theme: Theme): { css: string; widgetBackground: string } => {
     --fifth-note: ${theme.fifthNote};
     ${channelCss("pitch", theme.pitchChannels, Config.pitchChannelCountMax)}
     ${channelCss("noise", theme.noiseChannels, Config.noiseChannelCountMax)}
+    ${channelCss("automation", theme.automationChannels, Config.automationChannelCountMax)}
   }`,
   };
 };
@@ -169,6 +171,7 @@ export class ColorConfig {
       fifthNote: "#224f63",
       pitchChannels: ["#25f3ff", "#ff9752", "#50ffc9", "#ff98a4"],
       noiseChannels: ["#aaa", "#da7", "#7ad", "#af82d2", "#a2bb77"],
+      automationChannels: ["#e875ff", "#ff6fae", "#9f8cff", "#65cfff"],
     },
     "BeepBox Dark": {
       background: "#000",
@@ -196,6 +199,7 @@ export class ColorConfig {
         "#ce8bff",
       ],
       noiseChannels: ["#aaa", "#da7", "#7ad", "#af82d2", "#a2bb77"],
+      automationChannels: ["#e875ff", "#ff6fae", "#9f8cff", "#65cfff"],
     },
   };
 
@@ -221,7 +225,7 @@ export class ColorConfig {
   public static readonly blackPianoKey: string = "var(--black-piano-key)";
 
   private static makeChannelColors(
-    type: "pitch" | "noise",
+    type: "pitch" | "noise" | "automation",
     channelCount: number,
   ): DictionaryArray<ChannelColors> {
     return toNameMap(
@@ -242,11 +246,16 @@ export class ColorConfig {
     this.makeChannelColors("pitch", Config.pitchChannelCountMax);
   public static readonly noiseChannels: DictionaryArray<ChannelColors> =
     this.makeChannelColors("noise", Config.noiseChannelCountMax);
+  public static readonly automationChannels: DictionaryArray<ChannelColors> =
+    this.makeChannelColors("automation", Config.automationChannelCountMax);
 
   public static getChannelColor(song: Song, channel: number): ChannelColors {
-    return channel < song.pitchChannelCount
-      ? ColorConfig.pitchChannels[channel]
-      : ColorConfig.noiseChannels[channel - song.pitchChannelCount];
+    if (song.getChannelIsPitch(channel)) return ColorConfig.pitchChannels[channel];
+    if (song.getChannelIsNoise(channel))
+      return ColorConfig.noiseChannels[channel - song.pitchChannelCount];
+    return ColorConfig.automationChannels[
+      channel - song.pitchChannelCount - song.noiseChannelCount
+    ];
   }
 
   private static readonly _styleElement: HTMLStyleElement =

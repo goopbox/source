@@ -1,8 +1,17 @@
 // Copyright (c) John Nesky and contributing authors, distributed under the MIT license, see accompanying the LICENSE.md file.
 
 import { type Dictionary, Config } from "../synth/SynthConfig.js";
-import { Note, Pattern, Channel } from "../synth/synth.js";
+import {
+  Note,
+  Pattern,
+  Channel,
+  ChannelKind,
+  AutomationEvent,
+  AutomationPoint,
+} from "../synth/synth.js";
 import { SongDocument } from "./SongDocument.js";
+import { trackChannelKindsAreCompatible } from "./ChannelCompatibility.js";
+export { trackChannelKindsAreCompatible } from "./ChannelCompatibility.js";
 import { ChangeGroup } from "./Change.js";
 import {
   ChangeTrackSelection,
@@ -25,16 +34,28 @@ import {
   ChangeTranspose,
   ChangeChannelOrder,
   comparePatternNotes,
+  ChangeAutomationEvents,
 } from "./changes.js";
 
 interface PatternCopy {
-  notes: any[];
+  notes?: any[];
+  automationEvents?: any[][];
 }
 
 interface ChannelCopy {
-  isNoise: boolean;
+  kind?: ChannelKind;
+  isNoise?: boolean;
   patterns: Dictionary<PatternCopy>;
   bars: number[];
+}
+
+export function getCopiedChannelKind(channelCopy: ChannelCopy): ChannelKind {
+  if (
+    channelCopy.kind == ChannelKind.pitch ||
+    channelCopy.kind == ChannelKind.noise ||
+    channelCopy.kind == ChannelKind.automation
+  ) return channelCopy.kind;
+  return channelCopy.isNoise ? ChannelKind.noise : ChannelKind.pitch;
 }
 
 interface SelectionCopy {
@@ -247,8 +268,8 @@ export class Selection {
     const group: ChangeGroup = new ChangeGroup();
     const insertIndex: number =
       this.boxSelectionChannel + this.boxSelectionHeight;
-    const isNoise: boolean = this._doc.song.getChannelIsNoise(insertIndex - 1);
-    group.append(new ChangeAddChannel(this._doc, insertIndex, isNoise));
+    const kind: ChannelKind = this._doc.song.getChannelKind(insertIndex - 1);
+    group.append(new ChangeAddChannel(this._doc, insertIndex, kind));
     if (!group.isNoop()) {
       this.boxSelectionY0 = this.boxSelectionY1 = insertIndex;
       group.append(new ChangeChannelBar(this._doc, insertIndex, this._doc.bar));
@@ -378,8 +399,11 @@ export class Selection {
             bar,
           );
           let notes: Note[] = [];
+          let automationEvents: AutomationEvent[][] | undefined;
           if (pattern != null) {
-            if (this.patternSelectionActive) {
+            if (this._doc.song.getChannelIsAutomation(channelIndex)) {
+              automationEvents = pattern.cloneAutomationEvents();
+            } else if (this.patternSelectionActive) {
               for (const note of pattern.cloneNotes()) {
                 if (note.end <= this.patternSelectionStart) continue;
                 if (note.start >= this.patternSelectionEnd) continue;
@@ -406,11 +430,15 @@ export class Selection {
               notes = pattern.notes;
             }
           }
-          patterns[String(patternNumber)] = { notes: notes };
+          patterns[String(patternNumber)] =
+            automationEvents == undefined
+              ? { notes }
+              : { automationEvents };
         }
       }
 
       const channelCopy: ChannelCopy = {
+        kind: this._doc.song.getChannelKind(channelIndex),
         isNoise: this._doc.song.getChannelIsNoise(channelIndex),
         patterns: patterns,
         bars: bars,
@@ -517,19 +545,34 @@ export class Selection {
         channelCopies[pasteChannel % channelCopies.length];
       const channelIndex: number = this.boxSelectionChannel + pasteChannel;
 
-      const isNoise: boolean = !!channelCopy["isNoise"];
+      const copiedKind: ChannelKind = getCopiedChannelKind(channelCopy);
       const patternCopies: Dictionary<PatternCopy> =
         channelCopy["patterns"] || {};
       const copiedBars: number[] = channelCopy["bars"] || [];
       if (copiedBars.length == 0) continue;
-      if (isNoise != this._doc.song.getChannelIsNoise(channelIndex)) continue;
+      if (
+        !trackChannelKindsAreCompatible(
+          copiedKind,
+          this._doc.song.getChannelKind(channelIndex),
+        )
+      ) continue;
 
       const pasteWidth: number = fillSelection
         ? this.boxSelectionWidth
         : Math.min(
-            copiedBars.length,
-            this._doc.song.barCount - this.boxSelectionBar,
-          );
+          copiedBars.length,
+          this._doc.song.barCount - this.boxSelectionBar,
+        );
+      if (copiedKind == ChannelKind.automation) {
+        this._pasteAutomationChannel(
+          group,
+          channelIndex,
+          patternCopies,
+          copiedBars,
+          pasteWidth,
+        );
+        continue;
+      }
       if (
         !fillSelection &&
         copiedBars.length == 1 &&
@@ -553,7 +596,7 @@ export class Selection {
           if (
             existingPattern != undefined &&
             !this.patternSelectionActive &&
-            (comparePatternNotes(patternCopy["notes"], existingPattern.notes) ||
+            (comparePatternNotes(patternCopy.notes ?? [], existingPattern.notes) ||
               this._patternIndexIsUnused(channelIndex, copiedPatternIndex))
           ) {
             group.append(
@@ -582,7 +625,7 @@ export class Selection {
           new ChangePaste(
             this._doc,
             pattern,
-            patternCopy["notes"],
+            patternCopy.notes ?? [],
             this.patternSelectionActive ? this.patternSelectionStart : 0,
             this.patternSelectionActive
               ? this.patternSelectionEnd
@@ -691,7 +734,7 @@ export class Selection {
               new ChangePaste(
                 this._doc,
                 pattern,
-                patternCopy["notes"],
+                patternCopy.notes ?? [],
                 this.patternSelectionStart,
                 this.patternSelectionEnd,
                 copiedPartDuration,
@@ -746,7 +789,7 @@ export class Selection {
             existingPattern != undefined &&
             copiedPartDuration ==
               Config.partsPerBeat * this._doc.song.beatsPerBar &&
-            comparePatternNotes(patternCopy["notes"], existingPattern.notes)
+            comparePatternNotes(patternCopy.notes ?? [], existingPattern.notes)
           ) {
             group.append(
               new ChangePatternNumbers(
@@ -787,7 +830,7 @@ export class Selection {
               new ChangePaste(
                 this._doc,
                 pattern,
-                patternCopy["notes"],
+                patternCopy.notes ?? [],
                 this.patternSelectionActive ? this.patternSelectionStart : 0,
                 this.patternSelectionActive
                   ? this.patternSelectionEnd
@@ -807,6 +850,111 @@ export class Selection {
     this._clearSelection();
   }
 
+  private _decodeAutomationPattern(
+    patternCopy: PatternCopy | undefined,
+    rowCount: number,
+  ): AutomationEvent[][] | null {
+    const copiedRows: unknown = patternCopy?.automationEvents;
+    if (!Array.isArray(copiedRows)) return null;
+    const rows: AutomationEvent[][] = [];
+    for (let rowIndex: number = 0; rowIndex < rowCount; rowIndex++) {
+      const copiedEvents: unknown = copiedRows[rowIndex] ?? [];
+      if (
+        !Array.isArray(copiedEvents) ||
+        copiedEvents.length > Config.automationEventsPerRowMax
+      ) return null;
+      const events: AutomationEvent[] = [];
+      for (const copiedEvent of copiedEvents) {
+        if (
+          copiedEvent == null ||
+          typeof copiedEvent != "object" ||
+          typeof copiedEvent.start != "number" ||
+          !Number.isFinite(copiedEvent.start) ||
+          typeof copiedEvent.end != "number" ||
+          !Number.isFinite(copiedEvent.end) ||
+          !Array.isArray(copiedEvent.points) ||
+          copiedEvent.points.length < 1 ||
+          copiedEvent.points.length > Config.automationPointsPerEventMax
+        ) return null;
+        const points: AutomationPoint[] = [];
+        for (const copiedPoint of copiedEvent.points) {
+          if (
+            copiedPoint == null ||
+            typeof copiedPoint != "object" ||
+            typeof copiedPoint.time != "number" ||
+            !Number.isFinite(copiedPoint.time) ||
+            typeof copiedPoint.value != "number" ||
+            !Number.isFinite(copiedPoint.value)
+          ) return null;
+          points.push(new AutomationPoint(copiedPoint.time, copiedPoint.value));
+        }
+        events.push(
+          new AutomationEvent(copiedEvent.start, copiedEvent.end, points),
+        );
+      }
+      rows.push(events);
+    }
+    return rows;
+  }
+
+  private _pasteAutomationChannel(
+    group: ChangeGroup,
+    channelIndex: number,
+    patternCopies: Dictionary<PatternCopy>,
+    copiedBars: readonly number[],
+    pasteWidth: number,
+  ): void {
+    const reusablePatterns: Dictionary<number> = {};
+    for (let pasteBar: number = 0; pasteBar < pasteWidth; pasteBar++) {
+      this.erasePatternInBar(
+        group,
+        channelIndex,
+        this.boxSelectionBar + pasteBar,
+      );
+    }
+    for (let pasteBar: number = 0; pasteBar < pasteWidth; pasteBar++) {
+      const bar: number = this.boxSelectionBar + pasteBar;
+      const copiedPatternIndex: number =
+        copiedBars[pasteBar % copiedBars.length] >>> 0;
+      if (copiedPatternIndex == 0) continue;
+      const key: string = String(copiedPatternIndex);
+      if (reusablePatterns[key] != undefined) {
+        group.append(
+          new ChangePatternNumbers(
+            this._doc,
+            reusablePatterns[key],
+            bar,
+            channelIndex,
+            1,
+            1,
+          ),
+        );
+        continue;
+      }
+      group.append(new ChangeEnsurePatternExists(this._doc, channelIndex, bar));
+      const pattern: Pattern | null = this._doc.song.getPattern(channelIndex, bar);
+      if (pattern == null) throw new Error();
+      const rowCount: number =
+        this._doc.song.channels[channelIndex].automationRows.length;
+      const copiedPattern: AutomationEvent[][] | null =
+        this._decodeAutomationPattern(patternCopies[key], rowCount);
+      if (copiedPattern == null) continue;
+      for (let rowIndex: number = 0; rowIndex < rowCount; rowIndex++) {
+        group.append(
+          new ChangeAutomationEvents(
+            this._doc,
+            pattern,
+            rowIndex,
+            pattern.automationEvents[rowIndex],
+            copiedPattern[rowIndex],
+          ),
+        );
+      }
+      reusablePatterns[key] =
+        this._doc.song.channels[channelIndex].bars[bar];
+    }
+  }
+
   // Set a bar's pattern number to zero, and if that pattern was not used
   // elsewhere in the channel, erase all notes in it as well.
   public erasePatternInBar(
@@ -823,9 +971,14 @@ export class Selection {
       if (this._patternIndexIsUnused(channelIndex, removedPattern)) {
         // When a pattern becomes unused when replaced by rectangular selection pasting,
         // remove all the notes from the pattern so that it may be reused.
-        this._doc.song.channels[channelIndex].patterns[
-          removedPattern - 1
-        ].notes.length = 0;
+        const pattern: Pattern =
+          this._doc.song.channels[channelIndex].patterns[removedPattern - 1];
+        pattern.reset();
+        if (this._doc.song.getChannelIsAutomation(channelIndex)) {
+          pattern.ensureAutomationRowCount(
+            this._doc.song.channels[channelIndex].automationRows.length,
+          );
+        }
       }
     }
   }
@@ -857,6 +1010,13 @@ export class Selection {
       const channelCopy: ChannelCopy =
         channelCopies[pasteChannel % channelCopies.length];
       const channelIndex: number = this.boxSelectionChannel + pasteChannel;
+
+      if (
+        !trackChannelKindsAreCompatible(
+          getCopiedChannelKind(channelCopy),
+          this._doc.song.getChannelKind(channelIndex),
+        )
+      ) continue;
 
       const copiedBars: number[] = channelCopy["bars"] || [];
       if (copiedBars.length == 0) continue;

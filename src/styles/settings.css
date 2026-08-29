@@ -179,6 +179,19 @@
     background-color: transparent !important;
 }
 
+.automation-settings {
+    width: 100%;
+}
+
+.automation-surface .selectRow {
+    gap: 6px;
+}
+
+.automation-surface select.invalid-reference {
+    color: var(--error);
+    box-shadow: inset 0 0 0 1px var(--error);
+}
+
 .editor-right-side-top > *,
 .editor-right-side-bottom > * {
     flex-shrink: 0;

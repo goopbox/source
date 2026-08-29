@@ -1703,6 +1703,12 @@ export class PatternEditor {
   }
 
   public render(): void {
+    if (this._doc.song.getChannelIsAutomation(this._doc.channel)) {
+      this._pattern = null;
+      this._dragChange = null;
+      this._pointers.latest.cancel();
+      return;
+    }
     const nextPattern: Pattern | null = this._doc.getCurrentPattern(
       this._barOffset,
     );
