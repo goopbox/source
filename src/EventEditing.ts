@@ -123,14 +123,23 @@ export function editEventTime<T extends Event>(
   const lastPointIndex: number = original.points.length - 1;
   if (pointIndex != 0 && pointIndex != lastPointIndex) {
     const replacement: T[] = cloneEvents(events);
-    const point: EventPoint = replacement[eventIndex].points[pointIndex];
-    point.time = Math.max(
-      replacement[eventIndex].points[pointIndex - 1].time + 0.001,
-      Math.min(
-        replacement[eventIndex].points[pointIndex + 1].time - 0.001,
-        original.points[pointIndex].time + delta,
-      ),
+    const originalTime: number = original.points[pointIndex].time;
+    const shiftedTime: number = Math.max(
+      0,
+      Math.min(original.end - original.start, originalTime + delta),
     );
+    const skipStart: number = Math.min(originalTime, shiftedTime);
+    const skipEnd: number = Math.max(originalTime, shiftedTime);
+    const shiftedPoint: EventPoint = original.points[pointIndex].clone();
+    shiftedPoint.time = shiftedTime;
+    replacement[eventIndex].points = original.points
+      .filter(
+        (point: EventPoint): boolean =>
+          point.time < skipStart || point.time > skipEnd,
+      )
+      .map((point: EventPoint): EventPoint => point.clone())
+      .concat(shiftedPoint)
+      .sort((a: EventPoint, b: EventPoint): number => a.time - b.time);
     return replacement;
   }
 
@@ -154,6 +163,30 @@ export function editEventTime<T extends Event>(
   return deleteEventRange(others, held.start, held.end)
     .concat(held)
     .sort((a: T, b: T): number => a.start - b.start);
+}
+
+export function nearestEventPointIndex(
+  event: Event,
+  absolutePart: number,
+  endpointRadius: number = 0,
+): number {
+  const lastPointIndex: number = event.points.length - 1;
+  if (lastPointIndex <= 0) return Math.max(0, lastPointIndex);
+  const eventTime: number = absolutePart - event.start;
+  if (Math.abs(eventTime - event.points[0].time) <= endpointRadius) return 0;
+  if (
+    Math.abs(eventTime - event.points[lastPointIndex].time) <= endpointRadius
+  ) return lastPointIndex;
+  let nearestIndex: number = 0;
+  let nearestDistance: number = Number.POSITIVE_INFINITY;
+  for (let index: number = 0; index < event.points.length; index++) {
+    const distance: number = Math.abs(event.points[index].time - eventTime);
+    if (distance < nearestDistance) {
+      nearestDistance = distance;
+      nearestIndex = index;
+    }
+  }
+  return nearestIndex;
 }
 
 export function bendEvent<T extends Event>(

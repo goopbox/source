@@ -17,7 +17,7 @@ async function loadAutomationModules() {
         'export { decodeSongBinary, encodeSongBinary } from "./synth/SongBinary.ts";',
         'export { decodeBinaryValue, encodeBinaryValue } from "./synth/BinaryCodec.ts";',
         'export { SongRenderer } from "./src/SongRenderer.ts";',
-        'export { bendEvent, clipEvent, deleteEventRange, editEventTime, eventPath, repeatEvents } from "./src/EventEditing.ts";',
+        'export { bendEvent, clipEvent, deleteEventRange, editEventTime, eventPath, nearestEventPointIndex, repeatEvents } from "./src/EventEditing.ts";',
         'export { AutomationRowSelectionState } from "./src/AutomationSelection.ts";',
         'export { trackChannelKindsAreCompatible } from "./src/ChannelCompatibility.ts";',
         'export { encodeSongUrl, decodeSongUrlHash } from "./src/SongUrl.ts";',
@@ -754,6 +754,33 @@ test("shared event edits clip collisions, flatten values, repeat, and render", a
   assert.deepEqual(
     extended.map((candidate) => [candidate.start, candidate.end]),
     [[0, 6], [8, 18], [18, 20]],
+  );
+
+  const endpointMerged = module.editEventTime(
+    [event(module, 0, 12, [[0, 1], [6, 4], [12, 2]])],
+    0,
+    1,
+    6,
+    1,
+    24,
+    32,
+  )[0];
+  assert.deepEqual(
+    endpointMerged.points.map((point) => [point.time, point.value]),
+    [[0, 1], [12, 4]],
+    "moving an interior point onto the endpoint replaces the endpoint",
+  );
+
+  const crowdedEnd = event(module, 0, 96, [
+    [0, 30],
+    [90, 300],
+    [95.999, 229],
+    [96, 300],
+  ]);
+  assert.equal(
+    module.nearestEventPointIndex(crowdedEnd, 95.85, 0.8),
+    crowdedEnd.points.length - 1,
+    "the endpoint wins when multiple points render within its hit radius",
   );
 
   const shaped = event(module, 0, 12, [[0, 1], [6, 4], [12, 2]]);

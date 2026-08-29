@@ -27,6 +27,7 @@ import {
   editEventTime,
   eventPath,
   moveEventRange,
+  nearestEventPointIndex,
   repeatEvents,
 } from "./EventEditing.js";
 import {
@@ -63,8 +64,8 @@ interface AutomationDrag {
     | "selection-start"
     | "selection-end"
     | "selection-contents";
-  readonly startClientX: number;
-  readonly startClientY: number;
+  readonly startX: number;
+  readonly startY: number;
   readonly original: Event[];
   readonly originalRange: AutomationRowSelection | null;
   readonly cursorStart: number;
@@ -324,11 +325,11 @@ export class AutomationSettings {
         HTML.div(
           { class: "settingsGroup automation-surface" },
           HTML.div({ class: "settingsGroupTitle" }, HTML.span(`Automation ${rowIndex + 1}`)),
-          HTML.div({ class: "selectRow" }, HTML.label("Target"), this._makeTargetSelect(row, rowIndex)),
+          HTML.div({ class: "selectRow" }, this._makeTargetSelect(row, rowIndex)),
           ...(row.targetChannel == -1 && !row.targetChannelMissing
             ? []
-            : [HTML.div({ class: "selectRow" }, HTML.label("Instrument"), this._makeInstrumentSelect(row, rowIndex))]),
-          HTML.div({ class: "selectRow" }, HTML.label("Target element"), this._makeElementSelect(row, rowIndex)),
+            : [HTML.div({ class: "selectRow" }, this._makeInstrumentSelect(row, rowIndex))]),
+          HTML.div({ class: "selectRow" }, this._makeElementSelect(row, rowIndex)),
         ),
       );
     }
@@ -486,8 +487,10 @@ export class AutomationEditor {
 
   private _updateMouse(event: PointerEvent): void {
     const rect: DOMRect = this._svg.getBoundingClientRect();
-    this._mouseX = event.clientX - rect.left;
-    this._mouseY = event.clientY - rect.top;
+    this._mouseX = (event.clientX - rect.left) *
+      (rect.width > 0 ? this._editorWidth / rect.width : 1);
+    this._mouseY = (event.clientY - rect.top) *
+      (rect.height > 0 ? this._editorHeight / rect.height : 1);
     if (this._partWidth > 0) {
       this._lastMousePart = this._clampPart(this._mouseX / this._partWidth);
     }
@@ -630,18 +633,11 @@ export class AutomationEditor {
   }
 
   private _nearestPointIndex(event: Event, absolutePart: number): number {
-    let nearestIndex: number = 0;
-    let nearestDistance: number = Number.POSITIVE_INFINITY;
-    for (let index: number = 0; index < event.points.length; index++) {
-      const distance: number = Math.abs(
-        event.start + event.points[index].time - absolutePart,
-      );
-      if (distance < nearestDistance) {
-        nearestDistance = distance;
-        nearestIndex = index;
-      }
-    }
-    return nearestIndex;
+    return nearestEventPointIndex(
+      event,
+      absolutePart,
+      this._partWidth > 0 ? 5 / this._partWidth : 0,
+    );
   }
 
   private _editEventHorizontally(
@@ -663,20 +659,24 @@ export class AutomationEditor {
   private _editEventVertically(
     drag: AutomationDrag,
     currentPart: number,
-    clientY: number,
+    pointerY: number,
     uniform: boolean,
   ): Event[] {
     const replacement: Event[] = cloneEvents(drag.original);
     const event: Event | undefined = drag.original[drag.eventIndex];
     const domain: AutomationValueDomain | null = this._rowDomain(drag.rowIndex);
     if (event == undefined || domain == null) return replacement;
+    const selectedPoint: EventPoint | undefined = event.points[drag.pointIndex];
+    const bendPart: number = selectedPoint == undefined
+      ? currentPart
+      : event.start + selectedPoint.time;
     const pixelsForFullRange: number = Math.max(40, this._rowHeight * 1.5);
     const valueDelta: number =
-      ((drag.startClientY - clientY) / pixelsForFullRange) *
+      ((drag.startY - pointerY) / pixelsForFullRange) *
       (domain.max - domain.min);
     replacement[drag.eventIndex] = bendEvent(
       event,
-      currentPart,
+      bendPart,
       valueDelta,
       (value: number): number => sanitizeAutomationValue(value, domain),
       uniform,
@@ -766,8 +766,8 @@ export class AutomationEditor {
       eventIndex: cursor.eventIndex,
       pointIndex,
       mode,
-      startClientX: event.clientX,
-      startClientY: event.clientY,
+      startX: this._mouseX,
+      startY: this._mouseY,
       original,
       originalRange,
       cursorStart: cursor.start,
@@ -798,8 +798,8 @@ export class AutomationEditor {
       return;
     }
 
-    const dx: number = event.clientX - drag.startClientX;
-    const dy: number = event.clientY - drag.startClientY;
+    const dx: number = this._mouseX - drag.startX;
+    const dy: number = this._mouseY - drag.startY;
     if (!drag.dragging && Math.hypot(dx, dy) > 5) {
       drag.dragging = true;
       drag.horizontal = Math.abs(dx) >= Math.abs(dy);
@@ -821,7 +821,7 @@ export class AutomationEditor {
           : this._editEventVertically(
               drag,
               currentPart,
-              event.clientY,
+              this._mouseY,
               event.ctrlKey || event.metaKey,
             );
         this._applyReplacement(drag, replacement);
@@ -851,7 +851,7 @@ export class AutomationEditor {
         } else if (drag.eventIndex >= 0) {
           this._applyReplacement(
             drag,
-            this._editEventVertically(drag, currentPart, event.clientY, true),
+            this._editEventVertically(drag, currentPart, this._mouseY, true),
           );
         }
         break;
