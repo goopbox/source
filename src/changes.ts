@@ -27,7 +27,6 @@ import {
   ChannelKind,
   Event,
   EventPoint,
-  AutomationOperation,
   AutomationRow,
   mapAutomationClipboardValue,
   Song,
@@ -2175,37 +2174,6 @@ export class ChangeAutomationTargetElement extends Change {
         sourceDomain,
         row.getValueDomain(),
       );
-    }
-    doc.notifier.changed();
-    this._didSomething();
-  }
-}
-
-export class ChangeAutomationOperation extends Change {
-  constructor(
-    doc: SongDocument,
-    rowIndex: number,
-    operation: AutomationOperation,
-  ) {
-    super();
-    if (
-      operation < AutomationOperation.Multiply ||
-      operation > AutomationOperation.Set
-    ) throw new RangeError("Invalid automation operation.");
-    const row: AutomationRow = getAutomationRow(doc, rowIndex);
-    if (row.operation == operation) return;
-    row.operation = operation;
-    const domain = row.getValueDomain();
-    if (domain != null) {
-      const channel: Channel = doc.song.channels[doc.channel];
-      for (const pattern of channel.patterns) {
-        for (const event of pattern.automationEvents[rowIndex]) {
-          for (const point of event.points) {
-            point.value = Math.max(domain.min, Math.min(domain.max, point.value));
-            if (domain.integer) point.value = Math.round(point.value);
-          }
-        }
-      }
     }
     doc.notifier.changed();
     this._didSomething();

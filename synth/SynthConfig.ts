@@ -1433,8 +1433,6 @@ export class Config {
   public static readonly automationTargetIdLengthMax: number = 64;
   public static readonly automationTargetIndexMax: number = 4095;
   public static readonly automationValueMagnitudeMax: number = 1.0e9;
-  public static readonly automationMultiplyMin: number = 0;
-  public static readonly automationMultiplyMax: number = 4;
   public static readonly noiseInterval: number = 6;
   public static readonly pitchesPerOctave: number = 12; // TODO: Use this for converting pitch to frequency.
   public static readonly drumCount: number = 12;
@@ -1765,21 +1763,9 @@ export class Config {
 
   public static getAutomationValueDomain(
     target: AutomationTarget,
-    operation: number,
   ): AutomationValueDomain {
     const targetMin: number = target.valueMin ?? 0;
     const targetMax: number = target.valueMax ?? Config.defaultAutomationRange;
-    if (operation == 0) {
-      return {
-        min: Config.automationMultiplyMin,
-        max: Config.automationMultiplyMax,
-        integer: target.integer === true,
-      };
-    }
-    if (operation == 1) {
-      const span: number = Math.max(Math.abs(targetMin), Math.abs(targetMax), targetMax - targetMin);
-      return { min: -span, max: span, integer: target.integer === true };
-    }
     return { min: targetMin, max: targetMax, integer: target.integer === true };
   }
 

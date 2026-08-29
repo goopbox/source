@@ -3,7 +3,6 @@
 import { Config, type AutomationValueDomain } from "../synth/SynthConfig.js";
 import {
   Event,
-  AutomationOperation,
   EventPoint,
   AutomationRow,
   ChannelKind,
@@ -32,7 +31,6 @@ import {
 } from "./EventEditing.js";
 import {
   ChangeEvents,
-  ChangeAutomationOperation,
   ChangeAutomationRowCount,
   ChangeAutomationTargetChannel,
   ChangeAutomationTargetElement,
@@ -45,7 +43,6 @@ interface AutomationClipboard {
   readonly duration: number;
   readonly targetId: string;
   readonly targetIndex: number;
-  readonly operation: AutomationOperation;
   readonly domain: AutomationValueDomain | null;
   readonly events: Array<{
     start: number;
@@ -107,9 +104,6 @@ function isAutomationClipboard(value: unknown): value is AutomationClipboard {
     !Number.isInteger(copy.targetIndex) ||
     copy.targetIndex! < 0 ||
     copy.targetIndex! > Config.automationTargetIndexMax ||
-    !Number.isInteger(copy.operation) ||
-    copy.operation! < AutomationOperation.Multiply ||
-    copy.operation! > AutomationOperation.Set ||
     !Array.isArray(copy.events) ||
     copy.events.length > Config.automationEventsPerRowMax
   ) return false;
@@ -310,25 +304,6 @@ export class AutomationSettings {
     return menu;
   }
 
-  private _makeOperationSelect(row: AutomationRow, rowIndex: number): HTMLSelectElement {
-    const menu: HTMLSelectElement = HTML.select(
-      HTML.option({ value: String(AutomationOperation.Multiply) }, "Multiply"),
-      HTML.option({ value: String(AutomationOperation.Add) }, "Add"),
-      HTML.option({ value: String(AutomationOperation.Set) }, "Set"),
-    );
-    menu.value = String(row.operation);
-    menu.addEventListener("change", (): void => {
-      this._doc.record(
-        new ChangeAutomationOperation(
-          this._doc,
-          rowIndex,
-          Number(menu.value) as AutomationOperation,
-        ),
-      );
-    });
-    return menu;
-  }
-
   public render(): void {
     if (!this._doc.song.getChannelIsAutomation(this._doc.channel)) return;
     const channel = this._doc.song.channels[this._doc.channel];
@@ -350,9 +325,10 @@ export class AutomationSettings {
           { class: "settingsGroup automation-surface" },
           HTML.div({ class: "settingsGroupTitle" }, HTML.span(`Automation ${rowIndex + 1}`)),
           HTML.div({ class: "selectRow" }, HTML.label("Target"), this._makeTargetSelect(row, rowIndex)),
-          HTML.div({ class: "selectRow" }, HTML.label("Instrument"), this._makeInstrumentSelect(row, rowIndex)),
+          ...(row.targetChannel == -1 && !row.targetChannelMissing
+            ? []
+            : [HTML.div({ class: "selectRow" }, HTML.label("Instrument"), this._makeInstrumentSelect(row, rowIndex))]),
           HTML.div({ class: "selectRow" }, HTML.label("Target element"), this._makeElementSelect(row, rowIndex)),
-          HTML.div({ class: "selectRow" }, HTML.label("Operation"), this._makeOperationSelect(row, rowIndex)),
         ),
       );
     }
@@ -1177,7 +1153,6 @@ export class AutomationEditor {
       duration: range.end - range.start,
       targetId: row.targetId,
       targetIndex: row.targetIndex,
-      operation: row.operation,
       domain: row.getValueDomain(),
       events: events.map((event: Event) => ({
         start: event.start,
@@ -1266,8 +1241,7 @@ export class AutomationEditor {
       const destinationDomain: AutomationValueDomain | null = row.getValueDomain();
       const compatible: boolean =
         value.targetId == row.targetId &&
-        value.targetIndex == row.targetIndex &&
-        value.operation == row.operation;
+        value.targetIndex == row.targetIndex;
       const sourceEvents: Event[] = value.events.map(
         (source): Event => new Event(
           source.start,

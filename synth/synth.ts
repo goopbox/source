@@ -461,17 +461,6 @@ export enum ChannelKind {
   automation = "automation",
 }
 
-export enum AutomationOperation {
-  Multiply = 0,
-  Add = 1,
-  Set = 2,
-}
-
-export interface AutomationContribution {
-  readonly operation: AutomationOperation;
-  readonly value: number;
-}
-
 export function sanitizeAutomationValue(
   value: number,
   domain: AutomationValueDomain,
@@ -479,33 +468,6 @@ export function sanitizeAutomationValue(
   if (!Number.isFinite(value)) value = value > 0 ? domain.max : domain.min;
   value = Math.max(domain.min, Math.min(domain.max, value));
   return domain.integer ? Math.round(value) : value;
-}
-
-export function applyAutomationContributions(
-  baseValue: number,
-  contributions: readonly AutomationContribution[],
-  targetDomain: AutomationValueDomain,
-): number {
-  let value: number = Number.isFinite(baseValue) ? baseValue : targetDomain.min;
-  for (const contribution of contributions) {
-    if (!Number.isFinite(contribution.value)) continue;
-    switch (contribution.operation) {
-      case AutomationOperation.Multiply:
-        value *= contribution.value;
-        break;
-      case AutomationOperation.Add:
-        value += contribution.value;
-        break;
-      case AutomationOperation.Set:
-        value = contribution.value;
-        break;
-      default:
-        continue;
-    }
-    if (!Number.isFinite(value))
-      value = value > 0 ? targetDomain.max : targetDomain.min;
-  }
-  return sanitizeAutomationValue(value, targetDomain);
 }
 
 export function mapAutomationValueBetweenDomains(
@@ -687,7 +649,6 @@ export class AutomationRow {
   public targetInstrument: number = -1;
   public targetId: string = "tempo";
   public targetIndex: number = 0;
-  public operation: AutomationOperation = AutomationOperation.Set;
   public targetChannelMissing: boolean = false;
   public targetInstrumentMissing: boolean = false;
   public targetElementMissing: boolean = false;
@@ -699,7 +660,6 @@ export class AutomationRow {
     row.targetInstrument = this.targetInstrument;
     row.targetId = this.targetId;
     row.targetIndex = this.targetIndex;
-    row.operation = this.operation;
     row.targetChannelMissing = this.targetChannelMissing;
     row.targetInstrumentMissing = this.targetInstrumentMissing;
     row.targetElementMissing = this.targetElementMissing;
@@ -743,7 +703,7 @@ export class AutomationRow {
     const target: AutomationTarget | null = this.getTarget();
     return target == null
       ? null
-      : Config.getAutomationValueDomain(target, this.operation);
+      : Config.getAutomationValueDomain(target);
   }
 
   public isTargetValid(song: Song): boolean {
@@ -3567,7 +3527,6 @@ export class Song {
             targetInstrument: row.targetInstrument,
             targetId: row.targetId,
             targetIndex: row.targetIndex,
-            operation: row.operation,
             targetChannelMissing: row.targetChannelMissing,
             targetInstrumentMissing: row.targetInstrumentMissing,
             targetElementMissing: row.targetElementMissing,
@@ -4060,7 +4019,6 @@ export class Song {
           row.targetInstrument,
           row.targetId,
           row.targetIndex,
-          row.operation,
           (row.targetChannelMissing ? 1 : 0) |
             (row.targetInstrumentMissing ? 2 : 0) |
             (row.targetElementMissing ? 4 : 0),
@@ -4408,9 +4366,9 @@ export class Song {
       ) throw new Error("Invalid compact .goop automation structure.");
       const automationRows: Object[] = rowValues.map(
         (rowValue: unknown): Object => {
-          if (!Array.isArray(rowValue) || rowValue.length != 7)
+          if (!Array.isArray(rowValue) || rowValue.length != 6)
             throw new Error("Invalid compact .goop automation row.");
-          const [targetChannel, targetKind, targetInstrument, targetId, targetIndex, operation, flags] = rowValue;
+          const [targetChannel, targetKind, targetInstrument, targetId, targetIndex, flags] = rowValue;
           if (
             typeof targetChannel != "number" ||
             !Number.isInteger(targetChannel) ||
@@ -4428,10 +4386,6 @@ export class Song {
             !Number.isInteger(targetIndex) ||
             targetIndex < 0 ||
             targetIndex > Config.automationTargetIndexMax ||
-            typeof operation != "number" ||
-            !Number.isInteger(operation) ||
-            operation < AutomationOperation.Multiply ||
-            operation > AutomationOperation.Set ||
             typeof flags != "number" ||
             !Number.isInteger(flags) ||
             flags < 0 ||
@@ -4444,7 +4398,6 @@ export class Song {
             targetInstrument,
             targetId,
             targetIndex,
-            operation,
             targetChannelMissing: (flags & 1) != 0,
             targetInstrumentMissing: (flags & 2) != 0,
             targetElementMissing: (flags & 4) != 0,
@@ -4845,10 +4798,6 @@ export class Song {
             !Number.isInteger(rowObject.targetIndex) ||
             rowObject.targetIndex < 0 ||
             rowObject.targetIndex > Config.automationTargetIndexMax ||
-            typeof rowObject.operation != "number" ||
-            !Number.isInteger(rowObject.operation) ||
-            rowObject.operation < AutomationOperation.Multiply ||
-            rowObject.operation > AutomationOperation.Set ||
             typeof rowObject.targetChannelMissing != "boolean" ||
             typeof rowObject.targetInstrumentMissing != "boolean" ||
             typeof rowObject.targetElementMissing != "boolean"
@@ -4859,7 +4808,6 @@ export class Song {
           row.targetInstrument = rowObject.targetInstrument;
           row.targetId = rowObject.targetId;
           row.targetIndex = rowObject.targetIndex;
-          row.operation = rowObject.operation;
           row.targetChannelMissing = rowObject.targetChannelMissing;
           row.targetInstrumentMissing = rowObject.targetInstrumentMissing;
           row.targetElementMissing = rowObject.targetElementMissing;
@@ -6704,6 +6652,7 @@ interface ResolvedAutomationValue {
 export class AutomationRuntime {
   private _song: Song | null = null;
   private readonly _latchedValues: Array<Array<number | null>> = [];
+  private readonly _activeValues: Array<Array<boolean>> = [];
   private readonly _muted: boolean[] = [];
   private readonly _effectiveInstruments: Array<Array<Instrument | null>> = [];
   private _effectiveTempo: number = Config.tempoMin;
@@ -6712,6 +6661,7 @@ export class AutomationRuntime {
   public reset(song: Song | null): void {
     this._song = song;
     this._latchedValues.length = 0;
+    this._activeValues.length = 0;
     this._muted.length = 0;
     this._effectiveInstruments.length = 0;
     this._effectiveTempo = song?.tempo ?? Config.tempoMin;
@@ -6748,21 +6698,21 @@ export class AutomationRuntime {
     pattern: Pattern | null,
     rowIndex: number,
     part: number,
-  ): { found: boolean; value: number } {
+  ): { found: boolean; active: boolean; value: number } {
     const events: Event[] | undefined =
       pattern?.automationEvents[rowIndex];
-    if (events == undefined) return { found: false, value: 0 };
+    if (events == undefined) return { found: false, active: false, value: 0 };
     let found: boolean = false;
     let value: number = 0;
     for (const event of events) {
       if (part < event.start) break;
       if (part < event.end) {
-        return { found: true, value: event.getValueAt(part) };
+        return { found: true, active: true, value: event.getValueAt(part) };
       }
       found = true;
       value = event.getFinalValue();
     }
-    return { found, value };
+    return { found, active: false, value };
   }
 
   private _reconstructRow(
@@ -6771,44 +6721,27 @@ export class AutomationRuntime {
     rowIndex: number,
     bar: number,
     part: number,
-  ): number | null {
-    const current: { found: boolean; value: number } = this._findValueInPattern(
+  ): { value: number | null; active: boolean } {
+    const current = this._findValueInPattern(
       song.getPattern(channelIndex, bar),
       rowIndex,
       part,
     );
-    if (current.found) return Number.isFinite(current.value) ? current.value : null;
+    if (current.found) {
+      return {
+        value: Number.isFinite(current.value) ? current.value : null,
+        active: current.active,
+      };
+    }
     for (let previousBar: number = bar - 1; previousBar >= 0; previousBar--) {
       const events: Event[] | undefined =
         song.getPattern(channelIndex, previousBar)?.automationEvents[rowIndex];
       if (events != undefined && events.length > 0) {
         const value: number = events[events.length - 1].getFinalValue();
-        return Number.isFinite(value) ? value : null;
+        return { value: Number.isFinite(value) ? value : null, active: false };
       }
     }
-    return null;
-  }
-
-  private _applyOperation(
-    value: number,
-    operation: AutomationOperation,
-    operand: number,
-    domain: AutomationValueDomain,
-  ): number {
-    if (!Number.isFinite(operand)) return value;
-    switch (operation) {
-      case AutomationOperation.Multiply:
-        value *= operand;
-        break;
-      case AutomationOperation.Add:
-        value += operand;
-        break;
-      case AutomationOperation.Set:
-        value = operand;
-        break;
-    }
-    if (Number.isFinite(value)) return value;
-    return value > 0 ? domain.max : domain.min;
+    return { value: null, active: false };
   }
 
   private _getInstrumentTargetValue(
@@ -6944,27 +6877,36 @@ export class AutomationRuntime {
       if (channelIndex < firstAutomation) continue;
       while (this._latchedValues.length <= channelIndex)
         this._latchedValues.push([]);
+      while (this._activeValues.length <= channelIndex)
+        this._activeValues.push([]);
       const latches: Array<number | null> = this._latchedValues[channelIndex];
+      const activeValues: boolean[] = this._activeValues[channelIndex];
       const wasMuted: boolean = this._muted[channelIndex] === true;
       const reconstructChannel: boolean = reconstructAll || (wasMuted && !channel.muted);
       latches.length = channel.automationRows.length;
+      activeValues.length = channel.automationRows.length;
       for (let rowIndex: number = 0; rowIndex < channel.automationRows.length; rowIndex++) {
         if (reconstructChannel || latches[rowIndex] === undefined) {
-          latches[rowIndex] = this._reconstructRow(
+          const reconstructed = this._reconstructRow(
             song,
             channelIndex,
             rowIndex,
             bar,
             part,
           );
+          latches[rowIndex] = reconstructed.value;
+          activeValues[rowIndex] = reconstructed.active;
         } else if (!channel.muted) {
           const current = this._findValueInPattern(
             song.getPattern(channelIndex, bar),
             rowIndex,
             part,
           );
+          activeValues[rowIndex] = current.active;
           if (current.found && Number.isFinite(current.value))
             latches[rowIndex] = current.value;
+        } else {
+          activeValues[rowIndex] = false;
         }
       }
       this._muted[channelIndex] = channel.muted;
@@ -6980,64 +6922,55 @@ export class AutomationRuntime {
       max: tempoTarget.valueMax!,
       integer: tempoTarget.integer === true,
     };
-    for (
-      let channelIndex: number = song.getChannelCount() - 1;
-      channelIndex >= firstAutomation;
-      channelIndex--
-    ) {
-      const channel: Channel = song.channels[channelIndex];
-      if (channel.muted) continue;
-      for (let rowIndex: number = channel.automationRows.length - 1; rowIndex >= 0; rowIndex--) {
-        const row: AutomationRow = channel.automationRows[rowIndex];
-        const operand: number | null = this._latchedValues[channelIndex]?.[rowIndex] ?? null;
-        if (operand == null || !row.isTargetValid(song)) continue;
-        const target: AutomationTarget = row.getTarget()!;
-        if (target.scope == "song") {
-          tempoValue = this._applyOperation(
-            tempoValue,
-            row.operation,
-            operand,
-            tempoDomain,
-          );
-          continue;
+    // Held values establish defaults. Values from events that are currently active
+    // are applied afterward, so a new event can override an older holdover.
+    for (const active of [false, true]) {
+      for (
+        let channelIndex: number = song.getChannelCount() - 1;
+        channelIndex >= firstAutomation;
+        channelIndex--
+      ) {
+        const channel: Channel = song.channels[channelIndex];
+        if (channel.muted) continue;
+        for (let rowIndex: number = 0; rowIndex < channel.automationRows.length; rowIndex++) {
+          if (this._activeValues[channelIndex]?.[rowIndex] !== active) continue;
+          const row: AutomationRow = channel.automationRows[rowIndex];
+          const operand: number | null =
+            this._latchedValues[channelIndex]?.[rowIndex] ?? null;
+          if (operand == null || !row.isTargetValid(song)) continue;
+          const target: AutomationTarget = row.getTarget()!;
+          if (target.scope == "song") {
+            tempoValue = operand;
+            continue;
+          }
+          const base: Instrument =
+            song.channels[row.targetChannel].instruments[row.targetInstrument];
+          const property: AutomationProperty | undefined = target.property;
+          if (property == undefined) continue;
+          const address: number =
+            (((row.targetChannel * Config.instrumentCountMax + row.targetInstrument) *
+              Config.automationTargets.length + target.index) * targetStride) +
+            row.targetIndex;
+          let resolved: ResolvedAutomationValue | undefined =
+            resolvedValues.get(address);
+          if (resolved == undefined) {
+            const baseValue: number | null = this._getInstrumentTargetValue(
+              base,
+              property,
+              row.targetIndex,
+            );
+            if (baseValue == null) continue;
+            resolved = {
+              channelIndex: row.targetChannel,
+              instrumentIndex: row.targetInstrument,
+              target,
+              targetIndex: row.targetIndex,
+              value: baseValue,
+            };
+            resolvedValues.set(address, resolved);
+          }
+          resolved.value = operand;
         }
-        const base: Instrument =
-          song.channels[row.targetChannel].instruments[row.targetInstrument];
-        const property: AutomationProperty | undefined = target.property;
-        if (property == undefined) continue;
-        const address: number =
-          (((row.targetChannel * Config.instrumentCountMax + row.targetInstrument) *
-            Config.automationTargets.length + target.index) * targetStride) +
-          row.targetIndex;
-        let resolved: ResolvedAutomationValue | undefined =
-          resolvedValues.get(address);
-        if (resolved == undefined) {
-          const baseValue: number | null = this._getInstrumentTargetValue(
-            base,
-            property,
-            row.targetIndex,
-          );
-          if (baseValue == null) continue;
-          resolved = {
-            channelIndex: row.targetChannel,
-            instrumentIndex: row.targetInstrument,
-            target,
-            targetIndex: row.targetIndex,
-            value: baseValue,
-          };
-          resolvedValues.set(address, resolved);
-        }
-        const domain: AutomationValueDomain = {
-          min: target.valueMin!,
-          max: target.valueMax!,
-          integer: target.integer === true,
-        };
-        resolved.value = this._applyOperation(
-          resolved.value,
-          row.operation,
-          operand,
-          domain,
-        );
       }
     }
     this._effectiveTempo = sanitizeAutomationValue(tempoValue, tempoDomain);

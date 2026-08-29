@@ -106,7 +106,6 @@ test("Automation rows, surfaces, floating point events, and invalid references r
   const channel = addAutomationChannel(module, song, 2);
   assert.equal(channel.instruments.length, 0);
   channel.automationRows[0].setInstrumentTarget(song, 0, 0, "pan");
-  channel.automationRows[0].operation = module.AutomationOperation.Add;
   channel.automationRows[1].targetChannel = 99;
   channel.automationRows[1].targetChannelKind = module.ChannelKind.pitch;
   channel.automationRows[1].targetChannelMissing = true;
@@ -115,7 +114,7 @@ test("Automation rows, surfaces, floating point events, and invalid references r
   channel.automationRows[1].targetId = "removed-target";
   channel.automationRows[1].targetElementMissing = true;
   setPatternEvents(channel, 0, 0, [
-    event(module, 0, 24, [[0, -3.125], [7.5, 1.75], [24, 2.125]]),
+    event(module, 0, 24, [[0, 3.125], [7.5, 1.75], [24, 2.125]]),
   ]);
 
   const binary = song.toBinary();
@@ -125,7 +124,7 @@ test("Automation rows, surfaces, floating point events, and invalid references r
   assert.equal(restored.channels.at(-1).instruments.length, 0);
   assert.deepEqual(
     restored.channels.at(-1).patterns[0].automationEvents[0][0].points.map((point) => [point.time, point.value]),
-    [[0, -3.125], [7.5, 1.75], [24, 2.125]],
+    [[0, 3.125], [7.5, 1.75], [24, 2.125]],
   );
   const missing = restored.channels.at(-1).automationRows[1];
   assert.equal(missing.targetChannel, 99);
@@ -189,7 +188,6 @@ test("malformed Automation payloads reject finite, ordering, and allocation viol
   rejects((value) => { firstEvent(value).points[0].value = Number.POSITIVE_INFINITY; });
   rejects((value) => { firstEvent(value).points[1].time = 0; });
   rejects((value) => { firstEvent(value).end = song.beatsPerBar * module.Config.partsPerBeat + 1; });
-  rejects((value) => { automationChannel(value).automationRows[0].operation = 99; });
   rejects((value) => {
     automationChannel(value).automationRows = Array.from(
       { length: module.Config.automationRowCountMax + 1 },
@@ -278,32 +276,24 @@ test("later events replace held values and continuous loop latches differ from m
   assert.equal(runtime.getEffectiveTempo(), 120);
 });
 
-test("Automation operations use descending channel and row order without compounding", async (context) => {
+test("active events in lower rows override holdovers", async (context) => {
   const module = await loadAutomationModules();
   context.after(module.cleanup);
   const song = new module.Song();
-  song.tempo = 100;
-  const low = addAutomationChannel(module, song, 2);
-  const high = addAutomationChannel(module, song, 2);
-  for (const channel of [low, high]) {
-    channel.bars[0] = 1;
-    channel.patterns[0].ensureAutomationRowCount(2);
-    for (const row of channel.automationRows) row.setSongTarget("tempo");
-  }
-  // Required order: high channel row 2, high row 1, low row 2, low row 1.
-  high.automationRows[1].operation = module.AutomationOperation.Multiply;
-  high.automationRows[0].operation = module.AutomationOperation.Add;
-  low.automationRows[1].operation = module.AutomationOperation.Set;
-  low.automationRows[0].operation = module.AutomationOperation.Multiply;
-  high.patterns[0].automationEvents[1] = [event(module, 0, 1, [[0, 2], [1, 2]])];
-  high.patterns[0].automationEvents[0] = [event(module, 0, 1, [[0, 5], [1, 5]])];
-  low.patterns[0].automationEvents[1] = [event(module, 0, 1, [[0, 70], [1, 70]])];
-  low.patterns[0].automationEvents[0] = [event(module, 0, 1, [[0, 3], [1, 3]])];
+  song.tempo = 120;
+  const channel = addAutomationChannel(module, song, 2);
+  channel.bars[0] = 1;
+  channel.patterns[0].ensureAutomationRowCount(2);
+  for (const row of channel.automationRows) row.setSongTarget("tempo");
+  channel.patterns[0].automationEvents[0] = [event(module, 0, 4, [[0, 200], [4, 200]])];
+  channel.patterns[0].automationEvents[1] = [event(module, 8, 12, [[0, 90], [4, 90]])];
   const runtime = new module.AutomationRuntime();
-  runtime.update(song, 0, 0.5, false);
-  assert.equal(runtime.getEffectiveTempo(), 210);
-  runtime.update(song, 0, 2, true);
-  assert.equal(runtime.getEffectiveTempo(), 210, "held multiply/add operands derive from the saved base each tick");
+  runtime.update(song, 0, 6, false);
+  assert.equal(runtime.getEffectiveTempo(), 200);
+  runtime.update(song, 0, 10, true);
+  assert.equal(runtime.getEffectiveTempo(), 90, "the lower row overrides the upper row's holdover");
+  runtime.update(song, 0, 14, true);
+  assert.equal(runtime.getEffectiveTempo(), 90, "the lower row becomes the new holdover");
 });
 
 test("muted Automation channels are ignored and unmuting reconstructs at the playhead", async (context) => {
@@ -313,7 +303,6 @@ test("muted Automation channels are ignored and unmuting reconstructs at the pla
   song.tempo = 120;
   const channel = addAutomationChannel(module, song);
   channel.automationRows[0].setSongTarget("tempo");
-  channel.automationRows[0].operation = module.AutomationOperation.Set;
   setPatternEvents(channel, 0, 0, [event(module, 0, 8, [[0, 180], [8, 180]])]);
   const runtime = new module.AutomationRuntime();
   runtime.update(song, 0, 12, false);
@@ -618,16 +607,12 @@ test("cross-target numeric mapping snaps integer targets and preserves continuou
   const automation = addAutomationChannel(module, song, 1);
   const row = automation.automationRows[0];
   row.setInstrumentTarget(song, 0, 0, "pan");
-  row.operation = module.AutomationOperation.Set;
   const panDomain = row.getValueDomain();
   setPatternEvents(automation, 0, 0, [
     event(module, 0, 1, [[0, 12.375], [1, 64.125]]),
   ]);
   const mixTarget = module.Config.automationTargets.dictionary.mixVolume;
-  const mixDomain = module.Config.getAutomationValueDomain(
-    mixTarget,
-    row.operation,
-  );
+  const mixDomain = module.Config.getAutomationValueDomain(mixTarget);
   const expected = automation.patterns[0].automationEvents[0][0].points.map(
     (point) =>
       module.mapAutomationValueBetweenDomains(point.value, panDomain, mixDomain),
@@ -1045,7 +1030,7 @@ function makeOneBarSong(module) {
   return song;
 }
 
-test("growable rendering respects Set, Add, Multiply, clamping, and the non-automated duration", async (context) => {
+test("growable rendering respects automation, clamping, and the non-automated duration", async (context) => {
   const module = await loadAutomationModules();
   context.after(module.cleanup);
   const previousAnimationFrame = globalThis.requestAnimationFrame;
@@ -1060,31 +1045,23 @@ test("growable rendering respects Set, Add, Multiply, clamping, and the non-auto
   const baselineLength = await renderSong(module, baseline);
   assert.equal(baselineLength, 16000);
 
-  for (const [operation, operand] of [
-    [module.AutomationOperation.Set, 240],
-    [module.AutomationOperation.Add, 120],
-    [module.AutomationOperation.Multiply, 2],
-  ]) {
-    const song = makeOneBarSong(module);
-    song.tempo = 120;
-    const channel = addAutomationChannel(module, song);
-    channel.automationRows[0].setSongTarget("tempo");
-    channel.automationRows[0].operation = operation;
-    const parts = song.beatsPerBar * module.Config.partsPerBeat;
-    setPatternEvents(channel, 0, 0, [
-      event(module, 0, parts, [[0, operand], [parts, operand]]),
-    ]);
-    assert.equal(await renderSong(module, song), 8000);
-  }
+  const automated = makeOneBarSong(module);
+  automated.tempo = 120;
+  const automatedChannel = addAutomationChannel(module, automated);
+  automatedChannel.automationRows[0].setSongTarget("tempo");
+  const automatedParts = automated.beatsPerBar * module.Config.partsPerBeat;
+  setPatternEvents(automatedChannel, 0, 0, [
+    event(module, 0, automatedParts, [[0, 240], [automatedParts, 240]]),
+  ]);
+  assert.equal(await renderSong(module, automated), 8000);
 
   const clamped = makeOneBarSong(module);
   clamped.tempo = 120;
   const channel = addAutomationChannel(module, clamped);
   channel.automationRows[0].setSongTarget("tempo");
-  channel.automationRows[0].operation = module.AutomationOperation.Multiply;
   const parts = clamped.beatsPerBar * module.Config.partsPerBeat;
   setPatternEvents(channel, 0, 0, [
-    event(module, 0, parts, [[0, 4], [parts, 4]]),
+    event(module, 0, parts, [[0, 400], [parts, 400]]),
   ]);
   assert.equal(await renderSong(module, clamped), 6401);
 });
