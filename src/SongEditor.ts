@@ -2340,13 +2340,24 @@ export class SongEditor {
         automationColors.primaryNote,
       );
       this._automationEditorRow.style.setProperty(
-        "--automation-primary-channel",
-        automationColors.primaryChannel,
+        "--automation-secondary-note",
+        automationColors.secondaryNote,
       );
-      const automationWidth: number = Math.max(
-        320,
-        this._automationEditorRow.clientWidth * 0.85,
+      const rowHeight: number =
+        this._automationEditorRow.clientHeight /
+        this.doc.song.channels[this.doc.channel].automationRows.length;
+      const targetBeatWidth: number = rowHeight * 5;
+      const minBeatWidth: number =
+        this._automationEditorRow.clientWidth /
+        (this.doc.song.beatsPerBar * 3);
+      const maxBeatWidth: number =
+        this._automationEditorRow.clientWidth /
+        (this.doc.song.beatsPerBar + 2);
+      const beatWidth: number = Math.max(
+        minBeatWidth,
+        Math.min(maxBeatWidth, targetBeatWidth),
       );
+      const automationWidth: number = beatWidth * this.doc.song.beatsPerBar;
       for (const editor of [
         this._automationEditorPrev,
         this._automationEditor,
@@ -3044,7 +3055,9 @@ export class SongEditor {
     switch (event.keyCode) {
       case 27: // ESC key
         if (!event.ctrlKey && !event.metaKey) {
-          new ChangePatternSelection(this.doc, 0, 0);
+          if (this.doc.song.getChannelIsAutomation(this.doc.channel))
+            this._automationEditor.clearSelection();
+          else new ChangePatternSelection(this.doc, 0, 0);
           this.doc.selection.resetBoxSelection();
         }
         break;
@@ -3132,7 +3145,12 @@ export class SongEditor {
         break;
       case 65: // a
         if (canPlayNotes) break;
-        if (event.shiftKey) {
+        if (
+          !event.shiftKey &&
+          this.doc.song.getChannelIsAutomation(this.doc.channel)
+        ) {
+          this._automationEditor.selectAll();
+        } else if (event.shiftKey) {
           this.doc.selection.selectChannel();
         } else {
           this.doc.selection.selectAll();
@@ -4026,7 +4044,9 @@ export class SongEditor {
         this.doc.selection.transpose(false, false);
         break;
       case "selectAll":
-        this.doc.selection.selectAll();
+        if (this.doc.song.getChannelIsAutomation(this.doc.channel))
+          this._automationEditor.selectAll();
+        else this.doc.selection.selectAll();
         break;
       case "selectChannel":
         this.doc.selection.selectChannel();

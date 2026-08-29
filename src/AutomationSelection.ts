@@ -1,52 +1,60 @@
 // Copyright (c) John Nesky and contributing authors, distributed under the MIT license, see accompanying the LICENSE.md file.
 
-/** Transient Automation editor state. Each row keeps its own selected events. */
+export interface AutomationRowSelection {
+  readonly start: number;
+  readonly end: number;
+}
+
+/** Transient Automation editor state. Each row keeps its own time selection. */
 export class AutomationRowSelectionState {
   public activeRow: number = 0;
-  private readonly _selected: Map<number, Set<number>> = new Map();
+  private readonly _ranges: Map<number, AutomationRowSelection> = new Map();
 
-  public select(rowIndex: number, eventIndex: number, additive: boolean): void {
+  public setRange(rowIndex: number, start: number, end: number): void {
     this.activeRow = rowIndex;
-    let row: Set<number> | undefined = this._selected.get(rowIndex);
-    if (row == undefined) {
-      row = new Set();
-      this._selected.set(rowIndex, row);
+    const rangeStart: number = Math.min(start, end);
+    const rangeEnd: number = Math.max(start, end);
+    if (rangeStart == rangeEnd) {
+      this._ranges.delete(rowIndex);
+    } else {
+      this._ranges.set(rowIndex, { start: rangeStart, end: rangeEnd });
     }
-    if (!additive) row.clear();
-    if (additive && row.has(eventIndex)) row.delete(eventIndex);
-    else row.add(eventIndex);
   }
 
-  public selectOnly(rowIndex: number, indexes: readonly number[]): void {
-    this.activeRow = rowIndex;
-    this._selected.set(rowIndex, new Set(indexes));
+  public getRange(rowIndex: number): AutomationRowSelection | null {
+    return this._ranges.get(rowIndex) ?? null;
   }
 
-  public isSelected(rowIndex: number, eventIndex: number): boolean {
-    return this._selected.get(rowIndex)?.has(eventIndex) === true;
+  public clearRange(rowIndex: number): void {
+    this._ranges.delete(rowIndex);
   }
 
-  public getSelected(rowIndex: number): number[] {
-    return Array.from(this._selected.get(rowIndex) ?? []).sort((a, b) => a - b);
+  public clearRanges(): void {
+    this._ranges.clear();
   }
 
-  public rows(): number[] {
-    return Array.from(this._selected.keys()).filter(
-      (rowIndex: number): boolean =>
-        (this._selected.get(rowIndex)?.size ?? 0) > 0,
-    );
+  public rangeRows(): number[] {
+    return Array.from(this._ranges.keys()).sort((a, b) => a - b);
   }
 
-  public trim(rowCount: number, eventCounts: readonly number[]): void {
-    for (const [rowIndex, selected] of this._selected) {
+  public contains(rowIndex: number, part: number): boolean {
+    const range: AutomationRowSelection | undefined = this._ranges.get(rowIndex);
+    return range != undefined && range.start <= part && part <= range.end;
+  }
+
+  public trim(
+    rowCount: number,
+    partsPerBar: number = Number.POSITIVE_INFINITY,
+  ): void {
+    for (const [rowIndex, range] of this._ranges) {
       if (rowIndex >= rowCount) {
-        this._selected.delete(rowIndex);
+        this._ranges.delete(rowIndex);
         continue;
       }
-      for (const eventIndex of selected) {
-        if (eventIndex >= (eventCounts[rowIndex] ?? 0))
-          selected.delete(eventIndex);
-      }
+      const start: number = Math.max(0, Math.min(partsPerBar, range.start));
+      const end: number = Math.max(0, Math.min(partsPerBar, range.end));
+      if (start >= end) this._ranges.delete(rowIndex);
+      else this._ranges.set(rowIndex, { start, end });
     }
     this.activeRow = Math.max(0, Math.min(rowCount - 1, this.activeRow));
   }

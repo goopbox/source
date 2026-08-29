@@ -17,6 +17,7 @@ async function loadAutomationModules() {
         'export { decodeSongBinary, encodeSongBinary } from "./synth/SongBinary.ts";',
         'export { decodeBinaryValue, encodeBinaryValue } from "./synth/BinaryCodec.ts";',
         'export { SongRenderer } from "./src/SongRenderer.ts";',
+        'export { bendAutomationEvent, clipAutomationEvent, deleteAutomationRange } from "./src/AutomationEditing.ts";',
         'export { AutomationRowSelectionState } from "./src/AutomationSelection.ts";',
         'export { trackChannelKindsAreCompatible } from "./src/ChannelCompatibility.ts";',
         'export { encodeSongUrl, decodeSongUrlHash } from "./src/SongUrl.ts";',
@@ -675,18 +676,57 @@ test("Automation pattern content, Track compatibility, and MIDI skipping use cha
   );
 });
 
-test("row selections remain independent while one row stays active", async (context) => {
+test("Automation time selections remain independent per row", async (context) => {
   const module = await loadAutomationModules();
   context.after(module.cleanup);
   const selection = new module.AutomationRowSelectionState();
-  selection.select(0, 2, false);
-  selection.select(1, 4, false);
-  assert.equal(selection.isSelected(0, 2), true);
-  assert.equal(selection.isSelected(1, 4), true);
+  selection.setRange(0, 6, 18);
+  selection.setRange(1, 24, 12);
   assert.equal(selection.activeRow, 1);
-  selection.select(1, 5, true);
-  assert.deepEqual(selection.getSelected(0), [2]);
-  assert.deepEqual(selection.getSelected(1), [4, 5]);
+  assert.deepEqual(selection.getRange(0), { start: 6, end: 18 });
+  assert.deepEqual(selection.getRange(1), { start: 12, end: 24 });
+  assert.equal(selection.contains(0, 12), true);
+  assert.equal(selection.contains(1, 6), false);
+  assert.deepEqual(selection.rangeRows(), [0, 1]);
+  selection.trim(2, 20);
+  assert.deepEqual(selection.getRange(1), { start: 12, end: 20 });
+});
+
+test("Automation time selections clip, split, and value-bend events", async (context) => {
+  const module = await loadAutomationModules();
+  context.after(module.cleanup);
+  const source = event(module, 0, 24, [[0, 0], [12, 6], [24, 0]]);
+
+  const clipped = module.clipAutomationEvent(source, 6, 18);
+  assert.deepEqual(
+    [clipped.start, clipped.end, ...clipped.points.map((point) => point.value)],
+    [6, 18, 3, 6, 3],
+  );
+
+  const split = module.deleteAutomationRange([source], 6, 18);
+  assert.deepEqual(split.map((automationEvent) => [automationEvent.start, automationEvent.end]), [
+    [0, 6],
+    [18, 24],
+  ]);
+  assert.equal(split[0].getFinalValue(), 3);
+  assert.equal(split[1].points[0].value, 3);
+
+  const bent = module.bendAutomationEvent(
+    source,
+    6,
+    2,
+    { min: 0, max: 10, integer: false },
+    false,
+  );
+  assert.deepEqual(
+    bent.points.map((point) => [point.time, point.value]),
+    [[0, 0], [6, 5], [12, 6], [24, 0]],
+  );
+  assert.deepEqual(
+    source.points.map((point) => [point.time, point.value]),
+    [[0, 0], [12, 6], [24, 0]],
+    "bending leaves the original event intact",
+  );
 });
 
 test("target filtering follows instrument type, enabled effects, and filter points", async (context) => {

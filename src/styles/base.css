@@ -164,89 +164,16 @@ button:focus-visible {
 .automation-editor {
     height: 100%;
     min-width: 0;
-    overflow-x: hidden;
-    overflow-y: auto;
+    overflow: hidden;
     position: relative;
+    flex-grow: 1;
     background: var(--background);
-    touch-action: pan-y;
+    touch-action: none;
 }
 
-.automation-preview {
-    opacity: 0.35;
-    pointer-events: none;
-}
-
-.automation-lane {
-    position: relative;
-    height: 72px;
-    margin: 30px 0;
-    border-block: 1px solid var(--ui-widget-background);
-    background:
-        repeating-linear-gradient(
-            to right,
-            transparent 0,
-            transparent calc(100% / var(--beats-per-bar) - 1px),
-            var(--ui-widget-background) calc(100% / var(--beats-per-bar) - 1px),
-            var(--ui-widget-background) calc(100% / var(--beats-per-bar))
-        ),
-        var(--pitch-row);
-}
-
-.automation-lane.active {
-    box-shadow: inset 0 0 0 1px var(--automation-primary-note);
-}
-
-.automation-row-number {
-    position: sticky;
-    left: 4px;
-    top: 3px;
-    z-index: 4;
-    color: var(--secondary-text);
-    pointer-events: none;
-}
-
-.automation-event {
+.automation-editor-svg {
     position: absolute;
-    top: 10px;
-    bottom: 10px;
-    min-width: 4px;
-    border: 2px solid var(--automation-primary-note);
-    border-radius: 5px;
-    background: color-mix(in srgb, var(--automation-primary-channel) 70%, transparent);
-    cursor: grab;
-}
-
-.automation-event.selected {
-    border-color: var(--text);
-    box-shadow: 0 0 0 2px var(--automation-primary-note);
-}
-
-.automation-resize {
-    position: absolute;
-    inset-block: 0;
-    width: 8px;
-    cursor: ew-resize;
-}
-
-.automation-resize.start {
-    left: -4px;
-}
-
-.automation-resize.end {
-    right: -4px;
-}
-
-.automation-point {
-    position: absolute;
-    width: 12px;
-    height: 12px;
-    min-width: 0;
-    padding: 0;
-    border: 2px solid var(--text);
-    border-radius: 50%;
-    background: var(--automation-primary-note);
-    transform: translate(-50%, 50%);
-    cursor: move;
+    inset: 0;
 }
 
 .pattern-area {
