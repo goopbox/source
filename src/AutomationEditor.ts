@@ -2,12 +2,13 @@
 
 import { Config, type AutomationValueDomain } from "../synth/SynthConfig.js";
 import {
-  AutomationEvent,
+  Event,
   AutomationOperation,
-  AutomationPoint,
+  EventPoint,
   AutomationRow,
   ChannelKind,
   mapAutomationClipboardValue,
+  sanitizeAutomationValue,
   type Pattern,
 } from "../synth/synth.js";
 import { HTML, SVG } from "imperative-html/dist/esm/elements-strict.js";
@@ -20,12 +21,17 @@ import { ChangeGroup } from "./Change.js";
 import { ColorConfig } from "./ColorConfig.js";
 import { prettyNumber } from "./EditorConfig.js";
 import {
-  bendAutomationEvent,
-  clipAutomationEvent,
-  deleteAutomationRange,
-} from "./AutomationEditing.js";
+  bendEvent,
+  clipEvent,
+  cloneEvents,
+  deleteEventRange,
+  editEventTime,
+  eventPath,
+  moveEventRange,
+  repeatEvents,
+} from "./EventEditing.js";
 import {
-  ChangeAutomationEvents,
+  ChangeEvents,
   ChangeAutomationOperation,
   ChangeAutomationRowCount,
   ChangeAutomationTargetChannel,
@@ -62,7 +68,7 @@ interface AutomationDrag {
     | "selection-contents";
   readonly startClientX: number;
   readonly startClientY: number;
-  readonly original: AutomationEvent[];
+  readonly original: Event[];
   readonly originalRange: AutomationRowSelection | null;
   readonly cursorStart: number;
   readonly cursorEnd: number;
@@ -71,8 +77,8 @@ interface AutomationDrag {
   readonly anchorEnd: number;
   dragging: boolean;
   horizontal: boolean;
-  previewEvent: AutomationEvent | null;
-  change: ChangeAutomationEvents | null;
+  previewEvent: Event | null;
+  change: ChangeEvents | null;
 }
 
 interface AutomationCursor {
@@ -81,15 +87,11 @@ interface AutomationCursor {
   exactPart: number;
   part: number;
   eventIndex: number;
-  event: AutomationEvent | null;
-  previous: AutomationEvent | null;
-  next: AutomationEvent | null;
+  event: Event | null;
+  previous: Event | null;
+  next: Event | null;
   start: number;
   end: number;
-}
-
-function cloneEvents(events: readonly AutomationEvent[]): AutomationEvent[] {
-  return events.map((event: AutomationEvent): AutomationEvent => event.clone());
 }
 
 function isAutomationClipboard(value: unknown): value is AutomationClipboard {
@@ -545,14 +547,14 @@ export class AutomationEditor {
     );
 
     const pattern: Pattern | null = this._doc.getCurrentPattern(this._barOffset);
-    const events: readonly AutomationEvent[] =
+    const events: readonly Event[] =
       pattern?.automationEvents[cursor.rowIndex] ?? [];
     const matchingPart: number = Math.max(
       0,
       Math.min(this._partsPerBar() - 0.0001, cursor.exactPart),
     );
     for (let index: number = 0; index < events.length; index++) {
-      const event: AutomationEvent = events[index];
+      const event: Event = events[index];
       if (event.end <= matchingPart) {
         cursor.previous = event;
         continue;
@@ -627,7 +629,7 @@ export class AutomationEditor {
     drag: AutomationDrag,
     currentPart: number,
     dragged: boolean,
-  ): AutomationEvent | null {
+  ): Event | null {
     let start: number = drag.cursorStart;
     let end: number = drag.cursorEnd;
     if (dragged) {
@@ -639,21 +641,19 @@ export class AutomationEditor {
         start = drag.cursorPart;
         end = currentPart + minDivision;
       }
-      const previous: AutomationEvent | null = this._cursor.previous;
-      const next: AutomationEvent | null = this._cursor.next;
-      start = Math.max(previous?.end ?? 0, start);
-      end = Math.min(next?.start ?? this._partsPerBar(), end);
+      start = Math.max(0, start);
+      end = Math.min(this._partsPerBar(), end);
     }
     if (start >= end) return null;
     const domain: AutomationValueDomain | null = this._rowDomain(drag.rowIndex);
     const value: number = domain?.max ?? 0;
-    return new AutomationEvent(start, end, [
-      new AutomationPoint(0, value),
-      new AutomationPoint(end - start, value),
+    return new Event(start, end, [
+      new EventPoint(0, value),
+      new EventPoint(end - start, value),
     ]);
   }
 
-  private _nearestPointIndex(event: AutomationEvent, absolutePart: number): number {
+  private _nearestPointIndex(event: Event, absolutePart: number): number {
     let nearestIndex: number = 0;
     let nearestDistance: number = Number.POSITIVE_INFINITY;
     for (let index: number = 0; index < event.points.length; index++) {
@@ -668,89 +668,20 @@ export class AutomationEditor {
     return nearestIndex;
   }
 
-  private _resizeEventStart(
-    event: AutomationEvent,
-    start: number,
-  ): AutomationEvent {
-    if (start >= event.start) {
-      return clipAutomationEvent(event, start, event.end) ?? event.clone();
-    }
-    const offset: number = event.start - start;
-    const points: AutomationPoint[] = [];
-    if (event.points.length < Config.automationPointsPerEventMax) {
-      points.push(new AutomationPoint(0, event.points[0].value));
-    }
-    for (const point of event.points) {
-      points.push(
-        new AutomationPoint(
-          points.length == 0 ? 0 : point.time + offset,
-          point.value,
-        ),
-      );
-    }
-    return new AutomationEvent(start, event.end, points);
-  }
-
-  private _resizeEventEnd(
-    event: AutomationEvent,
-    end: number,
-  ): AutomationEvent {
-    if (end <= event.end) {
-      return clipAutomationEvent(event, event.start, end) ?? event.clone();
-    }
-    const points: AutomationPoint[] = event.points.map(
-      (point: AutomationPoint): AutomationPoint => point.clone(),
-    );
-    if (points.length < Config.automationPointsPerEventMax) {
-      points.push(
-        new AutomationPoint(
-          end - event.start,
-          event.points[event.points.length - 1].value,
-        ),
-      );
-    } else {
-      points[points.length - 1].time = end - event.start;
-    }
-    return new AutomationEvent(event.start, end, points);
-  }
-
   private _editEventHorizontally(
     drag: AutomationDrag,
     currentPart: number,
-  ): AutomationEvent[] {
-    const replacement: AutomationEvent[] = cloneEvents(drag.original);
-    const event: AutomationEvent | undefined = replacement[drag.eventIndex];
-    if (event == undefined) return replacement;
-    const originalEvent: AutomationEvent = drag.original[drag.eventIndex];
-    const pointIndex: number = drag.pointIndex;
-    const lastPointIndex: number = originalEvent.points.length - 1;
+  ): Event[] {
     const delta: number = currentPart - drag.cursorPart;
-    const minDivision: number = this._getMinDivision();
-    if (pointIndex == 0) {
-      const previousEnd: number = drag.original[drag.eventIndex - 1]?.end ?? 0;
-      const start: number = Math.max(
-        previousEnd,
-        Math.min(originalEvent.end - minDivision, originalEvent.start + delta),
-      );
-      replacement[drag.eventIndex] = this._resizeEventStart(originalEvent, start);
-    } else if (pointIndex == lastPointIndex) {
-      const nextStart: number =
-        drag.original[drag.eventIndex + 1]?.start ?? this._partsPerBar();
-      const end: number = Math.max(
-        originalEvent.start + minDivision,
-        Math.min(nextStart, originalEvent.end + delta),
-      );
-      replacement[drag.eventIndex] = this._resizeEventEnd(originalEvent, end);
-    } else {
-      const point: AutomationPoint = event.points[pointIndex];
-      const previousTime: number = event.points[pointIndex - 1].time;
-      const nextTime: number = event.points[pointIndex + 1].time;
-      point.time = Math.max(
-        previousTime + 0.001,
-        Math.min(nextTime - 0.001, originalEvent.points[pointIndex].time + delta),
-      );
-    }
-    return replacement;
+    return editEventTime(
+      drag.original,
+      drag.eventIndex,
+      drag.pointIndex,
+      delta,
+      this._getMinDivision(),
+      this._partsPerBar(),
+      Config.automationPointsPerEventMax,
+    );
   }
 
   private _editEventVertically(
@@ -758,65 +689,35 @@ export class AutomationEditor {
     currentPart: number,
     clientY: number,
     uniform: boolean,
-  ): AutomationEvent[] {
-    const replacement: AutomationEvent[] = cloneEvents(drag.original);
-    const event: AutomationEvent | undefined = drag.original[drag.eventIndex];
+  ): Event[] {
+    const replacement: Event[] = cloneEvents(drag.original);
+    const event: Event | undefined = drag.original[drag.eventIndex];
     const domain: AutomationValueDomain | null = this._rowDomain(drag.rowIndex);
     if (event == undefined || domain == null) return replacement;
     const pixelsForFullRange: number = Math.max(40, this._rowHeight * 1.5);
     const valueDelta: number =
       ((drag.startClientY - clientY) / pixelsForFullRange) *
       (domain.max - domain.min);
-    replacement[drag.eventIndex] = bendAutomationEvent(
+    replacement[drag.eventIndex] = bendEvent(
       event,
       currentPart,
       valueDelta,
-      domain,
+      (value: number): number => sanitizeAutomationValue(value, domain),
       uniform,
+      Config.automationPointsPerEventMax,
     );
     return replacement;
   }
 
-  private _moveSelection(
-    events: readonly AutomationEvent[],
-    range: AutomationRowSelection,
-    delta: number,
-  ): AutomationEvent[] {
-    const moved: AutomationEvent[] = [];
-    for (const event of events) {
-      const selected: AutomationEvent | null = clipAutomationEvent(
-        event,
-        range.start,
-        range.end,
-      );
-      if (selected == null) continue;
-      selected.start += delta;
-      selected.end += delta;
-      moved.push(selected);
-    }
-    const newStart: number = range.start + delta;
-    const newEnd: number = range.end + delta;
-    const remaining: AutomationEvent[] = deleteAutomationRange(
-      deleteAutomationRange(events, range.start, range.end),
-      newStart,
-      newEnd,
-    );
-    return remaining.concat(moved).sort(
-      (a: AutomationEvent, b: AutomationEvent): number => a.start - b.start,
-    );
-  }
-
   private _applyReplacement(
     drag: AutomationDrag,
-    replacement: AutomationEvent[],
+    replacement: Event[],
   ): void {
     if (replacement.length > Config.automationEventsPerRowMax) return;
     const pattern: Pattern | null = this._doc.getCurrentPattern(this._barOffset);
     if (pattern == null) return;
-    drag.change = new ChangeAutomationEvents(
+    drag.change = new ChangeEvents(
       this._doc,
-      pattern,
-      drag.rowIndex,
       pattern.automationEvents[drag.rowIndex],
       replacement,
     );
@@ -826,10 +727,8 @@ export class AutomationEditor {
   private _restoreDrag(drag: AutomationDrag): void {
     const pattern: Pattern | null = this._doc.getCurrentPattern(this._barOffset);
     if (pattern != null && drag.change != null) {
-      new ChangeAutomationEvents(
+      new ChangeEvents(
         this._doc,
-        pattern,
-        drag.rowIndex,
         pattern.automationEvents[drag.rowIndex],
         drag.original,
       );
@@ -879,7 +778,7 @@ export class AutomationEditor {
 
     if (mode == "create" || mode == "event") this.selection.clearRange(rowIndex);
     const pattern: Pattern | null = this._doc.getCurrentPattern(this._barOffset);
-    const original: AutomationEvent[] = cloneEvents(
+    const original: Event[] = cloneEvents(
       pattern?.automationEvents[rowIndex] ?? [],
     );
     const pointIndex: number = cursor.event == null
@@ -941,7 +840,7 @@ export class AutomationEditor {
         );
         break;
       case "event": {
-        const replacement: AutomationEvent[] = drag.horizontal
+        const replacement: Event[] = drag.horizontal
           ? this._editEventHorizontally(drag, currentPart)
           : this._editEventVertically(
               drag,
@@ -973,6 +872,11 @@ export class AutomationEditor {
               Math.min(this._partsPerBar(), currentPart + this._getMinDivision()),
             );
           }
+        } else if (drag.eventIndex >= 0) {
+          this._applyReplacement(
+            drag,
+            this._editEventVertically(drag, currentPart, event.clientY, true),
+          );
         }
         break;
       case "selection-contents": {
@@ -989,10 +893,8 @@ export class AutomationEditor {
             const pattern: Pattern | null =
               this._doc.getCurrentPattern(this._barOffset);
             if (pattern != null) {
-              new ChangeAutomationEvents(
+              new ChangeEvents(
                 this._doc,
-                pattern,
-                drag.rowIndex,
                 pattern.automationEvents[drag.rowIndex],
                 drag.original,
               );
@@ -1014,7 +916,7 @@ export class AutomationEditor {
         );
         this._applyReplacement(
           drag,
-          this._moveSelection(drag.original, drag.originalRange, delta),
+          moveEventRange(drag.original, drag.originalRange, delta),
         );
         break;
       }
@@ -1028,25 +930,25 @@ export class AutomationEditor {
     if (drag == null || drag.pointerId != event.pointerId) return;
 
     if (drag.mode == "create") {
-      const automationEvent: AutomationEvent | null = drag.previewEvent;
+      const automationEvent: Event | null = drag.previewEvent;
       if (automationEvent != null) {
         const group: ChangeGroup = new ChangeGroup();
         const pattern: Pattern | null = this._ensurePattern(group);
         if (pattern != null) {
           pattern.ensureAutomationRowCount(drag.rowIndex + 1);
-          const oldEvents: AutomationEvent[] = pattern.automationEvents[drag.rowIndex];
-          if (oldEvents.length < Config.automationEventsPerRowMax) {
-            const replacement: AutomationEvent[] = cloneEvents(oldEvents);
-            replacement.push(automationEvent);
-            replacement.sort(
-              (a: AutomationEvent, b: AutomationEvent): number => a.start - b.start,
-            );
+          const oldEvents: Event[] = pattern.automationEvents[drag.rowIndex];
+          const replacement: Event[] = deleteEventRange(
+            oldEvents,
+            automationEvent.start,
+            automationEvent.end,
+          ).concat(automationEvent).sort(
+              (a: Event, b: Event): number => a.start - b.start,
+          );
+          if (replacement.length <= Config.automationEventsPerRowMax) {
             group.append(
-              new ChangeAutomationEvents(
+              new ChangeEvents(
                 this._doc,
-                pattern,
-                drag.rowIndex,
-                oldEvents,
+                pattern.automationEvents[drag.rowIndex],
                 replacement,
               ),
             );
@@ -1060,24 +962,24 @@ export class AutomationEditor {
       } else if (!drag.dragging) {
         const pattern: Pattern | null = this._doc.getCurrentPattern(this._barOffset);
         if (pattern != null && drag.eventIndex >= 0) {
-          const oldEvents: AutomationEvent[] = pattern.automationEvents[drag.rowIndex];
-          const replacement: AutomationEvent[] = oldEvents.filter(
-            (_event: AutomationEvent, index: number): boolean =>
+          const oldEvents: Event[] = pattern.automationEvents[drag.rowIndex];
+          const replacement: Event[] = oldEvents.filter(
+            (_event: Event, index: number): boolean =>
               index != drag.eventIndex,
           );
           this._doc.record(
-            new ChangeAutomationEvents(
+            new ChangeEvents(
               this._doc,
-              pattern,
-              drag.rowIndex,
-              oldEvents,
+              pattern.automationEvents[drag.rowIndex],
               replacement,
             ),
           );
         }
       }
     } else if (drag.mode == "selection") {
-      if (!drag.dragging || !drag.horizontal) {
+      if (drag.change != null) {
+        this._doc.record(drag.change);
+      } else if (!drag.dragging || !drag.horizontal) {
         if (
           drag.originalRange != null &&
           drag.originalRange.start <= this._cursor.exactPart &&
@@ -1137,46 +1039,20 @@ export class AutomationEditor {
   }
 
   private _eventPath(
-    event: AutomationEvent,
+    event: Event,
     rowIndex: number,
     domain: AutomationValueDomain | null,
     showValue: boolean,
   ): string {
-    if (event.points.length == 0) return "";
-    const points: AutomationPoint[] = event.points.slice();
-    const duration: number = event.end - event.start;
-    const finalPoint: AutomationPoint = points[points.length - 1];
-    if (finalPoint.time < duration) {
-      points.push(new AutomationPoint(duration, finalPoint.value));
-    }
     const centerY: number = (rowIndex + 0.5) * this._rowHeight;
-    const radius: number = Math.max(1, this._rowHeight / 2 + 1);
-    const totalWidth: number = this._partWidth * (event.end - event.start);
-    const endOffset: number = 0.5 * Math.max(0, Math.min(2, totalWidth - 1));
-    const position = (point: AutomationPoint, index: number): [number, number] => {
-      const edgeOffset: number = index == 0
-        ? endOffset
-        : index == points.length - 1
-          ? -endOffset
-          : 0;
-      const x: number = this._partWidth * (event.start + point.time) + edgeOffset;
-      const size: number = showValue
+    return eventPath(event, {
+      partWidth: this._partWidth,
+      radius: Math.max(1, this._rowHeight / 2 + 1),
+      centerY: (): number => centerY,
+      valueScale: (point: EventPoint): number => showValue
         ? this._normalizedValue(point.value, domain)
-        : 1;
-      return [x, radius * size];
-    };
-    const first: [number, number] = position(points[0], 0);
-    let path: string = `M ${prettyNumber(first[0])} ${prettyNumber(centerY + first[1])} `;
-    path += `L ${prettyNumber(first[0])} ${prettyNumber(centerY - first[1])} `;
-    for (let index: number = 1; index < points.length; index++) {
-      const [x, size]: [number, number] = position(points[index], index);
-      path += `L ${prettyNumber(x)} ${prettyNumber(centerY - size)} `;
-    }
-    for (let index: number = points.length - 1; index >= 0; index--) {
-      const [x, size]: [number, number] = position(points[index], index);
-      path += `L ${prettyNumber(x)} ${prettyNumber(centerY + size)} `;
-    }
-    return path + "z";
+        : 1,
+    });
   }
 
   private _selectionPath(range: AutomationRowSelection, rowIndex: number): string {
@@ -1212,16 +1088,16 @@ export class AutomationEditor {
       );
       return;
     }
-    const event: AutomationEvent | null =
+    const event: Event | null =
       this._drag?.previewEvent ??
       this._cursor.event ??
       (() => {
         const domain: AutomationValueDomain | null =
           this._rowDomain(this._cursor.rowIndex);
         const value: number = domain?.max ?? 0;
-        return new AutomationEvent(this._cursor.start, this._cursor.end, [
-          new AutomationPoint(0, value),
-          new AutomationPoint(this._cursor.end - this._cursor.start, value),
+        return new Event(this._cursor.start, this._cursor.end, [
+          new EventPoint(0, value),
+          new EventPoint(this._cursor.end - this._cursor.start, value),
         ]);
       })();
     this._svgPreview.setAttribute(
@@ -1276,16 +1152,16 @@ export class AutomationEditor {
     this.render();
   }
 
-  public copy(): boolean {
+  private _copySelected(): boolean {
     const pattern: Pattern | null = this._doc.getCurrentPattern(this._barOffset);
     const rowIndex: number = this.selection.activeRow;
     const range: AutomationRowSelection | null = this.selection.getRange(rowIndex);
     const row: AutomationRow | undefined =
       this._doc.song.channels[this._doc.channel].automationRows[rowIndex];
     if (pattern == null || range == null || row == undefined) return false;
-    const events: AutomationEvent[] = [];
+    const events: Event[] = [];
     for (const event of pattern.automationEvents[rowIndex] ?? []) {
-      const clipped: AutomationEvent | null = clipAutomationEvent(
+      const clipped: Event | null = clipEvent(
         event,
         range.start,
         range.end,
@@ -1303,10 +1179,10 @@ export class AutomationEditor {
       targetIndex: row.targetIndex,
       operation: row.operation,
       domain: row.getValueDomain(),
-      events: events.map((event: AutomationEvent) => ({
+      events: events.map((event: Event) => ({
         start: event.start,
         end: event.end,
-        points: event.points.map((point: AutomationPoint) => ({
+        points: event.points.map((point: EventPoint) => ({
           time: point.time,
           value: point.value,
         })),
@@ -1314,6 +1190,12 @@ export class AutomationEditor {
     };
     window.localStorage.setItem("automationCopy", JSON.stringify(copy));
     return true;
+  }
+
+  public copy(): boolean {
+    const copied: boolean = this._copySelected();
+    this.clearSelection();
+    return copied;
   }
 
   public deleteSelected(): boolean {
@@ -1324,8 +1206,8 @@ export class AutomationEditor {
     for (const rowIndex of this.selection.rangeRows()) {
       const range: AutomationRowSelection | null = this.selection.getRange(rowIndex);
       if (range == null) continue;
-      const oldEvents: AutomationEvent[] = pattern.automationEvents[rowIndex] ?? [];
-      const replacement: AutomationEvent[] = deleteAutomationRange(
+      const oldEvents: Event[] = pattern.automationEvents[rowIndex] ?? [];
+      const replacement: Event[] = deleteEventRange(
         oldEvents,
         range.start,
         range.end,
@@ -1334,17 +1216,15 @@ export class AutomationEditor {
       if (
         replacement.length == oldEvents.length &&
         replacement.every(
-          (event: AutomationEvent, index: number): boolean =>
+          (event: Event, index: number): boolean =>
             event.start == oldEvents[index].start &&
             event.end == oldEvents[index].end,
         )
       ) continue;
       group.append(
-        new ChangeAutomationEvents(
+        new ChangeEvents(
           this._doc,
-          pattern,
-          rowIndex,
-          oldEvents,
+          pattern.automationEvents[rowIndex],
           replacement,
         ),
       );
@@ -1357,95 +1237,89 @@ export class AutomationEditor {
   }
 
   public cut(): boolean {
-    if (!this.copy()) return false;
+    if (!this._copySelected()) {
+      this.clearSelection();
+      return false;
+    }
     return this.deleteSelected();
   }
 
   public paste(): boolean {
-    let value: unknown;
     try {
-      value = JSON.parse(String(window.localStorage.getItem("automationCopy")));
-    } catch {
-      return false;
-    }
-    if (!isAutomationClipboard(value)) return false;
-    const rowIndex: number = this.selection.activeRow;
-    const row: AutomationRow | undefined =
-      this._doc.song.channels[this._doc.channel].automationRows[rowIndex];
-    if (row == undefined) return false;
-    const destination: AutomationRowSelection | null =
-      this.selection.getRange(rowIndex);
-    const anchor: number = destination?.start ?? 0;
-    const destinationDomain: AutomationValueDomain | null = row.getValueDomain();
-    const compatible: boolean =
-      value.targetId == row.targetId &&
-      value.targetIndex == row.targetIndex &&
-      value.operation == row.operation;
-    const pasted: AutomationEvent[] = [];
-    for (const source of value.events) {
-      const shifted: AutomationEvent = new AutomationEvent(
-        source.start + anchor,
-        source.end + anchor,
-        source.points.map(
-          (point): AutomationPoint => new AutomationPoint(
-            point.time,
-            mapAutomationClipboardValue(
-              point.value,
-              compatible,
-              value.domain,
-              destinationDomain,
+      let value: unknown;
+      try {
+        value = JSON.parse(String(window.localStorage.getItem("automationCopy")));
+      } catch {
+        return false;
+      }
+      if (!isAutomationClipboard(value)) return false;
+      const rowIndex: number = this.selection.activeRow;
+      const row: AutomationRow | undefined =
+        this._doc.song.channels[this._doc.channel].automationRows[rowIndex];
+      if (row == undefined) return false;
+      const selectedRange: AutomationRowSelection | null =
+        this.selection.getRange(rowIndex);
+      const destination: AutomationRowSelection = selectedRange ?? {
+        start: 0,
+        end: this._partsPerBar(),
+      };
+      const destinationDomain: AutomationValueDomain | null = row.getValueDomain();
+      const compatible: boolean =
+        value.targetId == row.targetId &&
+        value.targetIndex == row.targetIndex &&
+        value.operation == row.operation;
+      const sourceEvents: Event[] = value.events.map(
+        (source): Event => new Event(
+          source.start,
+          source.end,
+          source.points.map(
+            (point): EventPoint => new EventPoint(
+              point.time,
+              mapAutomationClipboardValue(
+                point.value,
+                compatible,
+                value.domain,
+                destinationDomain,
+              ),
             ),
           ),
         ),
       );
-      const clipped: AutomationEvent | null = clipAutomationEvent(
-        shifted,
-        0,
-        this._partsPerBar(),
+      const pasted: Event[] = repeatEvents(
+        sourceEvents,
+        value.duration,
+        destination,
       );
-      if (clipped != null) pasted.push(clipped);
+      if (pasted.length == 0) return false;
+      const existingPattern: Pattern | null =
+        this._doc.getCurrentPattern(this._barOffset);
+      const existingEvents: Event[] =
+        existingPattern?.automationEvents[rowIndex] ?? [];
+      const replacement: Event[] = deleteEventRange(
+        existingEvents,
+        destination.start,
+        destination.end,
+      ).concat(pasted).sort(
+        (a: Event, b: Event): number => a.start - b.start,
+      );
+      if (replacement.length > Config.automationEventsPerRowMax) return false;
+      const group: ChangeGroup = new ChangeGroup();
+      const pattern: Pattern | null = this._ensurePattern(group);
+      if (pattern == null) return false;
+      pattern.ensureAutomationRowCount(rowIndex + 1);
+      group.append(
+        new ChangeEvents(
+          this._doc,
+          pattern.automationEvents[rowIndex],
+          replacement,
+        ),
+      );
+      this._doc.record(group);
+      return true;
+    } finally {
+      this.selection.clearRanges();
+      this.render();
     }
-    if (pasted.length == 0) return false;
-    const existingPattern: Pattern | null =
-      this._doc.getCurrentPattern(this._barOffset);
-    const existingEvents: AutomationEvent[] =
-      existingPattern?.automationEvents[rowIndex] ?? [];
-    let replacement: AutomationEvent[] = destination == null
-      ? cloneEvents(existingEvents)
-      : deleteAutomationRange(
-          existingEvents,
-          destination.start,
-          destination.end,
-        );
-    for (const event of pasted) {
-      replacement = deleteAutomationRange(replacement, event.start, event.end);
-    }
-    replacement = replacement.concat(pasted).sort(
-      (a: AutomationEvent, b: AutomationEvent): number => a.start - b.start,
-    );
-    if (replacement.length > Config.automationEventsPerRowMax) return false;
-    const group: ChangeGroup = new ChangeGroup();
-    const pattern: Pattern | null = this._ensurePattern(group);
-    if (pattern == null) return false;
-    pattern.ensureAutomationRowCount(rowIndex + 1);
-    const oldEvents: AutomationEvent[] = pattern.automationEvents[rowIndex];
-    group.append(
-      new ChangeAutomationEvents(
-        this._doc,
-        pattern,
-        rowIndex,
-        oldEvents,
-        replacement,
-      ),
-    );
-    this._doc.record(group);
-    this.selection.setRange(
-      rowIndex,
-      anchor,
-      Math.min(this._partsPerBar(), anchor + value.duration),
-    );
-    this.render();
-    return true;
   }
 
   public render(): void {

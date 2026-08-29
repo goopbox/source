@@ -194,7 +194,7 @@ button:focus-visible {
     z-index: 1;
     content: "";
     pointer-events: none;
-    background: linear-gradient(to right, rgb(0 0 0 / 10%), rgb(0 0 0 / 70%));
+    background: linear-gradient(to right, rgb(0 0 0 / 55%), rgb(0 0 0 / 85%));
 }
 
 .pattern-preview-blur {
@@ -247,7 +247,7 @@ button:focus-visible {
 }
 
 .pattern-preview-previous::after {
-    background: linear-gradient(to right, rgb(0 0 0 / 70%), rgb(0 0 0 / 10%));
+    background: linear-gradient(to right, rgb(0 0 0 / 85%), rgb(0 0 0 / 55%));
 }
 
 .overlay-button {

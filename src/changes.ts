@@ -25,8 +25,8 @@ import {
   Instrument,
   Channel,
   ChannelKind,
-  AutomationEvent,
-  AutomationPoint,
+  Event,
+  EventPoint,
   AutomationOperation,
   AutomationRow,
   mapAutomationClipboardValue,
@@ -44,6 +44,7 @@ import {
   ChangeSequence,
   UndoableChange,
 } from "./Change.js";
+import { bendEvent, clipEvent, repeatEvents } from "./EventEditing.js";
 import type { SongDocument } from "./SongDocument.js";
 import type { SoundFontPresetInfo } from "../synth/SynthController.js";
 import { RandomBag } from "./RandomBag.js";
@@ -292,13 +293,13 @@ function getOrCreateProjectedPattern(
   return pattern;
 }
 
-function projectAutomationEventIntoBar(
-  oldEvent: AutomationEvent,
+function projectEventIntoBar(
+  oldEvent: Event,
   oldBarStart: number,
   partsToMove: number,
   bar: number,
   partsPerBar: number,
-): AutomationEvent | null {
+): Event | null {
   const shiftedStart: number = oldBarStart + oldEvent.start + partsToMove;
   const shiftedEnd: number = oldBarStart + oldEvent.end + partsToMove;
   const destinationBarStart: number = bar * partsPerBar;
@@ -314,28 +315,28 @@ function projectAutomationEventIntoBar(
   const sourcePartAtStart: number =
     oldEvent.start + absoluteStart - shiftedStart;
   const sourcePartAtEnd: number = oldEvent.start + absoluteEnd - shiftedStart;
-  const points: AutomationPoint[] = [
-    new AutomationPoint(0, oldEvent.getValueAt(sourcePartAtStart)),
+  const points: EventPoint[] = [
+    new EventPoint(0, oldEvent.getValueAt(sourcePartAtStart)),
   ];
   for (const point of oldEvent.points) {
     const shiftedPoint: number = shiftedStart + point.time;
     if (shiftedPoint <= absoluteStart || shiftedPoint >= absoluteEnd) continue;
-    points.push(new AutomationPoint(shiftedPoint - absoluteStart, point.value));
+    points.push(new EventPoint(shiftedPoint - absoluteStart, point.value));
   }
   points.push(
-    new AutomationPoint(
+    new EventPoint(
       absoluteEnd - absoluteStart,
       oldEvent.getValueAt(sourcePartAtEnd),
     ),
   );
-  return new AutomationEvent(start, end, points);
+  return new Event(start, end, points);
 }
 
-function truncateAutomationEvents(
-  events: readonly AutomationEvent[],
+function truncateEvents(
+  events: readonly Event[],
   endPart: number,
-): AutomationEvent[] {
-  const result: AutomationEvent[] = [];
+): Event[] {
+  const result: Event[] = [];
   for (const event of events) {
     if (event.start >= endPart) break;
     if (event.end <= endPart) {
@@ -344,29 +345,29 @@ function truncateAutomationEvents(
     }
     const duration: number = endPart - event.start;
     if (duration <= 0) continue;
-    const points: AutomationPoint[] = event.points
+    const points: EventPoint[] = event.points
       .filter((point): boolean => point.time < duration)
-      .map((point): AutomationPoint => point.clone());
+      .map((point): EventPoint => point.clone());
     if (points.length == 0 || points[0].time != 0)
-      points.unshift(new AutomationPoint(0, event.getValueAt(event.start)));
-    points.push(new AutomationPoint(duration, event.getValueAt(endPart)));
-    result.push(new AutomationEvent(event.start, endPart, points));
+      points.unshift(new EventPoint(0, event.getValueAt(event.start)));
+    points.push(new EventPoint(duration, event.getValueAt(endPart)));
+    result.push(new Event(event.start, endPart, points));
   }
   return result;
 }
 
-function scaleAutomationEvents(
-  events: readonly AutomationEvent[],
+function scaleEvents(
+  events: readonly Event[],
   ratio: number,
-): AutomationEvent[] {
+): Event[] {
   return events.map(
-    (event): AutomationEvent =>
-      new AutomationEvent(
+    (event): Event =>
+      new Event(
         event.start * ratio,
         event.end * ratio,
         event.points.map(
-          (point): AutomationPoint =>
-            new AutomationPoint(point.time * ratio, point.value),
+          (point): EventPoint =>
+            new EventPoint(point.time * ratio, point.value),
         ),
       ),
   );
@@ -415,7 +416,7 @@ export class ChangeMoveAndOverflowNotes extends ChangeGroup {
               rowIndex < oldChannel.automationRows.length;
               rowIndex++
             ) {
-              const events: readonly AutomationEvent[] =
+              const events: readonly Event[] =
                 oldPattern.automationEvents[rowIndex] ?? [];
               for (const oldEvent of events) {
                 const shiftedStart: number =
@@ -429,8 +430,8 @@ export class ChangeMoveAndOverflowNotes extends ChangeGroup {
                   shiftedEnd / newPartsPerBar,
                 );
                 for (let bar: number = startBar; bar < endBar; bar++) {
-                  const projected: AutomationEvent | null =
-                    projectAutomationEventIntoBar(
+                  const projected: Event | null =
+                    projectEventIntoBar(
                       oldEvent,
                       oldBarStart,
                       partsToMove,
@@ -2211,32 +2212,29 @@ export class ChangeAutomationOperation extends Change {
   }
 }
 
-export class ChangeAutomationEvents extends UndoableChange {
-  private readonly _oldEvents: AutomationEvent[];
-  private readonly _newEvents: AutomationEvent[];
+export class ChangeEvents<T extends Event = Event> extends UndoableChange {
+  private readonly _oldEvents: T[];
+  private readonly _newEvents: T[];
 
   constructor(
     private readonly _doc: SongDocument,
-    private readonly _pattern: Pattern,
-    private readonly _rowIndex: number,
-    oldEvents: readonly AutomationEvent[],
-    newEvents: readonly AutomationEvent[],
+    private readonly _events: T[],
+    newEvents: readonly T[],
     reversed: boolean = false,
   ) {
     super(reversed);
-    this._oldEvents = oldEvents.map((event): AutomationEvent => event.clone());
-    this._newEvents = newEvents.map((event): AutomationEvent => event.clone());
+    this._oldEvents = this._events.map((event: T): T => event.clone());
+    this._newEvents = newEvents.map((event: T): T => event.clone());
     if (!reversed) this._doForwards();
     else this._doBackwards();
     this._didSomething();
   }
 
-  private _replace(events: readonly AutomationEvent[]): void {
-    this._pattern.ensureAutomationRowCount(this._rowIndex + 1);
-    this._pattern.automationEvents[this._rowIndex].splice(
+  private _replace(events: readonly T[]): void {
+    this._events.splice(
       0,
-      this._pattern.automationEvents[this._rowIndex].length,
-      ...events.map((event): AutomationEvent => event.clone()),
+      this._events.length,
+      ...events.map((event: T): T => event.clone()),
     );
     this._doc.notifier.changed();
   }
@@ -2249,146 +2247,6 @@ export class ChangeAutomationEvents extends UndoableChange {
     this._replace(this._oldEvents);
   }
 }
-
-export class ChangeAutomationEventCreate extends ChangeAutomationEvents {
-  constructor(
-    doc: SongDocument,
-    pattern: Pattern,
-    rowIndex: number,
-    event: AutomationEvent,
-  ) {
-    const oldEvents: AutomationEvent[] = pattern.automationEvents[rowIndex] ?? [];
-    const newEvents: AutomationEvent[] = oldEvents
-      .concat(event)
-      .sort((a: AutomationEvent, b: AutomationEvent): number => a.start - b.start);
-    super(doc, pattern, rowIndex, oldEvents, newEvents);
-  }
-}
-
-export class ChangeAutomationEventDelete extends ChangeAutomationEvents {
-  constructor(
-    doc: SongDocument,
-    pattern: Pattern,
-    rowIndex: number,
-    eventIndex: number,
-  ) {
-    const oldEvents: AutomationEvent[] = pattern.automationEvents[rowIndex] ?? [];
-    const newEvents: AutomationEvent[] = oldEvents.filter(
-      (_event: AutomationEvent, index: number): boolean => index != eventIndex,
-    );
-    super(doc, pattern, rowIndex, oldEvents, newEvents);
-  }
-}
-
-export class ChangeAutomationEventTiming extends ChangeAutomationEvents {
-  constructor(
-    doc: SongDocument,
-    pattern: Pattern,
-    rowIndex: number,
-    eventIndex: number,
-    start: number,
-    end: number,
-  ) {
-    const oldEvents: AutomationEvent[] = pattern.automationEvents[rowIndex] ?? [];
-    const newEvents: AutomationEvent[] = oldEvents.map(
-      (event: AutomationEvent, index: number): AutomationEvent => {
-        if (index != eventIndex) return event.clone();
-        const replacement: AutomationEvent = event.clone();
-        const oldDuration: number = replacement.end - replacement.start;
-        const newDuration: number = end - start;
-        replacement.start = start;
-        replacement.end = end;
-        if (oldDuration > 0 && oldDuration != newDuration) {
-          for (const point of replacement.points)
-            point.time = (point.time * newDuration) / oldDuration;
-        }
-        return replacement;
-      },
-    );
-    super(doc, pattern, rowIndex, oldEvents, newEvents);
-  }
-}
-
-export class ChangeAutomationPointMove extends ChangeAutomationEvents {
-  constructor(
-    doc: SongDocument,
-    pattern: Pattern,
-    rowIndex: number,
-    eventIndex: number,
-    pointIndex: number,
-    time: number,
-    value: number,
-  ) {
-    const oldEvents: AutomationEvent[] = pattern.automationEvents[rowIndex] ?? [];
-    const newEvents: AutomationEvent[] = oldEvents.map(
-      (event: AutomationEvent, index: number): AutomationEvent => {
-        const replacement: AutomationEvent = event.clone();
-        if (index == eventIndex) {
-          replacement.points[pointIndex].time = time;
-          replacement.points[pointIndex].value = value;
-          replacement.points.sort(
-            (a: AutomationPoint, b: AutomationPoint): number => a.time - b.time,
-          );
-        }
-        return replacement;
-      },
-    );
-    super(doc, pattern, rowIndex, oldEvents, newEvents);
-  }
-}
-
-export class ChangeAutomationPointAdd extends ChangeAutomationEvents {
-  constructor(
-    doc: SongDocument,
-    pattern: Pattern,
-    rowIndex: number,
-    eventIndex: number,
-    point: AutomationPoint,
-  ) {
-    const oldEvents: AutomationEvent[] = pattern.automationEvents[rowIndex] ?? [];
-    const newEvents: AutomationEvent[] = oldEvents.map(
-      (event: AutomationEvent, index: number): AutomationEvent => {
-        const replacement: AutomationEvent = event.clone();
-        if (index == eventIndex) {
-          replacement.points.push(point.clone());
-          replacement.points.sort(
-            (a: AutomationPoint, b: AutomationPoint): number => a.time - b.time,
-          );
-        }
-        return replacement;
-      },
-    );
-    super(doc, pattern, rowIndex, oldEvents, newEvents);
-  }
-}
-
-export class ChangeAutomationPointDelete extends ChangeAutomationEvents {
-  constructor(
-    doc: SongDocument,
-    pattern: Pattern,
-    rowIndex: number,
-    eventIndex: number,
-    pointIndex: number,
-  ) {
-    const oldEvents: AutomationEvent[] = pattern.automationEvents[rowIndex] ?? [];
-    const newEvents: AutomationEvent[] = oldEvents.map(
-      (event: AutomationEvent, index: number): AutomationEvent => {
-        const replacement: AutomationEvent = event.clone();
-        if (
-          index == eventIndex &&
-          replacement.points.length > 2 &&
-          pointIndex > 0 &&
-          pointIndex < replacement.points.length - 1
-        )
-          replacement.points.splice(pointIndex, 1);
-        return replacement;
-      },
-    );
-    super(doc, pattern, rowIndex, oldEvents, newEvents);
-  }
-}
-
-export class ChangeAutomationEventValue extends ChangeAutomationPointMove {}
 
 export class ChangeAddChannel extends ChangeGroup {
   constructor(
@@ -3346,37 +3204,27 @@ export class ChangePaste extends ChangeGroup {
       }
     }
 
-    while (selectionStart < selectionEnd) {
-      for (const noteObject of notes) {
-        const noteStart: number = noteObject["start"] + selectionStart;
-        const noteEnd: number = noteObject["end"] + selectionStart;
-        if (noteStart >= selectionEnd) break;
-        const note: Note = new Note(
-          noteObject["pitches"][0],
-          noteStart,
-          noteEnd,
-          noteObject["pins"][0]["size"],
-          false,
-        );
-        note.pitches.length = 0;
-        for (const pitch of noteObject["pitches"]) {
-          note.pitches.push(pitch);
-        }
-        note.pins.length = 0;
-        for (const pin of noteObject["pins"]) {
-          note.pins.push(makeNotePin(pin.interval, pin.time, pin.size));
-        }
-        note.continuesLastPattern =
-          noteObject["continuesLastPattern"] === true && note.start == 0;
-        pattern.notes.splice(noteInsertionIndex++, 0, note);
-        if (note.end > selectionEnd) {
-          this.append(
-            new ChangeNoteLength(doc, note, note.start, selectionEnd),
-          );
-        }
-      }
-
-      selectionStart += oldPartDuration;
+    const sourceNotes: Note[] = notes.map((noteObject: any): Note => {
+      const note: Note = new Note(
+        noteObject["pitches"][0],
+        noteObject["start"],
+        noteObject["end"],
+        noteObject["pins"][0]["size"],
+      );
+      note.pitches = noteObject["pitches"].concat();
+      note.pins = noteObject["pins"].map(
+        (pin: any): NotePin => makeNotePin(pin.interval, pin.time, pin.size),
+      );
+      note.continuesLastPattern = noteObject["continuesLastPattern"] === true;
+      return note;
+    });
+    for (const note of repeatEvents(
+      sourceNotes,
+      oldPartDuration,
+      { start: selectionStart, end: selectionEnd },
+    )) {
+      if (note.start != 0) note.continuesLastPattern = false;
+      pattern.notes.splice(noteInsertionIndex++, 0, note);
     }
 
     doc.notifier.changed();
@@ -3883,8 +3731,8 @@ export class ChangeMoveNotesSideways extends ChangeGroup {
             const channel: Channel = doc.song.channels[channelIndex];
             for (const pattern of channel.patterns) {
               if (doc.song.getChannelIsAutomation(channelIndex)) {
-                const newRows: AutomationEvent[][] = channel.automationRows.map(
-                  (): AutomationEvent[] => [],
+                const newRows: Event[][] = channel.automationRows.map(
+                  (): Event[] => [],
                 );
                 for (
                   let rowIndex: number = 0;
@@ -3893,8 +3741,8 @@ export class ChangeMoveNotesSideways extends ChangeGroup {
                 ) {
                   for (const oldEvent of pattern.automationEvents[rowIndex] ?? []) {
                     for (let bar: number = 1; bar >= 0; bar--) {
-                      const projected: AutomationEvent | null =
-                        projectAutomationEventIntoBar(
+                      const projected: Event | null =
+                        projectEventIntoBar(
                           oldEvent,
                           0,
                           partsToMove,
@@ -4015,10 +3863,10 @@ export class ChangeBeatsPerBar extends ChangeGroup {
                       rowIndex < pattern.automationEvents.length;
                       rowIndex++
                     ) {
-                      const oldEvents: readonly AutomationEvent[] =
+                      const oldEvents: readonly Event[] =
                         pattern.automationEvents[rowIndex];
-                      const newEvents: AutomationEvent[] =
-                        truncateAutomationEvents(
+                      const newEvents: Event[] =
+                        truncateEvents(
                           oldEvents,
                           newValue * Config.partsPerBeat,
                         );
@@ -4030,11 +3878,9 @@ export class ChangeBeatsPerBar extends ChangeGroup {
                         )
                       ) {
                         this.append(
-                          new ChangeAutomationEvents(
+                          new ChangeEvents(
                             doc,
-                            pattern,
-                            rowIndex,
-                            oldEvents,
+                            pattern.automationEvents[rowIndex],
                             newEvents,
                           ),
                         );
@@ -4079,16 +3925,14 @@ export class ChangeBeatsPerBar extends ChangeGroup {
                     rowIndex < pattern.automationEvents.length;
                     rowIndex++
                   ) {
-                    const oldEvents: readonly AutomationEvent[] =
+                    const oldEvents: readonly Event[] =
                       pattern.automationEvents[rowIndex];
                     if (oldEvents.length == 0) continue;
                     this.append(
-                      new ChangeAutomationEvents(
+                      new ChangeEvents(
                         doc,
-                        pattern,
-                        rowIndex,
-                        oldEvents,
-                        scaleAutomationEvents(oldEvents, ratio),
+                        pattern.automationEvents[rowIndex],
+                        scaleEvents(oldEvents, ratio),
                       ),
                     );
                   }
@@ -4609,46 +4453,16 @@ export class ChangeNoteLength extends ChangePins {
     truncEnd: number,
   ) {
     super(doc, note);
-    const continuesLastPattern: boolean =
+    const clipped: Note | null = clipEvent(note, truncStart, truncEnd);
+    if (clipped == null) return;
+    this._newStart = clipped.start;
+    this._newEnd = clipped.end;
+    this._newPins = clipped.pins;
+    this._newPitches = clipped.pitches;
+    this._newContinuesLastPattern =
       (this._oldStart < 0 || note.continuesLastPattern) && truncStart == 0;
-
-    truncStart -= this._oldStart;
-    truncEnd -= this._oldStart;
-    let setStart: boolean = false;
-    let prevSize: number = this._oldPins[0].size;
-    let prevInterval: number = this._oldPins[0].interval;
-    let pushLastPin: boolean = true;
-    let i: number;
-    for (i = 0; i < this._oldPins.length; i++) {
-      const oldPin: NotePin = this._oldPins[i];
-      if (oldPin.time < truncStart) {
-        prevSize = oldPin.size;
-        prevInterval = oldPin.interval;
-      } else {
-        if (oldPin.time > truncStart && !setStart) {
-          this._newPins.push(makeNotePin(prevInterval, truncStart, prevSize));
-          setStart = true;
-        }
-        if (oldPin.time <= truncEnd) {
-          this._newPins.push(
-            makeNotePin(oldPin.interval, oldPin.time, oldPin.size),
-          );
-          if (oldPin.time == truncEnd) {
-            pushLastPin = false;
-            break;
-          }
-        } else {
-          break;
-        }
-      }
-    }
-
-    if (pushLastPin)
-      this._newPins.push(
-        makeNotePin(this._oldPins[i].interval, truncEnd, this._oldPins[i].size),
-      );
-
-    this._finishSetup(continuesLastPattern);
+    this._doForwards();
+    this._didSomething();
   }
 }
 
@@ -5219,10 +5033,8 @@ export class ChangeDuplicateSelectedReusedPatterns extends ChangeGroup {
                 rowIndex++
               ) {
                 this.append(
-                  new ChangeAutomationEvents(
+                  new ChangeEvents(
                     doc,
-                    newPattern,
-                    rowIndex,
                     newPattern.automationEvents[rowIndex],
                     copiedPattern.automationEvents[rowIndex] ?? [],
                   ),
@@ -5301,32 +5113,23 @@ export class ChangeSizeBend extends UndoableChange {
     this._doc = doc;
     this._note = note;
     this._oldPins = note.pins;
-    this._newPins = [];
-
-    let inserted: boolean = false;
-
-    for (const pin of note.pins) {
-      if (pin.time < bendPart) {
-        if (uniformSize) {
-          this._newPins.push(makeNotePin(pin.interval, pin.time, bendSize));
-        } else {
-          this._newPins.push(pin);
-        }
-      } else if (pin.time == bendPart) {
-        this._newPins.push(makeNotePin(bendInterval, bendPart, bendSize));
-        inserted = true;
-      } else {
-        if (!uniformSize && !inserted) {
-          this._newPins.push(makeNotePin(bendInterval, bendPart, bendSize));
-          inserted = true;
-        }
-        if (uniformSize) {
-          this._newPins.push(makeNotePin(pin.interval, pin.time, bendSize));
-        } else {
-          this._newPins.push(pin);
-        }
-      }
-    }
+    const absolutePart: number = note.start + bendPart;
+    const replacement: Note = bendEvent(
+      note,
+      absolutePart,
+      bendSize - note.getValueAt(absolutePart),
+      (size: number): number => Math.max(
+        0,
+        Math.min(Config.noteSizeMax, Math.round(size)),
+      ),
+      uniformSize,
+      Config.automationPointsPerEventMax,
+    );
+    this._newPins = replacement.pins;
+    const bendPin: NotePin | undefined = this._newPins.find(
+      (pin: NotePin): boolean => pin.time == bendPart,
+    );
+    if (bendPin != undefined) bendPin.interval = bendInterval;
 
     removeRedundantPins(this._newPins);
 

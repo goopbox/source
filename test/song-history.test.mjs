@@ -174,9 +174,9 @@ async function loadSongHistory() {
         'export {SongDocument} from "./src/SongDocument.ts";',
         'export {encodeSongUrl, decodeSongUrl, decodeSongUrlHash} from "./src/SongUrl.ts";',
         'export {encodeSongBinary, decodeSongBinary, extractCompressedSongBody} from "./synth/SongBinary.ts";',
-        'export {AutomationEvent, AutomationPoint, ChannelKind, Instrument, Note, Pattern, Song} from "./synth/synth.ts";',
+        'export {Event, EventPoint, ChannelKind, Instrument, Note, Pattern, Song} from "./synth/synth.ts";',
         'export {Config} from "./synth/SynthConfig.ts";',
-        'export {ChangeAutomationEvents, ChangeAddChannelInstrument, ChangeBarCount, ChangeBarOrder, ChangeChannelBar, ChangeChannelCount, ChangeChannelOrder, ChangeChipWaveLoop, ChangeChorus, ChangeEnsurePatternExists, ChangeKey, ChangeLoop, ChangeNoteAdded, ChangeOctave, ChangePan, ChangeSong, ChangeTempo, ChangeToggleEffects, ChangeTrackSelection, ChangeVolume} from "./src/changes.ts";',
+        'export {ChangeEvents, ChangeAddChannelInstrument, ChangeBarCount, ChangeBarOrder, ChangeChannelBar, ChangeChannelCount, ChangeChannelOrder, ChangeChipWaveLoop, ChangeChorus, ChangeEnsurePatternExists, ChangeKey, ChangeLoop, ChangeNoteAdded, ChangeOctave, ChangePan, ChangeSong, ChangeTempo, ChangeToggleEffects, ChangeTrackSelection, ChangeVolume} from "./src/changes.ts";',
         'export {ChangeGroup} from "./src/Change.ts";',
       ].join("\n"),
       resolveDir: process.cwd(),
@@ -338,9 +338,9 @@ test("undo history is durable, contiguous, exact, and crash resistant", async (c
   const api = await loadSongHistory();
   context.after(api.cleanup);
   const {
-    AutomationEvent,
-    AutomationPoint,
-    ChangeAutomationEvents,
+    Event,
+    EventPoint,
+    ChangeEvents,
     ChangeAddChannelInstrument,
     ChangeBarCount,
     ChangeBarOrder,
@@ -396,15 +396,13 @@ test("undo history is durable, contiguous, exact, and crash resistant", async (c
       group.append(new ChangeEnsurePatternExists(doc, channelIndex, 0));
       const pattern = doc.song.getPattern(channelIndex, 0);
       assert.notEqual(pattern, null);
-      const automationEvent = new AutomationEvent(0, 12, [
-        new AutomationPoint(0, 90.25),
-        new AutomationPoint(12, 180.75),
+      const automationEvent = new Event(0, 12, [
+        new EventPoint(0, 90.25),
+        new EventPoint(12, 180.75),
       ]);
       group.append(
-        new ChangeAutomationEvents(
+        new ChangeEvents(
           doc,
-          pattern,
-          0,
           pattern.automationEvents[0],
           [automationEvent],
         ),

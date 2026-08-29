@@ -6,8 +6,8 @@ import {
   Pattern,
   Channel,
   ChannelKind,
-  AutomationEvent,
-  AutomationPoint,
+  Event,
+  EventPoint,
 } from "../synth/synth.js";
 import { SongDocument } from "./SongDocument.js";
 import { trackChannelKindsAreCompatible } from "./ChannelCompatibility.js";
@@ -34,7 +34,7 @@ import {
   ChangeTranspose,
   ChangeChannelOrder,
   comparePatternNotes,
-  ChangeAutomationEvents,
+  ChangeEvents,
 } from "./changes.js";
 
 interface PatternCopy {
@@ -399,7 +399,7 @@ export class Selection {
             bar,
           );
           let notes: Note[] = [];
-          let automationEvents: AutomationEvent[][] | undefined;
+          let automationEvents: Event[][] | undefined;
           if (pattern != null) {
             if (this._doc.song.getChannelIsAutomation(channelIndex)) {
               automationEvents = pattern.cloneAutomationEvents();
@@ -853,17 +853,17 @@ export class Selection {
   private _decodeAutomationPattern(
     patternCopy: PatternCopy | undefined,
     rowCount: number,
-  ): AutomationEvent[][] | null {
+  ): Event[][] | null {
     const copiedRows: unknown = patternCopy?.automationEvents;
     if (!Array.isArray(copiedRows)) return null;
-    const rows: AutomationEvent[][] = [];
+    const rows: Event[][] = [];
     for (let rowIndex: number = 0; rowIndex < rowCount; rowIndex++) {
       const copiedEvents: unknown = copiedRows[rowIndex] ?? [];
       if (
         !Array.isArray(copiedEvents) ||
         copiedEvents.length > Config.automationEventsPerRowMax
       ) return null;
-      const events: AutomationEvent[] = [];
+      const events: Event[] = [];
       for (const copiedEvent of copiedEvents) {
         if (
           copiedEvent == null ||
@@ -876,7 +876,7 @@ export class Selection {
           copiedEvent.points.length < 1 ||
           copiedEvent.points.length > Config.automationPointsPerEventMax
         ) return null;
-        const points: AutomationPoint[] = [];
+        const points: EventPoint[] = [];
         for (const copiedPoint of copiedEvent.points) {
           if (
             copiedPoint == null ||
@@ -886,10 +886,10 @@ export class Selection {
             typeof copiedPoint.value != "number" ||
             !Number.isFinite(copiedPoint.value)
           ) return null;
-          points.push(new AutomationPoint(copiedPoint.time, copiedPoint.value));
+          points.push(new EventPoint(copiedPoint.time, copiedPoint.value));
         }
         events.push(
-          new AutomationEvent(copiedEvent.start, copiedEvent.end, points),
+          new Event(copiedEvent.start, copiedEvent.end, points),
         );
       }
       rows.push(events);
@@ -936,15 +936,13 @@ export class Selection {
       if (pattern == null) throw new Error();
       const rowCount: number =
         this._doc.song.channels[channelIndex].automationRows.length;
-      const copiedPattern: AutomationEvent[][] | null =
+      const copiedPattern: Event[][] | null =
         this._decodeAutomationPattern(patternCopies[key], rowCount);
       if (copiedPattern == null) continue;
       for (let rowIndex: number = 0; rowIndex < rowCount; rowIndex++) {
         group.append(
-          new ChangeAutomationEvents(
+          new ChangeEvents(
             this._doc,
-            pattern,
-            rowIndex,
             pattern.automationEvents[rowIndex],
             copiedPattern[rowIndex],
           ),

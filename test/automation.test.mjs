@@ -17,7 +17,7 @@ async function loadAutomationModules() {
         'export { decodeSongBinary, encodeSongBinary } from "./synth/SongBinary.ts";',
         'export { decodeBinaryValue, encodeBinaryValue } from "./synth/BinaryCodec.ts";',
         'export { SongRenderer } from "./src/SongRenderer.ts";',
-        'export { bendAutomationEvent, clipAutomationEvent, deleteAutomationRange } from "./src/AutomationEditing.ts";',
+        'export { bendEvent, clipEvent, deleteEventRange, editEventTime, eventPath, repeatEvents } from "./src/EventEditing.ts";',
         'export { AutomationRowSelectionState } from "./src/AutomationSelection.ts";',
         'export { trackChannelKindsAreCompatible } from "./src/ChannelCompatibility.ts";',
         'export { encodeSongUrl, decodeSongUrlHash } from "./src/SongUrl.ts";',
@@ -50,10 +50,10 @@ function addAutomationChannel(module, song, rowCount = 1) {
 }
 
 function event(module, start, end, values) {
-  return new module.AutomationEvent(
+  return new module.Event(
     start,
     end,
-    values.map(([time, value]) => new module.AutomationPoint(time, value)),
+    values.map(([time, value]) => new module.EventPoint(time, value)),
   );
 }
 
@@ -697,13 +697,13 @@ test("Automation time selections clip, split, and value-bend events", async (con
   context.after(module.cleanup);
   const source = event(module, 0, 24, [[0, 0], [12, 6], [24, 0]]);
 
-  const clipped = module.clipAutomationEvent(source, 6, 18);
+  const clipped = module.clipEvent(source, 6, 18);
   assert.deepEqual(
     [clipped.start, clipped.end, ...clipped.points.map((point) => point.value)],
     [6, 18, 3, 6, 3],
   );
 
-  const split = module.deleteAutomationRange([source], 6, 18);
+  const split = module.deleteEventRange([source], 6, 18);
   assert.deepEqual(split.map((automationEvent) => [automationEvent.start, automationEvent.end]), [
     [0, 6],
     [18, 24],
@@ -711,12 +711,13 @@ test("Automation time selections clip, split, and value-bend events", async (con
   assert.equal(split[0].getFinalValue(), 3);
   assert.equal(split[1].points[0].value, 3);
 
-  const bent = module.bendAutomationEvent(
+  const bent = module.bendEvent(
     source,
     6,
     2,
-    { min: 0, max: 10, integer: false },
+    (value) => Math.max(0, Math.min(10, value)),
     false,
+    module.Config.automationPointsPerEventMax,
   );
   assert.deepEqual(
     bent.points.map((point) => [point.time, point.value]),
@@ -727,6 +728,81 @@ test("Automation time selections clip, split, and value-bend events", async (con
     [[0, 0], [12, 6], [24, 0]],
     "bending leaves the original event intact",
   );
+});
+
+test("notes and Automation share the Event model and range handlers", async (context) => {
+  const module = await loadAutomationModules();
+  context.after(module.cleanup);
+  const note = new module.Note(24, 0, 24, 8);
+  note.pins = [
+    module.makeNotePin(0, 0, 8),
+    module.makeNotePin(4, 12, 4),
+    module.makeNotePin(4, 24, 2),
+  ];
+
+  assert.equal(note instanceof module.Event, true);
+  assert.equal(note.pins[0] instanceof module.EventPoint, true);
+  assert.equal(note.points, note.pins);
+  note.points[0].value = 6;
+  assert.equal(note.pins[0].size, 6);
+
+  const clipped = module.clipEvent(note, 6, 18);
+  assert.equal(clipped instanceof module.Note, true);
+  assert.deepEqual([clipped.start, clipped.end], [6, 18]);
+  assert.equal(clipped.pins[0].interval, 0);
+  assert.equal(clipped.pitches[0], 26);
+  assert.deepEqual(
+    Object.keys(JSON.parse(JSON.stringify(note))).sort(),
+    ["continuesLastPattern", "end", "pins", "pitches", "start"],
+  );
+});
+
+test("shared event edits clip collisions, flatten values, repeat, and render", async (context) => {
+  const module = await loadAutomationModules();
+  context.after(module.cleanup);
+  const events = [
+    event(module, 0, 6, [[0, 1], [6, 1]]),
+    event(module, 8, 12, [[0, 2], [4, 2]]),
+    event(module, 14, 20, [[0, 3], [6, 3]]),
+  ];
+  const extended = module.editEventTime(events, 1, 1, 6, 1, 24, 32);
+  assert.deepEqual(
+    extended.map((candidate) => [candidate.start, candidate.end]),
+    [[0, 6], [8, 18], [18, 20]],
+  );
+
+  const shaped = event(module, 0, 12, [[0, 1], [6, 4], [12, 2]]);
+  const flattened = module.bendEvent(
+    shaped,
+    6,
+    2,
+    (value) => Math.max(0, Math.min(10, value)),
+    true,
+    32,
+  );
+  assert.deepEqual(flattened.points.map((point) => point.value), [6, 6, 6]);
+
+  const repeated = module.repeatEvents(
+    [event(module, 0, 12, [[0, 5], [12, 5]])],
+    12,
+    { start: 3, end: 28 },
+  );
+  assert.deepEqual(
+    repeated.map((candidate) => [candidate.start, candidate.end]),
+    [[3, 15], [15, 27], [27, 28]],
+  );
+
+  const note = new module.Note(24, 0, 12, 5);
+  const options = {
+    partWidth: 2,
+    radius: 4,
+    centerY: () => 10,
+    valueScale: (point) => point.value / 5,
+  };
+  assert.equal(module.eventPath(note, options), module.eventPath(
+    event(module, 0, 12, [[0, 5], [12, 5]]),
+    options,
+  ));
 });
 
 test("target filtering follows instrument type, enabled effects, and filter points", async (context) => {

@@ -4,6 +4,8 @@ import { type Chord, type Transition, Config } from "../synth/SynthConfig.js";
 import { prettyNumber } from "./EditorConfig.js";
 import { ColorConfig } from "./ColorConfig.js";
 import {
+  Event,
+  type EventPoint,
   type NotePin,
   Note,
   makeNotePin,
@@ -13,6 +15,7 @@ import {
 import { SongDocument } from "./SongDocument.js";
 import { HTML, SVG } from "imperative-html/dist/esm/elements-strict.js";
 import { EasyPointers, Point2d } from "./EasyPointers.js";
+import { eventPath } from "./EventEditing.js";
 import { ChangeSequence, UndoableChange } from "./Change.js";
 import {
   ChangeChannelBar,
@@ -228,16 +231,6 @@ export class PatternEditor {
       this._svg.addEventListener("pointercancel", this._onPointerCancel);
     } else {
       this._svgPlayhead.style.display = "none";
-      this._svgContent.appendChild(
-        SVG.rect({
-          x: 0,
-          y: 0,
-          width: 10000,
-          height: 10000,
-          fill: ColorConfig.background,
-          style: "opacity: 0.5;",
-        }),
-      );
     }
 
     this.resetCopiedPins();
@@ -830,14 +823,7 @@ export class PatternEditor {
       const currentPart: number = this._snapToMinDivision(
         this._mouseX / this._partWidth,
       );
-      if (
-        this._shiftHeld &&
-        !this._mouseHorizontal &&
-        this._doc.selection.patternSelectionActive
-      ) {
-        // Keep an existing selection intact and cancel the conflicting
-        // whole-note volume gesture.
-      } else if (this._draggingStartOfSelection) {
+      if (this._draggingStartOfSelection) {
         sequence.append(
           new ChangePatternSelection(
             this._doc,
@@ -1509,8 +1495,6 @@ export class PatternEditor {
         const radius: number = this._pitchHeight / 2;
         const width: number = 80;
         const height: number = 60;
-        //this._drawNote(this._svgPreview, this._cursor.pitch, this._cursor.start, this._cursor.pins, this._pitchHeight / 2 + 1, true, this._octaveOffset);
-
         let pathString: string = "";
 
         const sizeMax: number = Config.noteSizeMax;
@@ -1671,8 +1655,11 @@ export class PatternEditor {
           this._drawNote(
             this._svgPreview,
             this._cursor.pitch,
-            this._cursor.start,
-            this._cursor.pins,
+            new Event(
+              this._cursor.start,
+              this._cursor.end,
+              this._cursor.pins,
+            ),
             this._pitchHeight / 2 + 1,
             true,
             this._octaveOffset,
@@ -1864,8 +1851,7 @@ export class PatternEditor {
           this._drawNote(
             notePath,
             pitch,
-            note.start,
-            note.pins,
+            note,
             this._pitchHeight * 0.19,
             false,
             octaveOffset,
@@ -1900,8 +1886,7 @@ export class PatternEditor {
           this._drawNote(
             notePath,
             pitch,
-            note.start,
-            note.pins,
+            note,
             this._pitchHeight / 2 + 1,
             false,
             this._octaveOffset,
@@ -1917,8 +1902,7 @@ export class PatternEditor {
           this._drawNote(
             notePath,
             pitch,
-            note.start,
-            note.pins,
+            note,
             this._pitchHeight / 2 + 1,
             true,
             this._octaveOffset,
@@ -2027,116 +2011,27 @@ export class PatternEditor {
   private _drawNote(
     svgElement: SVGPathElement,
     pitch: number,
-    start: number,
-    pins: NotePin[],
+    event: Event,
     radius: number,
     showSize: boolean,
     offset: number,
   ): void {
-    const totalWidth: number =
-      this._partWidth * (pins[pins.length - 1].time + pins[0].time);
-    const endOffset: number = 0.5 * Math.min(2, totalWidth - 1);
-
-    let nextPin: NotePin = pins[0];
-
-    let pathString: string =
-      "M " +
-      prettyNumber(this._partWidth * (start + nextPin.time) + endOffset) +
-      " " +
-      prettyNumber(
-        this._pitchToPixelHeight(pitch - offset) +
-          radius * (showSize ? nextPin.size / Config.noteSizeMax : 1.0),
-      ) +
-      " ";
-    for (let i: number = 1; i < pins.length; i++) {
-      let prevPin: NotePin = nextPin;
-      nextPin = pins[i];
-      let prevSide: number =
-        this._partWidth * (start + prevPin.time) + (i == 1 ? endOffset : 0);
-      let nextSide: number =
-        this._partWidth * (start + nextPin.time) -
-        (i == pins.length - 1 ? endOffset : 0);
-      let prevHeight: number = this._pitchToPixelHeight(
-        pitch + prevPin.interval - offset,
-      );
-      let nextHeight: number = this._pitchToPixelHeight(
-        pitch + nextPin.interval - offset,
-      );
-      let prevSize: number = showSize ? prevPin.size / Config.noteSizeMax : 1.0;
-      let nextSize: number = showSize ? nextPin.size / Config.noteSizeMax : 1.0;
-      pathString +=
-        "L " +
-        prettyNumber(prevSide) +
-        " " +
-        prettyNumber(prevHeight - radius * prevSize) +
-        " ";
-      if (prevPin.interval > nextPin.interval)
-        pathString +=
-          "L " +
-          prettyNumber(prevSide + 1) +
-          " " +
-          prettyNumber(prevHeight - radius * prevSize) +
-          " ";
-      if (prevPin.interval < nextPin.interval)
-        pathString +=
-          "L " +
-          prettyNumber(nextSide - 1) +
-          " " +
-          prettyNumber(nextHeight - radius * nextSize) +
-          " ";
-      pathString +=
-        "L " +
-        prettyNumber(nextSide) +
-        " " +
-        prettyNumber(nextHeight - radius * nextSize) +
-        " ";
-    }
-    for (let i: number = pins.length - 2; i >= 0; i--) {
-      let prevPin: NotePin = nextPin;
-      nextPin = pins[i];
-      let prevSide: number =
-        this._partWidth * (start + prevPin.time) -
-        (i == pins.length - 2 ? endOffset : 0);
-      let nextSide: number =
-        this._partWidth * (start + nextPin.time) + (i == 0 ? endOffset : 0);
-      let prevHeight: number = this._pitchToPixelHeight(
-        pitch + prevPin.interval - offset,
-      );
-      let nextHeight: number = this._pitchToPixelHeight(
-        pitch + nextPin.interval - offset,
-      );
-      let prevSize: number = showSize ? prevPin.size / Config.noteSizeMax : 1.0;
-      let nextSize: number = showSize ? nextPin.size / Config.noteSizeMax : 1.0;
-      pathString +=
-        "L " +
-        prettyNumber(prevSide) +
-        " " +
-        prettyNumber(prevHeight + radius * prevSize) +
-        " ";
-      if (prevPin.interval < nextPin.interval)
-        pathString +=
-          "L " +
-          prettyNumber(prevSide - 1) +
-          " " +
-          prettyNumber(prevHeight + radius * prevSize) +
-          " ";
-      if (prevPin.interval > nextPin.interval)
-        pathString +=
-          "L " +
-          prettyNumber(nextSide + 1) +
-          " " +
-          prettyNumber(nextHeight + radius * nextSize) +
-          " ";
-      pathString +=
-        "L " +
-        prettyNumber(nextSide) +
-        " " +
-        prettyNumber(nextHeight + radius * nextSize) +
-        " ";
-    }
-    pathString += "z";
-
-    svgElement.setAttribute("d", pathString);
+    svgElement.setAttribute(
+      "d",
+      eventPath(event, {
+        partWidth: this._partWidth,
+        radius,
+        centerY: (point: EventPoint): number => {
+          const pin: NotePin = point as NotePin;
+          return this._pitchToPixelHeight(pitch + pin.interval - offset);
+        },
+        valueScale: (point: EventPoint): number => showSize
+          ? point.value / Config.noteSizeMax
+          : 1,
+        pitchInterval: (point: EventPoint): number =>
+          (point as NotePin).interval,
+      }),
+    );
   }
 
   private _pitchToPixelHeight(pitch: number): number {

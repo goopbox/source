@@ -1,9 +1,8 @@
 // Copyright (c) John Nesky and contributing authors, distributed under the MIT license, see accompanying the LICENSE.md file.
 
-export interface AutomationRowSelection {
-  readonly start: number;
-  readonly end: number;
-}
+import type { EventRange } from "./EventEditing.js";
+
+export type AutomationRowSelection = EventRange;
 
 /** Transient Automation editor state. Each row keeps its own time selection. */
 export class AutomationRowSelectionState {

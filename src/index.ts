@@ -15,7 +15,9 @@ export { ColorConfig } from "./ColorConfig.js";
 
 export { SongEditor } from "./SongEditor.js";
 export {
-  type NotePin,
+  EventPoint,
+  Event,
+  NotePin,
   Note,
   Pattern,
   Instrument,

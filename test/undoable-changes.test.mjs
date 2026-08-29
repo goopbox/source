@@ -14,7 +14,7 @@ async function loadChanges() {
   await build({
     stdin: {
       contents: [
-        'export {ChangeDragSelectedNotes, ChangeTranspose} from "./src/changes.ts";',
+        'export {ChangeDragSelectedNotes, ChangeSizeBend, ChangeTranspose} from "./src/changes.ts";',
         'export {Note, Pattern, Song, makeNotePin} from "./synth/synth.ts";',
       ].join("\n"),
       resolveDir: process.cwd(),
@@ -140,4 +140,22 @@ test("scale transposition follows the composing key", async (context) => {
     note.pins.map((pin) => pin.interval),
     [0, 3, 3],
   );
+});
+
+test("uniform note value bends use the shared Event value handler", async (context) => {
+  const { ChangeSizeBend, Note, makeNotePin, cleanup } = await loadChanges();
+  context.after(cleanup);
+  const note = new Note(24, 0, 12, 4);
+  note.pins = [
+    makeNotePin(0, 0, 4),
+    makeNotePin(3, 6, 8),
+    makeNotePin(3, 12, 5),
+  ];
+  const doc = { notifier: { changed() {} } };
+
+  const change = new ChangeSizeBend(doc, note, 6, 7, 3, true);
+  assert.deepEqual(note.pins.map((pin) => pin.size), [7, 7, 7]);
+  assert.deepEqual(note.pins.map((pin) => pin.interval), [0, 3, 3]);
+  change.undo();
+  assert.deepEqual(note.pins.map((pin) => pin.size), [4, 8, 5]);
 });

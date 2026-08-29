@@ -2318,9 +2318,10 @@ export class SongEditor {
     const isDrumChannel: boolean = this.doc.song.getChannelIsNoise(
       this.doc.channel,
     );
-    this._piano.container.style.display = isAutomationChannel ? "none" : "";
-    this._octaveScrollBar.container.style.display =
-      isAutomationChannel ? "none" : "";
+    this._piano.container.style.visibility =
+      isAutomationChannel ? "hidden" : "";
+    this._octaveScrollBar.container.style.visibility =
+      isAutomationChannel ? "hidden" : "";
     this._patternEditorRow.style.display = isAutomationChannel ? "none" : "flex";
     this._automationEditorRow.style.display = isAutomationChannel ? "flex" : "none";
     this._zoomInButton.style.display =
@@ -2343,56 +2344,38 @@ export class SongEditor {
         "--automation-secondary-note",
         automationColors.secondaryNote,
       );
-      const rowHeight: number =
-        this._automationEditorRow.clientHeight /
-        this.doc.song.channels[this.doc.channel].automationRows.length;
-      const targetBeatWidth: number = rowHeight * 5;
-      const minBeatWidth: number =
-        this._automationEditorRow.clientWidth /
-        (this.doc.song.beatsPerBar * 3);
-      const maxBeatWidth: number =
-        this._automationEditorRow.clientWidth /
-        (this.doc.song.beatsPerBar + 2);
-      const beatWidth: number = Math.max(
-        minBeatWidth,
-        Math.min(maxBeatWidth, targetBeatWidth),
-      );
-      const automationWidth: number = beatWidth * this.doc.song.beatsPerBar;
-      for (const editor of [
-        this._automationEditorPrev,
-        this._automationEditor,
-        this._automationEditorNext,
-      ]) {
-        editor.container.style.width = `${automationWidth}px`;
-        editor.container.style.flexShrink = "0";
-        editor.render();
-      }
-    } else {
-      const semitoneHeight: number =
-        this._patternEditorRow.clientHeight / this.doc.getVisiblePitchCount();
-      const targetBeatWidth: number = semitoneHeight * 5;
-      const minBeatWidth: number =
-        this._patternEditorRow.clientWidth / (this.doc.song.beatsPerBar * 3);
-      const maxBeatWidth: number =
-        this._patternEditorRow.clientWidth / (this.doc.song.beatsPerBar + 2);
-      const beatWidth: number = Math.max(
-        minBeatWidth,
-        Math.min(maxBeatWidth, targetBeatWidth),
-      );
-      const patternEditorWidth: number = beatWidth * this.doc.song.beatsPerBar;
-      for (const editor of [
-        this._patternEditorPrev,
-        this._patternEditor,
-        this._patternEditorNext,
-      ]) {
-        editor.container.style.width = `${patternEditorWidth}px`;
-        editor.container.style.flexShrink = "0";
-      }
-      this._patternEditorPrev.container.style.display = "";
-      this._patternEditorNext.container.style.display = "";
-      this._patternEditorPrev.render();
-      this._patternEditorNext.render();
-      this._patternEditor.render();
+    }
+    const editorRow: HTMLDivElement = isAutomationChannel
+      ? this._automationEditorRow
+      : this._patternEditorRow;
+    const eventHeight: number =
+      editorRow.clientHeight / this.doc.getVisiblePitchCount();
+    const targetBeatWidth: number = eventHeight * 5;
+    const minBeatWidth: number =
+      editorRow.clientWidth / (this.doc.song.beatsPerBar * 3);
+    const maxBeatWidth: number =
+      editorRow.clientWidth / (this.doc.song.beatsPerBar + 2);
+    const beatWidth: number = Math.max(
+      minBeatWidth,
+      Math.min(maxBeatWidth, targetBeatWidth),
+    );
+    const editorWidth: number = beatWidth * this.doc.song.beatsPerBar;
+    const editors: ReadonlyArray<PatternEditor | AutomationEditor> =
+      isAutomationChannel
+        ? [
+            this._automationEditorPrev,
+            this._automationEditor,
+            this._automationEditorNext,
+          ]
+        : [
+            this._patternEditorPrev,
+            this._patternEditor,
+            this._patternEditorNext,
+          ];
+    for (const editor of editors) {
+      editor.container.style.width = `${editorWidth}px`;
+      editor.container.style.flexShrink = "0";
+      editor.render();
     }
 
     this._automationChannelsStepper.value =

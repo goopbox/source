@@ -455,20 +455,6 @@ function interpolateSetting(
   );
 }
 
-export interface NotePin {
-  interval: number;
-  time: number;
-  size: number;
-}
-
-export function makeNotePin(
-  interval: number,
-  time: number,
-  size: number,
-): NotePin {
-  return { interval: interval, time: time, size: size };
-}
-
 export enum ChannelKind {
   pitch = "pitch",
   noise = "noise",
@@ -550,35 +536,93 @@ export function mapAutomationClipboardValue(
   return mapAutomationValueBetweenDomains(value, source, destination);
 }
 
-export class AutomationPoint {
+export class EventPoint {
   public constructor(
     public time: number,
     public value: number,
   ) {}
 
-  public clone(): AutomationPoint {
-    return new AutomationPoint(this.time, this.value);
+  public clone(): EventPoint {
+    return new EventPoint(this.time, this.value);
+  }
+
+  public toJSON(): Object {
+    return { time: this.time, value: this.value };
   }
 }
 
-export class AutomationEvent {
-  public readonly points: AutomationPoint[];
+export class NotePin extends EventPoint {
+  public constructor(
+    public interval: number,
+    time: number,
+    size: number,
+  ) {
+    super(time, size);
+  }
+
+  public get size(): number {
+    return this.value;
+  }
+
+  public set size(size: number) {
+    this.value = size;
+  }
+
+  public override clone(): NotePin {
+    return new NotePin(this.interval, this.time, this.size);
+  }
+
+  public override toJSON(): Object {
+    return { interval: this.interval, time: this.time, size: this.size };
+  }
+}
+
+export function makeNotePin(
+  interval: number,
+  time: number,
+  size: number,
+): NotePin {
+  return new NotePin(interval, time, size);
+}
+
+export class Event {
+  #points: EventPoint[];
+
+  public get points(): EventPoint[] {
+    return this.#points;
+  }
+
+  public set points(points: EventPoint[]) {
+    this.#points = points;
+  }
 
   public constructor(
     public start: number,
     public end: number,
-    points: readonly AutomationPoint[] = [
-      new AutomationPoint(0, 0),
-      new AutomationPoint(Math.max(0, end - start), 0),
+    points: readonly EventPoint[] = [
+      new EventPoint(0, 0),
+      new EventPoint(Math.max(0, end - start), 0),
     ],
   ) {
-    this.points = points.map((point: AutomationPoint): AutomationPoint =>
+    this.#points = points.map((point: EventPoint): EventPoint =>
       point.clone(),
     );
   }
 
-  public clone(): AutomationEvent {
-    return new AutomationEvent(this.start, this.end, this.points);
+  public clone(): this {
+    return new Event(this.start, this.end, this.points) as this;
+  }
+
+  public cloneWith(
+    start: number,
+    end: number,
+    points: readonly EventPoint[],
+  ): this {
+    const event: this = this.clone();
+    event.start = start;
+    event.end = end;
+    event.points = points.map((point: EventPoint): EventPoint => point.clone());
+    return event;
   }
 
   public getFinalValue(): number {
@@ -590,9 +634,9 @@ export class AutomationEvent {
     const eventTime: number = Math.max(0, Math.min(this.end - this.start, part - this.start));
     if (eventTime <= this.points[0].time) return this.points[0].value;
     for (let index: number = 1; index < this.points.length; index++) {
-      const next: AutomationPoint = this.points[index];
+      const next: EventPoint = this.points[index];
       if (eventTime <= next.time) {
-        const previous: AutomationPoint = this.points[index - 1];
+        const previous: EventPoint = this.points[index - 1];
         const duration: number = next.time - previous.time;
         if (duration <= 0) return next.value;
         const ratio: number = (eventTime - previous.time) / duration;
@@ -600,6 +644,39 @@ export class AutomationEvent {
       }
     }
     return this.getFinalValue();
+  }
+
+  public getPointAt(part: number): EventPoint {
+    const eventTime: number = Math.max(
+      0,
+      Math.min(this.end - this.start, part - this.start),
+    );
+    if (this.points.length == 0) return new EventPoint(eventTime, 0);
+    if (eventTime <= this.points[0].time) {
+      return new EventPoint(eventTime, this.points[0].value);
+    }
+    for (let index: number = 1; index < this.points.length; index++) {
+      const next: EventPoint = this.points[index];
+      if (eventTime > next.time) continue;
+      const previous: EventPoint = this.points[index - 1];
+      const duration: number = next.time - previous.time;
+      const ratio: number = duration <= 0
+        ? 1
+        : (eventTime - previous.time) / duration;
+      return new EventPoint(
+        eventTime,
+        previous.value + (next.value - previous.value) * ratio,
+      );
+    }
+    return new EventPoint(eventTime, this.getFinalValue());
+  }
+
+  public toJSON(): Object {
+    return {
+      start: this.start,
+      end: this.end,
+      points: this.points.map((point: EventPoint): Object => point.toJSON()),
+    };
   }
 }
 
@@ -701,12 +778,17 @@ export class AutomationRow {
   }
 }
 
-export class Note {
+export class Note extends Event {
   public pitches: number[];
-  public pins: NotePin[];
-  public start: number;
-  public end: number;
   public continuesLastPattern: boolean;
+
+  public get pins(): NotePin[] {
+    return this.points as NotePin[];
+  }
+
+  public set pins(pins: NotePin[]) {
+    this.points = pins;
+  }
 
   public constructor(
     pitch: number,
@@ -715,13 +797,11 @@ export class Note {
     size: number,
     fadeout: boolean = false,
   ) {
-    this.pitches = [pitch];
-    this.pins = [
+    super(start, end, [
       makeNotePin(0, 0, size),
       makeNotePin(0, end - start, fadeout ? 0 : size),
-    ];
-    this.start = start;
-    this.end = end;
+    ]);
+    this.pitches = [pitch];
     this.continuesLastPattern = false;
   }
 
@@ -752,7 +832,7 @@ export class Note {
     return mainInterval;
   }
 
-  public clone(): Note {
+  public override clone(): this {
     const newNote: Note = new Note(
       -1,
       this.start,
@@ -765,7 +845,64 @@ export class Note {
       newNote.pins.push(makeNotePin(pin.interval, pin.time, pin.size));
     }
     newNote.continuesLastPattern = this.continuesLastPattern;
-    return newNote;
+    return newNote as this;
+  }
+
+  public override cloneWith(
+    start: number,
+    end: number,
+    points: readonly EventPoint[],
+  ): this {
+    const note: this = super.cloneWith(start, end, points);
+    const firstInterval: number = note.pins[0]?.interval ?? 0;
+    if (firstInterval != 0) {
+      for (let index: number = 0; index < note.pitches.length; index++) {
+        note.pitches[index] += firstInterval;
+      }
+      for (const pin of note.pins) pin.interval -= firstInterval;
+    }
+    note.continuesLastPattern = start == 0 && this.continuesLastPattern;
+    return note;
+  }
+
+  public override getPointAt(part: number): NotePin {
+    const eventTime: number = Math.max(
+      0,
+      Math.min(this.end - this.start, part - this.start),
+    );
+    if (this.pins.length == 0) return new NotePin(0, eventTime, 0);
+    if (eventTime <= this.pins[0].time) {
+      const first: NotePin = this.pins[0];
+      return new NotePin(first.interval, eventTime, first.size);
+    }
+    for (let index: number = 1; index < this.pins.length; index++) {
+      const next: NotePin = this.pins[index];
+      if (eventTime > next.time) continue;
+      const previous: NotePin = this.pins[index - 1];
+      const duration: number = next.time - previous.time;
+      const ratio: number = duration <= 0
+        ? 1
+        : (eventTime - previous.time) / duration;
+      return new NotePin(
+        Math.round(
+          previous.interval + (next.interval - previous.interval) * ratio,
+        ),
+        eventTime,
+        Math.round(previous.size + (next.size - previous.size) * ratio),
+      );
+    }
+    const last: NotePin = this.pins[this.pins.length - 1];
+    return new NotePin(last.interval, eventTime, last.size);
+  }
+
+  public override toJSON(): Object {
+    return {
+      pitches: this.pitches.concat(),
+      pins: this.pins.map((pin: NotePin): Object => pin.toJSON()),
+      start: this.start,
+      end: this.end,
+      continuesLastPattern: this.continuesLastPattern,
+    };
   }
 
   public getEndPinIndex(part: number): number {
@@ -779,7 +916,7 @@ export class Note {
 
 export class Pattern {
   public notes: Note[] = [];
-  public automationEvents: AutomationEvent[][] = [];
+  public automationEvents: Event[][] = [];
 
   public cloneNotes(): Note[] {
     const result: Note[] = [];
@@ -799,10 +936,10 @@ export class Pattern {
       this.automationEvents.push([]);
   }
 
-  public cloneAutomationEvents(): AutomationEvent[][] {
+  public cloneAutomationEvents(): Event[][] {
     return this.automationEvents.map(
-      (events: AutomationEvent[]): AutomationEvent[] =>
-        events.map((event: AutomationEvent): AutomationEvent => event.clone()),
+      (events: Event[]): Event[] =>
+        events.map((event: Event): Event => event.clone()),
     );
   }
 
@@ -821,14 +958,14 @@ export class Pattern {
   public hasContent(kind?: ChannelKind): boolean {
     if (kind == ChannelKind.automation)
       return this.automationEvents.some(
-        (events: AutomationEvent[]): boolean => events.length > 0,
+        (events: Event[]): boolean => events.length > 0,
       );
     if (kind == ChannelKind.pitch || kind == ChannelKind.noise)
       return this.notes.length > 0;
     return (
       this.notes.length > 0 ||
       this.automationEvents.some(
-        (events: AutomationEvent[]): boolean => events.length > 0,
+        (events: Event[]): boolean => events.length > 0,
       )
     );
   }
@@ -864,18 +1001,18 @@ export class Pattern {
     if (this.automationEvents.length != pattern.automationEvents.length)
       return false;
     for (let rowIndex: number = 0; rowIndex < this.automationEvents.length; rowIndex++) {
-      const leftEvents: AutomationEvent[] = this.automationEvents[rowIndex];
-      const rightEvents: AutomationEvent[] = pattern.automationEvents[rowIndex];
+      const leftEvents: Event[] = this.automationEvents[rowIndex];
+      const rightEvents: Event[] = pattern.automationEvents[rowIndex];
       if (leftEvents.length != rightEvents.length) return false;
       for (let eventIndex: number = 0; eventIndex < leftEvents.length; eventIndex++) {
-        const left: AutomationEvent = leftEvents[eventIndex];
-        const right: AutomationEvent = rightEvents[eventIndex];
+        const left: Event = leftEvents[eventIndex];
+        const right: Event = rightEvents[eventIndex];
         if (
           left.start != right.start ||
           left.end != right.end ||
           left.points.length != right.points.length ||
           left.points.some(
-            (point: AutomationPoint, index: number): boolean =>
+            (point: EventPoint, index: number): boolean =>
               point.time != right.points[index].time ||
               point.value != right.points[index].value,
           )
@@ -888,11 +1025,11 @@ export class Pattern {
   public toAutomationBinaryObject(): Object {
     return {
       rows: this.automationEvents.map(
-        (events: AutomationEvent[]): Object[] =>
-          events.map((event: AutomationEvent): Object => ({
+        (events: Event[]): Object[] =>
+          events.map((event: Event): Object => ({
             start: event.start,
             end: event.end,
-            points: event.points.map((point: AutomationPoint): Object => ({
+            points: event.points.map((point: EventPoint): Object => ({
               time: point.time,
               value: point.value,
             })),
@@ -1044,7 +1181,7 @@ export class Pattern {
         !Array.isArray(eventObjects) ||
         eventObjects.length > Config.automationEventsPerRowMax
       ) throw new Error("Invalid .goop automation event count.");
-      const events: AutomationEvent[] = [];
+      const events: Event[] = [];
       let previousEnd: number = 0;
       const domain: AutomationValueDomain | null = rows[rowIndex].getValueDomain();
       for (const eventObject of eventObjects) {
@@ -1064,7 +1201,7 @@ export class Pattern {
           eventObject.points.length < 1 ||
           eventObject.points.length > Config.automationPointsPerEventMax
         ) throw new Error("Invalid .goop automation event.");
-        const points: AutomationPoint[] = [];
+        const points: EventPoint[] = [];
         const duration: number = eventObject.end - eventObject.start;
         let previousTime: number = -1;
         for (const pointObject of eventObject.points) {
@@ -1084,10 +1221,10 @@ export class Pattern {
             (domain != null &&
               (pointObject.value < domain.min || pointObject.value > domain.max))
           ) throw new Error("Invalid .goop automation point.");
-          points.push(new AutomationPoint(pointObject.time, pointObject.value));
+          points.push(new EventPoint(pointObject.time, pointObject.value));
           previousTime = pointObject.time;
         }
-        events.push(new AutomationEvent(eventObject.start, eventObject.end, points));
+        events.push(new Event(eventObject.start, eventObject.end, points));
         previousEnd = eventObject.end;
       }
       this.automationEvents.push(events);
@@ -3932,12 +4069,12 @@ export class Song {
       const patterns: unknown[] = channel.patterns.map(
         (pattern: Pattern): unknown[] =>
           pattern.automationEvents.map(
-            (events: AutomationEvent[]): unknown[] =>
-              events.map((event: AutomationEvent): unknown[] => [
+            (events: Event[]): unknown[] =>
+              events.map((event: Event): unknown[] => [
                 event.start,
                 event.end,
                 event.points.flatMap(
-                  (point: AutomationPoint): number[] => [point.time, point.value],
+                  (point: EventPoint): number[] => [point.time, point.value],
                 ),
               ]),
           ),
@@ -6612,7 +6749,7 @@ export class AutomationRuntime {
     rowIndex: number,
     part: number,
   ): { found: boolean; value: number } {
-    const events: AutomationEvent[] | undefined =
+    const events: Event[] | undefined =
       pattern?.automationEvents[rowIndex];
     if (events == undefined) return { found: false, value: 0 };
     let found: boolean = false;
@@ -6642,7 +6779,7 @@ export class AutomationRuntime {
     );
     if (current.found) return Number.isFinite(current.value) ? current.value : null;
     for (let previousBar: number = bar - 1; previousBar >= 0; previousBar--) {
-      const events: AutomationEvent[] | undefined =
+      const events: Event[] | undefined =
         song.getPattern(channelIndex, previousBar)?.automationEvents[rowIndex];
       if (events != undefined && events.length > 0) {
         const value: number = events[events.length - 1].getFinalValue();
