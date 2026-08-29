@@ -343,6 +343,19 @@ export class AutomationEditor {
     return target instanceof Element ? target.closest<HTMLElement>(".automation-lane") : null;
   }
 
+  private _getLiveTarget(event: MouseEvent): Element | null {
+    // Pointer-down rendering replaces the lane, so the browser retargets the
+    // resulting double-click to the editor container.
+    const eventTarget: EventTarget | null = event.target;
+    if (eventTarget instanceof Element && this._getLane(eventTarget) != null)
+      return eventTarget;
+    const target: Element | null = document.elementFromPoint(
+      event.clientX,
+      event.clientY,
+    );
+    return target != null && this.container.contains(target) ? target : null;
+  }
+
   private _partAt(clientX: number, lane: HTMLElement): number {
     const rect: DOMRect = lane.getBoundingClientRect();
     return Math.max(0, Math.min(this._partsPerBar(), ((clientX - rect.left) / rect.width) * this._partsPerBar()));
@@ -373,7 +386,8 @@ export class AutomationEditor {
 
   private _onDoubleClick = (event: MouseEvent): void => {
     if (!this._interactive) return;
-    const lane: HTMLElement | null = this._getLane(event.target);
+    const target: Element | null = this._getLiveTarget(event);
+    const lane: HTMLElement | null = this._getLane(target);
     if (lane == null) return;
     const rowIndex: number = Number(lane.dataset["row"]);
     const group: ChangeGroup = new ChangeGroup();
@@ -384,7 +398,7 @@ export class AutomationEditor {
       this._doc.song.channels[this._doc.channel].automationRows[rowIndex];
     const domain: AutomationValueDomain | null = row.getValueDomain();
     const eventElement: HTMLElement | null =
-      event.target instanceof Element ? event.target.closest<HTMLElement>(".automation-event") : null;
+      target?.closest<HTMLElement>(".automation-event") ?? null;
     if (eventElement != null) {
       const eventIndex: number = Number(eventElement.dataset["event"]);
       const oldEvents: AutomationEvent[] = pattern.automationEvents[rowIndex];
