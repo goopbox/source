@@ -2375,6 +2375,8 @@ export class SongEditor {
     for (const editor of editors) {
       editor.container.style.width = `${editorWidth}px`;
       editor.container.style.flexShrink = "0";
+    }
+    for (const editor of editors) {
       editor.render();
     }
 
