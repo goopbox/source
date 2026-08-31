@@ -193,8 +193,18 @@ async function loadSongHistory() {
   return { ...module, cleanup: () => rm(directory, { recursive: true }) };
 }
 
-function makeLargeSong(Song, Pattern, Note, Config) {
+function makeLargeSong(Song, Pattern, Note, Config, ChannelKind) {
   const song = new Song();
+  song.channels.length = song.pitchChannelCount + song.noiseChannelCount;
+  song.automationChannelCount = 0;
+  while (song.pitchChannelCount < 3) {
+    song.channels.splice(
+      song.pitchChannelCount,
+      0,
+      song.createChannel(ChannelKind.pitch),
+    );
+    song.pitchChannelCount++;
+  }
   const patternCount = 48;
   const noteCount = 96;
   song.patternsPerChannel = patternCount;
@@ -381,6 +391,13 @@ test("undo history is durable, contiguous, exact, and crash resistant", async (c
     () => {
       const browser = new FakeBrowser();
       const doc = new SongDocument();
+      new ChangeChannelCount(
+        doc,
+        doc.song.pitchChannelCount,
+        doc.song.noiseChannelCount,
+        0,
+      );
+      doc.updateCurrentHistoryEntry();
       const group = new ChangeGroup();
       group.append(
         new ChangeChannelCount(
@@ -446,7 +463,6 @@ test("undo history is durable, contiguous, exact, and crash resistant", async (c
       ]) {
         const browser = new FakeBrowser();
         const doc = new SongDocument();
-        recordChange(browser, doc, new ChangeChannelCount(doc, 1, 1, 1));
 
         const channelIndex =
           kind == ChannelKind.pitch
@@ -485,7 +501,13 @@ test("undo history is durable, contiguous, exact, and crash resistant", async (c
   await context.test(
     "large histories survive undo, redo, reload, and branching",
     () => {
-      const largeSong = makeLargeSong(Song, Pattern, Note, Config);
+      const largeSong = makeLargeSong(
+        Song,
+        Pattern,
+        Note,
+        Config,
+        ChannelKind,
+      );
       const serializedSong = largeSong.toBinary();
       const sharedHash = encodeSongUrl(serializedSong);
       assert.ok(
@@ -713,6 +735,9 @@ test("undo history is durable, contiguous, exact, and crash resistant", async (c
     () => {
       const browser = new FakeBrowser();
       const doc = new SongDocument();
+      new ChangeChannelCount(doc, 3, 1, 0);
+      doc.viewedInstrument.length = doc.song.getChannelCount();
+      doc.viewedInstrument.fill(0);
 
       doc.song.channels[0].instruments.push(new Instrument(false));
       doc.viewedInstrument[0] = 1;
@@ -989,8 +1014,10 @@ test("undo history is durable, contiguous, exact, and crash resistant", async (c
       assert.ok(
         clampedDoc.viewedInstrument.every(
           (value, channel) =>
-            value >= 0 &&
-            value < clampedDoc.song.channels[channel].instruments.length,
+            clampedDoc.song.channels[channel].instruments.length == 0
+              ? value == 0
+              : value >= 0 &&
+                value < clampedDoc.song.channels[channel].instruments.length,
         ),
       );
 

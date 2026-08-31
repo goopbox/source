@@ -3401,9 +3401,9 @@ export class Song {
     this.rhythm = 1;
 
     if (andResetChannels) {
-      this.pitchChannelCount = 3;
+      this.pitchChannelCount = 1;
       this.noiseChannelCount = 1;
-      this.automationChannelCount = Config.automationChannelCountDefault;
+      this.automationChannelCount = 1;
       for (
         let channelIndex: number = 0;
         channelIndex < this.getChannelCount();
@@ -3415,7 +3415,7 @@ export class Song {
           this.channels[channelIndex] = new Channel();
         }
         const channel: Channel = this.channels[channelIndex];
-        channel.octave = isNoiseChannel ? 0 : 4 - channelIndex; // [4, 3, 2, 0]: Descending octaves with drums at zero in last channel.
+        channel.octave = kind == ChannelKind.pitch ? 4 - channelIndex : 0;
 
         for (
           let pattern: number = 0;

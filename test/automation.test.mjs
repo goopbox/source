@@ -42,10 +42,15 @@ async function loadAutomationModules() {
 }
 
 function addAutomationChannel(module, song, rowCount = 1) {
-  const channel = song.createChannel(module.ChannelKind.automation);
-  song.channels.push(channel);
-  song.automationChannelCount++;
-  song.setAutomationRowCount(song.channels.length - 1, rowCount);
+  let channel;
+  if (song.automationChannelCount == 0) {
+    channel = song.createChannel(module.ChannelKind.automation);
+    song.channels.push(channel);
+    song.automationChannelCount++;
+  } else {
+    channel = song.channels.at(-1);
+  }
+  song.setAutomationRowCount(song.channels.indexOf(channel), rowCount);
   return channel;
 }
 
@@ -88,10 +93,31 @@ function makeChangeDocument(song, channel = 0) {
   };
 }
 
+test("new songs default to one channel of each kind", async (context) => {
+  const module = await loadAutomationModules();
+  context.after(module.cleanup);
+  const song = new module.Song();
+
+  assert.equal(song.pitchChannelCount, 1);
+  assert.equal(song.noiseChannelCount, 1);
+  assert.equal(song.automationChannelCount, 1);
+  assert.deepEqual(
+    song.channels.map((_, channelIndex) => song.getChannelKind(channelIndex)),
+    [
+      module.ChannelKind.pitch,
+      module.ChannelKind.noise,
+      module.ChannelKind.automation,
+    ],
+  );
+});
+
 test("old songs default to zero Automation channels", async (context) => {
   const module = await loadAutomationModules();
   context.after(module.cleanup);
   const oldSong = new module.Song();
+  oldSong.channels.length =
+    oldSong.pitchChannelCount + oldSong.noiseChannelCount;
+  oldSong.automationChannelCount = 0;
   const oldBinary = oldSong.toBinary();
   assert.equal(module.decodeSongBinary(oldBinary)[0], 1);
   const restored = new module.Song(oldBinary);

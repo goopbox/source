@@ -156,25 +156,27 @@ test("song binary rejects the old compact song body", async (context) => {
     object.pitchChannelCount,
     object.noiseChannelCount,
     object.assets,
-    object.channels.map((channel) => [
-      channel.octave,
-      channel.instruments.map((instrument) => [
-        instrument.type,
-        instrument.preset,
-        instrument.effects,
-        0,
-        0,
-      ]),
-      channel.patterns.map((pattern) =>
-        pattern.notes.map((note) => [
-          note.start,
-          note.continuesLastPattern,
-          note.pitches,
-          note.pins.flatMap((pin) => [pin.interval, pin.time, pin.size]),
+    object.channels
+      .slice(0, object.pitchChannelCount + object.noiseChannelCount)
+      .map((channel) => [
+        channel.octave,
+        channel.instruments.map((instrument) => [
+          instrument.type,
+          instrument.preset,
+          instrument.effects,
+          0,
+          0,
         ]),
-      ),
-      channel.bars,
-    ]),
+        channel.patterns.map((pattern) =>
+          pattern.notes.map((note) => [
+            note.start,
+            note.continuesLastPattern,
+            note.pitches,
+            note.pins.flatMap((pin) => [pin.interval, pin.time, pin.size]),
+          ]),
+        ),
+        channel.bars,
+      ]),
   ];
   assert.throws(
     () => new Song(encodeSongBinary(compact)),
@@ -257,7 +259,7 @@ test("compact song binary resolves SoundFont asset references through the asset 
   songObject.channels[0].instruments[0].soundFontId = `asset:${source}`;
   const song = new Song(encodeSongBinary(songObject));
   const compact = decodeSongBinary(song.toBinary());
-  assert.equal(compact[0], 1);
+  assert.equal(compact[0], 2);
   const restored = new Song(song.toBinary());
   assert.equal(
     restored.channels[0].instruments[0].soundFontId,
