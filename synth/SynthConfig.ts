@@ -123,22 +123,34 @@ export const enum EnvelopeComputeIndex {
   length,
 }
 
-/*
 export const enum InstrumentAutomationIndex {
-	mixVolume,
-	eqFilterAllFreqs,
-	eqFilterFreq0, eqFilterFreq1, eqFilterFreq2, eqFilterFreq3, eqFilterFreq4, eqFilterFreq5, eqFilterFreq6, eqFilterFreq7,
-	eqFilterGain0, eqFilterGain1, eqFilterGain2, eqFilterGain3, eqFilterGain4, eqFilterGain5, eqFilterGain6, eqFilterGain7,
-	distortion,
-	bitcrusherQuantization,
-	bitcrusherFrequency,
-	chorus,
-	echoSustain,
-	//echoDelay, // Wait until tick settings can be computed once for multiple run lengths.
-	reverb,
-	length,
+  mixVolume,
+  pan,
+  eqFilterFreq0,
+  eqFilterFreq1,
+  eqFilterFreq2,
+  eqFilterFreq3,
+  eqFilterFreq4,
+  eqFilterFreq5,
+  eqFilterFreq6,
+  eqFilterFreq7,
+  eqFilterGain0,
+  eqFilterGain1,
+  eqFilterGain2,
+  eqFilterGain3,
+  eqFilterGain4,
+  eqFilterGain5,
+  eqFilterGain6,
+  eqFilterGain7,
+  distortion,
+  bitcrusherQuantization,
+  bitcrusherFrequency,
+  chorus,
+  echoSustain,
+  echoDelay,
+  reverb,
+  length,
 }
-*/
 
 export interface NamedOption {
   readonly index: number;
@@ -295,9 +307,12 @@ export interface Envelope extends NamedOption {
   readonly b: number;
 }
 
-export interface AutomationTarget extends NamedOption {
+export interface ModulationTarget extends NamedOption {
   readonly computeIndex:
-    EnvelopeComputeIndex /*| InstrumentAutomationIndex*/ | null;
+    | EnvelopeComputeIndex
+    | InstrumentAutomationIndex
+    | null;
+  readonly perNote?: boolean;
   readonly displayName: string;
   //readonly perNote: boolean; // Whether to compute envelopes on a per-note basis.
   readonly interleave: boolean; // Whether to interleave this target with the next one in the menu (e.g. filter frequency and gain).
@@ -307,8 +322,8 @@ export interface AutomationTarget extends NamedOption {
   readonly effect: EffectType | null;
   readonly compatibleInstruments: InstrumentType[] | null;
   /** Stable runtime binding shared by envelopes and Automation channels. */
-  readonly property?: AutomationProperty;
-  readonly scope?: AutomationTargetScope;
+  readonly property?: ModulationProperty;
+  readonly scope?: ModulationTargetScope;
   readonly supportsEnvelope?: boolean;
   readonly supportsAutomation?: boolean;
   readonly valueMin?: number;
@@ -316,9 +331,9 @@ export interface AutomationTarget extends NamedOption {
   readonly integer?: boolean;
 }
 
-export type AutomationTargetScope = "song" | "instrument";
+export type ModulationTargetScope = "song" | "instrument";
 
-export type AutomationProperty =
+export type ModulationProperty =
   | "tempo"
   | "mixVolume"
   | "pan"
@@ -358,8 +373,8 @@ export interface AutomationInstrumentLike {
   readonly eqFilter: { readonly controlPointCount: number };
 }
 
-export interface AutomationTargetChoice {
-  readonly target: AutomationTarget;
+export interface ModulationTargetChoice {
+  readonly target: ModulationTarget;
   readonly index: number;
   readonly displayName: string;
 }
@@ -1526,7 +1541,7 @@ export class Config {
 
   public static readonly maxEnvelopeCount: number = 12;
   public static readonly defaultAutomationRange: number = 13;
-  public static readonly automationTargets: DictionaryArray<AutomationTarget> =
+  public static readonly modulationTargets: DictionaryArray<ModulationTarget> =
     toNameMap([
       {
         name: "none",
@@ -1557,6 +1572,10 @@ export class Config {
         /*range: Config.pulseWidthRange,         */ maxCount: 1,
         effect: null,
         compatibleInstruments: [InstrumentType.pwm, InstrumentType.supersaw],
+        property: "pulseWidth",
+        supportsAutomation: true,
+        valueMin: 0,
+        valueMax: Config.pulseWidthRange - 1,
       },
       {
         name: "stringSustain",
@@ -1567,6 +1586,10 @@ export class Config {
         /*range: Config.stringSustainRange,      */ maxCount: 1,
         effect: null,
         compatibleInstruments: [InstrumentType.pickedString],
+        property: "stringSustain",
+        supportsAutomation: true,
+        valueMin: 0,
+        valueMax: Config.stringSustainRange - 1,
       },
       {
         name: "unison",
@@ -1588,6 +1611,10 @@ export class Config {
           Config.operatorCount,
         effect: null,
         compatibleInstruments: [InstrumentType.fm],
+        property: "operatorFrequency",
+        supportsAutomation: true,
+        valueMin: 0,
+        valueMax: Config.operatorFrequencyMax,
       },
       {
         name: "operatorAmplitude",
@@ -1599,6 +1626,11 @@ export class Config {
           Config.operatorCount,
         effect: null,
         compatibleInstruments: [InstrumentType.fm],
+        property: "operatorAmplitude",
+        supportsAutomation: true,
+        valueMin: 0,
+        valueMax: Config.operatorAmplitudeMax,
+        integer: true,
       },
       {
         name: "feedbackAmplitude",
@@ -1609,6 +1641,11 @@ export class Config {
         /*range: Config.operatorAmplitudeMax + 1,*/ maxCount: 1,
         effect: null,
         compatibleInstruments: [InstrumentType.fm],
+        property: "feedbackAmplitude",
+        supportsAutomation: true,
+        valueMin: 0,
+        valueMax: Config.operatorAmplitudeMax,
+        integer: true,
       },
       {
         name: "pitchShift",
@@ -1619,6 +1656,10 @@ export class Config {
         /*range: Config.pitchShiftRange,         */ maxCount: 1,
         effect: EffectType.pitchShift,
         compatibleInstruments: null,
+        property: "pitchShift",
+        supportsAutomation: true,
+        valueMin: 0,
+        valueMax: Config.pitchShiftRange - 1,
       },
       {
         name: "detune",
@@ -1629,6 +1670,10 @@ export class Config {
         /*range: Config.detuneMax + 1,           */ maxCount: 1,
         effect: EffectType.detune,
         compatibleInstruments: null,
+        property: "detune",
+        supportsAutomation: true,
+        valueMin: 0,
+        valueMax: Config.detuneMax,
       },
       {
         name: "vibratoDepth",
@@ -1659,11 +1704,14 @@ export class Config {
         /*range: Config.filterFreqRange, */ maxCount: Config.filterMaxPoints,
         effect: EffectType.noteFilter,
         compatibleInstruments: null,
+        property: "noteFilterFrequency",
+        supportsAutomation: true,
+        valueMin: 0,
+        valueMax: Config.filterFreqRange - 1,
       },
-      // Controlling filter gain is less obvious and intuitive than controlling filter freq, so to avoid confusion I've disabled it for envelopes.
       {
         name: "noteFilterGain",
-        computeIndex: null,
+        computeIndex: EnvelopeComputeIndex.noteFilterGain0,
         displayName: "n. filter # vol",
         /*perNote:  true,*/ interleave: false,
         isFilter: true,
@@ -1671,6 +1719,10 @@ export class Config {
           Config.filterMaxPoints,
         effect: EffectType.noteFilter,
         compatibleInstruments: null,
+        property: "noteFilterGain",
+        supportsAutomation: true,
+        valueMin: 0,
+        valueMax: Config.filterGainRange - 1,
       },
       {
         name: "supersawDynamism",
@@ -1681,6 +1733,10 @@ export class Config {
         /*range: Config.supersawDynamismMax + 1, */ maxCount: 1,
         effect: null,
         compatibleInstruments: [InstrumentType.supersaw],
+        property: "supersawDynamism",
+        supportsAutomation: true,
+        valueMin: 0,
+        valueMax: Config.supersawDynamismMax,
       },
       {
         name: "supersawSpread",
@@ -1691,6 +1747,10 @@ export class Config {
         /*range: Config.supersawSpreadMax + 1,   */ maxCount: 1,
         effect: null,
         compatibleInstruments: [InstrumentType.supersaw],
+        property: "supersawSpread",
+        supportsAutomation: true,
+        valueMin: 0,
+        valueMax: Config.supersawSpreadMax,
       },
       {
         name: "supersawShape",
@@ -1701,28 +1761,210 @@ export class Config {
         /*range: Config.supersawShapeMax + 1,    */ maxCount: 1,
         effect: null,
         compatibleInstruments: [InstrumentType.supersaw],
+        property: "supersawShape",
+        supportsAutomation: true,
+        valueMin: 0,
+        valueMax: Config.supersawShapeMax,
       },
-      { name: "mixVolume", computeIndex: null, displayName: "mix volume", interleave: false, isFilter: false, maxCount: 1, effect: null, compatibleInstruments: null, property: "mixVolume", scope: "instrument", supportsEnvelope: false, supportsAutomation: true, valueMin: 0, valueMax: Config.volumeRange - 1, integer: false },
-      { name: "pan", computeIndex: null, displayName: "pan", interleave: false, isFilter: false, maxCount: 1, effect: null, compatibleInstruments: null, property: "pan", scope: "instrument", supportsEnvelope: false, supportsAutomation: true, valueMin: 0, valueMax: Config.panMax, integer: false },
-      { name: "eqFilterFreq", computeIndex: null, displayName: "eq filter # freq", interleave: true, isFilter: true, maxCount: Config.filterMaxPoints, effect: EffectType.eqFilter, compatibleInstruments: null, property: "eqFilterFrequency", scope: "instrument", supportsEnvelope: false, supportsAutomation: true, valueMin: 0, valueMax: Config.filterFreqRange - 1, integer: false },
-      { name: "eqFilterGain", computeIndex: null, displayName: "eq filter # gain", interleave: false, isFilter: true, maxCount: Config.filterMaxPoints, effect: EffectType.eqFilter, compatibleInstruments: null, property: "eqFilterGain", scope: "instrument", supportsEnvelope: false, supportsAutomation: true, valueMin: 0, valueMax: Config.filterGainRange - 1, integer: false },
-      { name: "distortion", computeIndex: null, displayName: "distortion", interleave: false, isFilter: false, maxCount: 1, effect: EffectType.distortion, compatibleInstruments: null, property: "distortion", scope: "instrument", supportsEnvelope: false, supportsAutomation: true, valueMin: 0, valueMax: Config.distortionRange - 1, integer: false },
-      { name: "bitcrusherQuantization", computeIndex: null, displayName: "bit crush", interleave: false, isFilter: false, maxCount: 1, effect: EffectType.bitcrusher, compatibleInstruments: null, property: "bitcrusherQuantization", scope: "instrument", supportsEnvelope: false, supportsAutomation: true, valueMin: 0, valueMax: Config.bitcrusherQuantizationRange - 1, integer: false },
-      { name: "bitcrusherFrequency", computeIndex: null, displayName: "frequency crush", interleave: false, isFilter: false, maxCount: 1, effect: EffectType.bitcrusher, compatibleInstruments: null, property: "bitcrusherFrequency", scope: "instrument", supportsEnvelope: false, supportsAutomation: true, valueMin: 0, valueMax: Config.bitcrusherFreqRange - 1, integer: false },
-      { name: "chorus", computeIndex: null, displayName: "chorus", interleave: false, isFilter: false, maxCount: 1, effect: EffectType.chorus, compatibleInstruments: null, property: "chorus", scope: "instrument", supportsEnvelope: false, supportsAutomation: true, valueMin: 0, valueMax: Config.chorusRange - 1, integer: false },
-      { name: "echoSustain", computeIndex: null, displayName: "echo amount", interleave: false, isFilter: false, maxCount: 1, effect: EffectType.echo, compatibleInstruments: null, property: "echoSustain", scope: "instrument", supportsEnvelope: false, supportsAutomation: true, valueMin: 0, valueMax: (Config.echoSustainRange - 1) * 2, integer: false },
-      { name: "echoDelay", computeIndex: null, displayName: "echo delay", interleave: false, isFilter: false, maxCount: 1, effect: EffectType.echo, compatibleInstruments: null, property: "echoDelay", scope: "instrument", supportsEnvelope: false, supportsAutomation: true, valueMin: 0, valueMax: Config.echoDelayRange - 1, integer: false },
-      { name: "reverb", computeIndex: null, displayName: "reverb", interleave: false, isFilter: false, maxCount: 1, effect: EffectType.reverb, compatibleInstruments: null, property: "reverb", scope: "instrument", supportsEnvelope: false, supportsAutomation: true, valueMin: 0, valueMax: Config.reverbRange - 1, integer: false },
-      { name: "vibrato", computeIndex: null, displayName: "vibrato", interleave: false, isFilter: false, maxCount: 1, effect: EffectType.vibrato, compatibleInstruments: null, property: "vibrato", scope: "instrument", supportsEnvelope: false, supportsAutomation: true, valueMin: 0, valueMax: Config.vibratos.length - 1, integer: true },
-      { name: "tempo", computeIndex: null, displayName: "Tempo", interleave: false, isFilter: false, maxCount: 1, effect: null, compatibleInstruments: null, property: "tempo", scope: "song", supportsEnvelope: false, supportsAutomation: true, valueMin: Config.tempoMin, valueMax: Config.tempoMax, integer: false },
+      {
+        name: "mixVolume",
+        computeIndex: InstrumentAutomationIndex.mixVolume,
+        perNote: false,
+        displayName: "mix volume",
+        interleave: false,
+        isFilter: false,
+        maxCount: 1,
+        effect: null,
+        compatibleInstruments: null,
+        property: "mixVolume",
+        supportsAutomation: true,
+        valueMin: 0,
+        valueMax: Config.volumeRange - 1,
+      },
+      {
+        name: "pan",
+        computeIndex: InstrumentAutomationIndex.pan,
+        perNote: false,
+        displayName: "pan",
+        interleave: false,
+        isFilter: false,
+        maxCount: 1,
+        effect: null,
+        compatibleInstruments: null,
+        property: "pan",
+        supportsAutomation: true,
+        valueMin: 0,
+        valueMax: Config.panMax,
+      },
+      {
+        name: "eqFilterFreq",
+        computeIndex: InstrumentAutomationIndex.eqFilterFreq0,
+        perNote: false,
+        displayName: "eq filter # freq",
+        interleave: true,
+        isFilter: true,
+        maxCount: Config.filterMaxPoints,
+        effect: EffectType.eqFilter,
+        compatibleInstruments: null,
+        property: "eqFilterFrequency",
+        supportsAutomation: true,
+        valueMin: 0,
+        valueMax: Config.filterFreqRange - 1,
+      },
+      {
+        name: "eqFilterGain",
+        computeIndex: InstrumentAutomationIndex.eqFilterGain0,
+        perNote: false,
+        displayName: "eq filter # gain",
+        interleave: false,
+        isFilter: true,
+        maxCount: Config.filterMaxPoints,
+        effect: EffectType.eqFilter,
+        compatibleInstruments: null,
+        property: "eqFilterGain",
+        supportsAutomation: true,
+        valueMin: 0,
+        valueMax: Config.filterGainRange - 1,
+      },
+      {
+        name: "distortion",
+        computeIndex: InstrumentAutomationIndex.distortion,
+        perNote: false,
+        displayName: "distortion",
+        interleave: false,
+        isFilter: false,
+        maxCount: 1,
+        effect: EffectType.distortion,
+        compatibleInstruments: null,
+        property: "distortion",
+        supportsAutomation: true,
+        valueMin: 0,
+        valueMax: Config.distortionRange - 1,
+      },
+      {
+        name: "bitcrusherQuantization",
+        computeIndex: InstrumentAutomationIndex.bitcrusherQuantization,
+        perNote: false,
+        displayName: "bit crush",
+        interleave: false,
+        isFilter: false,
+        maxCount: 1,
+        effect: EffectType.bitcrusher,
+        compatibleInstruments: null,
+        property: "bitcrusherQuantization",
+        supportsAutomation: true,
+        valueMin: 0,
+        valueMax: Config.bitcrusherQuantizationRange - 1,
+      },
+      {
+        name: "bitcrusherFrequency",
+        computeIndex: InstrumentAutomationIndex.bitcrusherFrequency,
+        perNote: false,
+        displayName: "frequency crush",
+        interleave: false,
+        isFilter: false,
+        maxCount: 1,
+        effect: EffectType.bitcrusher,
+        compatibleInstruments: null,
+        property: "bitcrusherFrequency",
+        supportsAutomation: true,
+        valueMin: 0,
+        valueMax: Config.bitcrusherFreqRange - 1,
+      },
+      {
+        name: "chorus",
+        computeIndex: InstrumentAutomationIndex.chorus,
+        perNote: false,
+        displayName: "chorus",
+        interleave: false,
+        isFilter: false,
+        maxCount: 1,
+        effect: EffectType.chorus,
+        compatibleInstruments: null,
+        property: "chorus",
+        supportsAutomation: true,
+        valueMin: 0,
+        valueMax: Config.chorusRange - 1,
+      },
+      {
+        name: "echoSustain",
+        computeIndex: InstrumentAutomationIndex.echoSustain,
+        perNote: false,
+        displayName: "echo amount",
+        interleave: false,
+        isFilter: false,
+        maxCount: 1,
+        effect: EffectType.echo,
+        compatibleInstruments: null,
+        property: "echoSustain",
+        supportsAutomation: true,
+        valueMin: 0,
+        valueMax: (Config.echoSustainRange - 1) * 2,
+      },
+      {
+        name: "echoDelay",
+        computeIndex: InstrumentAutomationIndex.echoDelay,
+        perNote: false,
+        displayName: "echo delay",
+        interleave: false,
+        isFilter: false,
+        maxCount: 1,
+        effect: EffectType.echo,
+        compatibleInstruments: null,
+        property: "echoDelay",
+        supportsAutomation: true,
+        valueMin: 0,
+        valueMax: Config.echoDelayRange - 1,
+      },
+      {
+        name: "reverb",
+        computeIndex: InstrumentAutomationIndex.reverb,
+        perNote: false,
+        displayName: "reverb",
+        interleave: false,
+        isFilter: false,
+        maxCount: 1,
+        effect: EffectType.reverb,
+        compatibleInstruments: null,
+        property: "reverb",
+        supportsAutomation: true,
+        valueMin: 0,
+        valueMax: Config.reverbRange - 1,
+      },
+      {
+        name: "vibrato",
+        computeIndex: EnvelopeComputeIndex.vibratoDepth,
+        displayName: "vibrato",
+        interleave: false,
+        isFilter: false,
+        maxCount: 1,
+        effect: EffectType.vibrato,
+        compatibleInstruments: null,
+        property: "vibrato",
+        supportsAutomation: true,
+        valueMin: 0,
+        valueMax: Config.vibratos.length - 1,
+        integer: true,
+      },
+      {
+        name: "tempo",
+        computeIndex: null,
+        displayName: "Tempo",
+        interleave: false,
+        isFilter: false,
+        maxCount: 1,
+        effect: null,
+        compatibleInstruments: null,
+        property: "tempo",
+        scope: "song",
+        supportsAutomation: true,
+        valueMin: Config.tempoMin,
+        valueMax: Config.tempoMax,
+      },
     ]);
 
-  /** Backward-compatible name. Both editors use the same metadata objects. */
-  public static readonly instrumentAutomationTargets: DictionaryArray<AutomationTarget> =
-    Config.automationTargets;
-
   static {
-    for (const target of Config.automationTargets) {
+    for (const target of Config.modulationTargets) {
       Object.assign(target, {
         scope: target.scope ?? "instrument",
         supportsEnvelope:
@@ -1731,38 +1973,10 @@ export class Config {
         supportsAutomation: target.supportsAutomation ?? false,
       });
     }
-    const instrumentTarget = (
-      name: string,
-      property: AutomationProperty,
-      valueMin: number,
-      valueMax: number,
-      integer: boolean = false,
-    ): void => {
-      Object.assign(Config.automationTargets.dictionary[name], {
-        property,
-        scope: "instrument",
-        supportsAutomation: true,
-        valueMin,
-        valueMax,
-        integer,
-      });
-    };
-    instrumentTarget("pulseWidth", "pulseWidth", 0, Config.pulseWidthRange - 1);
-    instrumentTarget("stringSustain", "stringSustain", 0, Config.stringSustainRange - 1);
-    instrumentTarget("operatorFrequency", "operatorFrequency", 0, Config.operatorFrequencyMax);
-    instrumentTarget("operatorAmplitude", "operatorAmplitude", 0, Config.operatorAmplitudeMax, true);
-    instrumentTarget("feedbackAmplitude", "feedbackAmplitude", 0, Config.operatorAmplitudeMax, true);
-    instrumentTarget("pitchShift", "pitchShift", 0, Config.pitchShiftRange - 1);
-    instrumentTarget("detune", "detune", 0, Config.detuneMax);
-    instrumentTarget("noteFilterFreq", "noteFilterFrequency", 0, Config.filterFreqRange - 1);
-    instrumentTarget("noteFilterGain", "noteFilterGain", 0, Config.filterGainRange - 1);
-    instrumentTarget("supersawDynamism", "supersawDynamism", 0, Config.supersawDynamismMax);
-    instrumentTarget("supersawSpread", "supersawSpread", 0, Config.supersawSpreadMax);
-    instrumentTarget("supersawShape", "supersawShape", 0, Config.supersawShapeMax);
   }
 
   public static getAutomationValueDomain(
-    target: AutomationTarget,
+    target: ModulationTarget,
   ): AutomationValueDomain {
     const targetMin: number = target.valueMin ?? 0;
     const targetMax: number = target.valueMax ?? Config.defaultAutomationRange;
@@ -1770,7 +1984,7 @@ export class Config {
   }
 
   public static automationTargetIsValidForInstrument(
-    target: AutomationTarget,
+    target: ModulationTarget,
     instrument: AutomationInstrumentLike,
     index: number,
   ): boolean {
@@ -1792,9 +2006,9 @@ export class Config {
 
   public static getAutomationTargetsForInstrument(
     instrument: AutomationInstrumentLike,
-  ): AutomationTargetChoice[] {
-    const choices: AutomationTargetChoice[] = [];
-    for (const target of Config.automationTargets) {
+  ): ModulationTargetChoice[] {
+    const choices: ModulationTargetChoice[] = [];
+    for (const target of Config.modulationTargets) {
       if (target.scope == "song" || target.supportsAutomation !== true) continue;
       for (let index: number = 0; index < target.maxCount; index++) {
         if (!Config.automationTargetIsValidForInstrument(target, instrument, index)) continue;

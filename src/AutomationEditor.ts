@@ -255,7 +255,7 @@ export class AutomationSettings {
     const menu: HTMLSelectElement = HTML.select();
     const choices: Array<{ id: string; index: number; name: string }> = [];
     if (row.targetChannel == -1 && !row.targetChannelMissing) {
-      const tempo = Config.automationTargets.dictionary["tempo"];
+      const tempo = Config.modulationTargets.dictionary["tempo"];
       choices.push({ id: tempo.name, index: 0, name: tempo.displayName });
     } else if (!row.targetChannelMissing && !row.targetInstrumentMissing) {
       const instrument =

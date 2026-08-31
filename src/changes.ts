@@ -8,7 +8,7 @@ import {
   SustainType,
   InstrumentType,
   EffectType,
-  type AutomationTarget,
+  type ModulationTarget,
   type AutomationValueDomain,
   Config,
   effectsIncludeDistortion,
@@ -121,8 +121,8 @@ function markInvalidAutomationTargetsForCurrentInstrument(
       row.targetInstrumentMissing ||
       row.targetElementMissing
     ) return;
-    const target: AutomationTarget | undefined =
-      Config.automationTargets.dictionary[row.targetId];
+    const target: ModulationTarget | undefined =
+      Config.modulationTargets.dictionary[row.targetId];
     if (
       target == undefined ||
       !Config.automationTargetIsValidForInstrument(
@@ -867,7 +867,7 @@ export class ChangeRandomGeneratedInstrument extends Change {
         if (instrument.pitchShift != Config.pitchShiftCenter) {
           instrument.effects |= 1 << EffectType.pitchShift;
           instrument.addEnvelope(
-            Config.instrumentAutomationTargets.dictionary["pitchShift"].index,
+            Config.modulationTargets.dictionary["pitchShift"].index,
             0,
             Config.envelopes.dictionary[
               selectWeightedRandom([
@@ -911,7 +911,7 @@ export class ChangeRandomGeneratedInstrument extends Change {
           ),
         ]);
         instrument.addEnvelope(
-          Config.instrumentAutomationTargets.dictionary["noteFilterAllFreqs"]
+          Config.modulationTargets.dictionary["noteFilterAllFreqs"]
             .index,
           0,
           Config.envelopes.dictionary[
@@ -1159,7 +1159,7 @@ export class ChangeRandomGeneratedInstrument extends Change {
         if (instrument.pitchShift != Config.pitchShiftCenter) {
           instrument.effects |= 1 << EffectType.pitchShift;
           instrument.addEnvelope(
-            Config.instrumentAutomationTargets.dictionary["pitchShift"].index,
+            Config.modulationTargets.dictionary["pitchShift"].index,
             0,
             Config.envelopes.dictionary[
               selectWeightedRandom([
@@ -1238,7 +1238,7 @@ export class ChangeRandomGeneratedInstrument extends Change {
           ),
         ]);
         instrument.addEnvelope(
-          Config.instrumentAutomationTargets.dictionary["noteFilterAllFreqs"]
+          Config.modulationTargets.dictionary["noteFilterAllFreqs"]
             .index,
           0,
           Config.envelopes.dictionary[
@@ -1367,7 +1367,7 @@ export class ChangeRandomGeneratedInstrument extends Change {
 
             if (Math.random() < 0.6) {
               instrument.addEnvelope(
-                Config.instrumentAutomationTargets.dictionary["pulseWidth"]
+                Config.modulationTargets.dictionary["pulseWidth"]
                   .index,
                 0,
                 Config.envelopes.dictionary[
@@ -1521,7 +1521,7 @@ export class ChangeRandomGeneratedInstrument extends Change {
                 Math.random() < 0.4
               ) {
                 instrument.addEnvelope(
-                  Config.instrumentAutomationTargets.dictionary[
+                  Config.modulationTargets.dictionary[
                     "operatorAmplitude"
                   ].index,
                   i,
@@ -1555,7 +1555,7 @@ export class ChangeRandomGeneratedInstrument extends Change {
                 Math.random() < 0.05
               ) {
                 instrument.addEnvelope(
-                  Config.instrumentAutomationTargets.dictionary[
+                  Config.modulationTargets.dictionary[
                     "operatorFrequency"
                   ].index,
                   i,
@@ -1586,7 +1586,7 @@ export class ChangeRandomGeneratedInstrument extends Change {
               Math.random() < 0.4
             ) {
               instrument.addEnvelope(
-                Config.instrumentAutomationTargets.dictionary[
+                Config.modulationTargets.dictionary[
                   "feedbackAmplitude"
                 ].index,
                 0,
@@ -1672,7 +1672,7 @@ export class ChangeToggleEffects extends Change {
       instrument.clearInvalidEnvelopeTargets();
       const instrumentIndex: number = doc.getCurrentInstrument();
       doc.song.forEachAutomationRow((row): void => {
-        const target = Config.automationTargets.dictionary[row.targetId];
+        const target = Config.modulationTargets.dictionary[row.targetId];
         if (
           row.targetChannel == doc.channel &&
           row.targetInstrument == instrumentIndex &&
@@ -2082,7 +2082,7 @@ export class ChangeAutomationTargetChannel extends Change {
       row.targetInstrument = 0;
       row.targetChannelMissing = false;
       row.targetInstrumentMissing = instrument == undefined;
-      const target = Config.automationTargets.dictionary[row.targetId];
+      const target = Config.modulationTargets.dictionary[row.targetId];
       row.targetElementMissing =
         instrument == undefined ||
         target == undefined ||
@@ -2117,7 +2117,7 @@ export class ChangeAutomationTargetInstrument extends Change {
     row.targetInstrumentMissing = false;
     const instrument =
       doc.song.channels[row.targetChannel].instruments[instrumentIndex];
-    const currentTarget = Config.automationTargets.dictionary[row.targetId];
+    const currentTarget = Config.modulationTargets.dictionary[row.targetId];
     row.targetElementMissing =
       currentTarget == undefined ||
       !Config.automationTargetIsValidForInstrument(
@@ -2142,7 +2142,7 @@ export class ChangeAutomationTargetElement extends Change {
     const sourceDomain: AutomationValueDomain | null = row.getValueDomain();
     const compatibleTarget: boolean =
       row.targetId == targetId && row.targetIndex == targetIndex;
-    const target = Config.automationTargets.dictionary[targetId];
+    const target = Config.modulationTargets.dictionary[targetId];
     if (target == undefined || target.supportsAutomation !== true)
       throw new Error("Invalid automation target element.");
     if (row.targetChannel == -1) {
@@ -2620,16 +2620,16 @@ export class ChangeFilterAddPoint extends UndoableChange {
         // When deleting a filter control point, find all envelopes that targeted that
         // point and clear them, and all envelopes that targeted later points and
         // decrement those to keep them in sync with the new list of points.
-        const automationTarget: AutomationTarget =
-          Config.instrumentAutomationTargets[target];
+        const modulationTarget: ModulationTarget =
+          Config.modulationTargets[target];
         if (
-          automationTarget.isFilter &&
-          (automationTarget.effect == EffectType.noteFilter) == isNoteFilter
+          modulationTarget.isFilter &&
+          (modulationTarget.effect == EffectType.noteFilter) == isNoteFilter
         ) {
-          if (automationTarget.maxCount == Config.filterMaxPoints) {
+          if (modulationTarget.maxCount == Config.filterMaxPoints) {
             if (targetIndex == index) {
               target =
-                Config.instrumentAutomationTargets.dictionary["none"].index;
+                Config.modulationTargets.dictionary["none"].index;
               targetIndex = 0;
             } else if (targetIndex > index) {
               targetIndex--;
@@ -2637,7 +2637,7 @@ export class ChangeFilterAddPoint extends UndoableChange {
           } else {
             if (filterSettings.controlPointCount <= 1) {
               target =
-                Config.instrumentAutomationTargets.dictionary["none"].index;
+                Config.modulationTargets.dictionary["none"].index;
               targetIndex = 0;
             }
           }
@@ -2655,7 +2655,7 @@ export class ChangeFilterAddPoint extends UndoableChange {
         row.targetChannelMissing ||
         row.targetInstrumentMissing
       ) return;
-      const target = Config.automationTargets.dictionary[row.targetId];
+      const target = Config.modulationTargets.dictionary[row.targetId];
       const targetsThisFilter: boolean = isNoteFilter
         ? target?.property == "noteFilterFrequency" ||
           target?.property == "noteFilterGain"
@@ -5203,7 +5203,7 @@ export function applySoundFontPreset(
   }
   for (const envelope of preset.settings.envelopes) {
     const target =
-      Config.instrumentAutomationTargets.dictionary[envelope.target];
+      Config.modulationTargets.dictionary[envelope.target];
     if (!instrument.supportsEnvelopeTarget(target.index, 0)) continue;
     const speed: number =
       envelope.envelope == "tremolo"

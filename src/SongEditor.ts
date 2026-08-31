@@ -3579,7 +3579,7 @@ export class SongEditor {
       envelope.fromSettingsObject(envelopeObject);
       if (!normalized.supportsEnvelopeTarget(envelope.target, envelope.index)) {
         envelope.target =
-          Config.instrumentAutomationTargets.dictionary["none"].index;
+          Config.modulationTargets.dictionary["none"].index;
         envelope.index = 0;
       }
       normalized.addEnvelope(

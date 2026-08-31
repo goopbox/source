@@ -128,7 +128,7 @@ test("CRC-valid unsafe numeric domains and note bends are rejected without poiso
   const validSongObject = song.toBinaryObject();
   const unsafeMagnitude = Number.MAX_VALUE;
   const validEnvelope = () => ({
-    target: Config.instrumentAutomationTargets.dictionary.noteVolume.index,
+    target: Config.modulationTargets.dictionary.noteVolume.index,
     index: 0,
     envelope: Config.envelopes.dictionary.twang.index,
     speed: 5,
@@ -518,7 +518,7 @@ test("corrupt dormant indices and empty song structures are rejected atomically"
       (state) => {
         firstInstrumentState(state).envelopes = [
           {
-            target: Config.instrumentAutomationTargets.length,
+            target: Config.modulationTargets.length,
             index: 0,
             envelope: 0,
             speed: 1,
@@ -534,7 +534,7 @@ test("corrupt dormant indices and empty song structures are rejected atomically"
         firstInstrumentState(state).envelopes = [
           {
             target:
-              Config.instrumentAutomationTargets.dictionary.noteVolume.index,
+              Config.modulationTargets.dictionary.noteVolume.index,
             index: 1,
             envelope: 0,
             speed: 1,
@@ -550,7 +550,7 @@ test("corrupt dormant indices and empty song structures are rejected atomically"
         firstInstrumentState(state).envelopes = [
           {
             target:
-              Config.instrumentAutomationTargets.dictionary.noteVolume.index,
+              Config.modulationTargets.dictionary.noteVolume.index,
             index: 0,
             envelope: Config.envelopes.length,
             speed: 1,

@@ -136,7 +136,7 @@ test("envelope parameters survive raw binary serialization", async (context) => 
   const song = new Song();
   const instrument = song.channels[0].instruments[0];
   instrument.addEnvelope(
-    Config.instrumentAutomationTargets.dictionary.noteVolume.index,
+    Config.modulationTargets.dictionary.noteVolume.index,
     0,
     Config.envelopes.dictionary.twang.index,
     32.25,
@@ -148,7 +148,7 @@ test("envelope parameters survive raw binary serialization", async (context) => 
     .envelopes[0];
   assert.equal(
     restoredEnvelope.target,
-    Config.instrumentAutomationTargets.dictionary.noteVolume.index,
+    Config.modulationTargets.dictionary.noteVolume.index,
   );
   assert.equal(restoredEnvelope.index, 0);
   assert.equal(
@@ -158,6 +158,87 @@ test("envelope parameters survive raw binary serialization", async (context) => 
   assert.equal(restoredEnvelope.speed, 32.25);
   assert.equal(restoredEnvelope.a, -0.5);
   assert.equal(restoredEnvelope.b, 3.75);
+});
+
+test("instrument effect properties accept and apply envelopes", async (context) => {
+  const { synth, cleanup } = await loadSynth();
+  context.after(cleanup);
+  const { Config, Note, Song } = synth;
+  const song = new Song();
+  const instrument = song.channels[0].instruments[0];
+  const reverbTarget = Config.modulationTargets.dictionary.reverb;
+  instrument.effects |= 1 << reverbTarget.effect;
+  instrument.reverb = 4;
+  assert.equal(instrument.supportsEnvelopeTarget(reverbTarget.index, 0), true);
+  instrument.addEnvelope(
+    reverbTarget.index,
+    0,
+    Config.envelopes.dictionary.none.index,
+    1,
+    0.25,
+    0.25,
+  );
+  song.channels[0].patterns[0].notes.push(
+    new Note(24, 0, Config.partsPerBeat, Config.noteSizeMax),
+  );
+  song.channels[0].bars[0] = 1;
+
+  const restored = new Song(song.toBinary());
+  const restoredInstrument = restored.channels[0].instruments[0];
+  assert.equal(restoredInstrument.envelopes[0].target, reverbTarget.index);
+
+  const engine = new synth.Synth(restored);
+  engine.setSampleRate(8000);
+  engine.synthesize(new Float32Array(256), new Float32Array(256), 256, true);
+  const expected = Math.pow((instrument.reverb * 0.25) / Config.reverbRange, 0.667) * 0.425;
+  assert.ok(
+    Math.abs(engine.channels[0].instruments[0].reverbMult - expected) < 1e-12,
+  );
+});
+
+test("Automation instrument properties are available to envelopes", async (context) => {
+  const { synth, cleanup } = await loadSynth();
+  context.after(cleanup);
+  const instrument = new synth.Song().channels[0].instruments[0];
+  for (const targetName of [
+    "distortion",
+    "bitcrusherQuantization",
+    "bitcrusherFrequency",
+    "chorus",
+    "echoSustain",
+    "echoDelay",
+    "reverb",
+    "vibrato",
+    "eqFilterFreq",
+    "eqFilterGain",
+  ]) {
+    const target = synth.Config.modulationTargets.dictionary[targetName];
+    if (target.effect != null) instrument.effects |= 1 << target.effect;
+  }
+  if (instrument.eqFilter.controlPointCount == 0)
+    instrument.eqFilter.addPoint(0, 10, 7);
+
+  for (const targetName of [
+    "mixVolume",
+    "pan",
+    "distortion",
+    "bitcrusherQuantization",
+    "bitcrusherFrequency",
+    "chorus",
+    "echoSustain",
+    "echoDelay",
+    "reverb",
+    "vibrato",
+    "eqFilterFreq",
+    "eqFilterGain",
+  ]) {
+    const target = synth.Config.modulationTargets.dictionary[targetName];
+    assert.equal(
+      instrument.supportsEnvelopeTarget(target.index, 0),
+      true,
+      targetName,
+    );
+  }
 });
 
 test("drumset envelope parameters survive serialization", async (context) => {

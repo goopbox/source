@@ -448,7 +448,7 @@ test("keyboard, MIDI recording, and performance input ignore Automation channels
   assert.deepEqual(calls, { add: 0, remove: 0, record: 0, live: 0 });
 });
 
-test("instrument targets stay independent and Automation-only metadata is filtered", async (context) => {
+test("instrument targets stay independent and share modulation metadata", async (context) => {
   const module = await loadAutomationModules();
   context.after(module.cleanup);
   const song = new module.Song();
@@ -473,8 +473,8 @@ test("instrument targets stay independent and Automation-only metadata is filter
   const choices = module.Config.getAutomationTargetsForInstrument(base);
   assert.ok(choices.some(({ target }) => target.name == "pan"));
   assert.ok(choices.some(({ target }) => target.name == "mixVolume"));
-  assert.equal(module.Config.automationTargets.dictionary.mixVolume.supportsEnvelope, false);
-  assert.equal(base.supportsEnvelopeTarget(module.Config.automationTargets.dictionary.mixVolume.index, 0), false);
+  assert.equal(module.Config.modulationTargets.dictionary.mixVolume.supportsEnvelope, true);
+  assert.equal(base.supportsEnvelopeTarget(module.Config.modulationTargets.dictionary.mixVolume.index, 0), true);
 });
 
 test("all required instrument target families bind to effective runtime values", async (context) => {
@@ -611,7 +611,7 @@ test("cross-target numeric mapping snaps integer targets and preserves continuou
   setPatternEvents(automation, 0, 0, [
     event(module, 0, 1, [[0, 12.375], [1, 64.125]]),
   ]);
-  const mixTarget = module.Config.automationTargets.dictionary.mixVolume;
+  const mixTarget = module.Config.modulationTargets.dictionary.mixVolume;
   const mixDomain = module.Config.getAutomationValueDomain(mixTarget);
   const expected = automation.patterns[0].automationEvents[0][0].points.map(
     (point) =>

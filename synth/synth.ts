@@ -10,13 +10,14 @@ import {
   InstrumentType,
   EffectType,
   EnvelopeComputeIndex,
+  InstrumentAutomationIndex,
   type Transition,
   type Unison,
   type Chord,
   type Vibrato,
   type Envelope,
-  type AutomationTarget,
-  type AutomationProperty,
+  type ModulationTarget,
+  type ModulationProperty,
   type AutomationValueDomain,
   Config,
   getDrumWave,
@@ -695,19 +696,19 @@ export class AutomationRow {
     this.targetElementMissing = false;
   }
 
-  public getTarget(): AutomationTarget | null {
-    return Config.automationTargets.dictionary[this.targetId] ?? null;
+  public getTarget(): ModulationTarget | null {
+    return Config.modulationTargets.dictionary[this.targetId] ?? null;
   }
 
   public getValueDomain(): AutomationValueDomain | null {
-    const target: AutomationTarget | null = this.getTarget();
+    const target: ModulationTarget | null = this.getTarget();
     return target == null
       ? null
       : Config.getAutomationValueDomain(target);
   }
 
   public isTargetValid(song: Song): boolean {
-    const target: AutomationTarget | null = this.getTarget();
+    const target: ModulationTarget | null = this.getTarget();
     if (
       target == null ||
       target.supportsAutomation !== true ||
@@ -1742,13 +1743,13 @@ export class EnvelopeSettings {
 
   public toSettingsObject(): Object {
     const envelopeObject: any = {
-      target: Config.instrumentAutomationTargets[this.target].name,
+      target: Config.modulationTargets[this.target].name,
       envelope: Config.envelopes[this.envelope].name,
       speed: this.speed,
       a: this.a,
       b: this.b,
     };
-    if (Config.instrumentAutomationTargets[this.target].maxCount > 1) {
+    if (Config.modulationTargets[this.target].maxCount > 1) {
       envelopeObject["index"] = this.index;
     }
     return envelopeObject;
@@ -1757,10 +1758,10 @@ export class EnvelopeSettings {
   public fromSettingsObject(envelopeObject: any): void {
     this.reset();
 
-    let target: AutomationTarget =
-      Config.instrumentAutomationTargets.dictionary[envelopeObject["target"]];
+    let target: ModulationTarget =
+      Config.modulationTargets.dictionary[envelopeObject["target"]];
     if (target == null)
-      target = Config.instrumentAutomationTargets.dictionary["noteVolume"];
+      target = Config.modulationTargets.dictionary["noteVolume"];
     this.target = target.index;
 
     const envelopeValue: any = envelopeObject["envelope"];
@@ -1780,7 +1781,7 @@ export class EnvelopeSettings {
     if (envelopeObject["index"] != undefined) {
       this.index = clamp(
         0,
-        Config.instrumentAutomationTargets[this.target].maxCount,
+        Config.modulationTargets[this.target].maxCount,
         envelopeObject["index"] | 0,
       );
     } else {
@@ -2584,35 +2585,31 @@ export class Instrument {
   }
 
   public supportsEnvelopeTarget(target: number, index: number): boolean {
-    const automationTarget: AutomationTarget =
-      Config.instrumentAutomationTargets[target];
-    if (
-      automationTarget.computeIndex == null &&
-      automationTarget.name != "none"
-    ) {
+    const modulationTarget: ModulationTarget =
+      Config.modulationTargets[target];
+    if (modulationTarget.supportsEnvelope !== true) {
       return false;
     }
-    if (index >= automationTarget.maxCount) {
+    if (index < 0 || index >= modulationTarget.maxCount) {
       return false;
     }
     if (
-      automationTarget.compatibleInstruments != null &&
-      automationTarget.compatibleInstruments.indexOf(this.type) == -1
+      modulationTarget.compatibleInstruments != null &&
+      modulationTarget.compatibleInstruments.indexOf(this.type) == -1
     ) {
       return false;
     }
     if (
-      automationTarget.effect != null &&
-      (this.effects & (1 << automationTarget.effect)) == 0
+      modulationTarget.effect != null &&
+      (this.effects & (1 << modulationTarget.effect)) == 0
     ) {
       return false;
     }
-    if (automationTarget.isFilter) {
-      //if (automationTarget.perNote) {
-      if (index >= this.noteFilter.controlPointCount) return false;
-      //} else {
-      //	if (index >= this.eqFilter.controlPointCount)   return false;
-      //}
+    if (modulationTarget.isFilter) {
+      const filter: FilterSettings = modulationTarget.perNote !== false
+        ? this.noteFilter
+        : this.eqFilter;
+      if (index >= filter.controlPointCount) return false;
     }
     return true;
   }
@@ -2627,7 +2624,7 @@ export class Instrument {
       const index: number = this.envelopes[envelopeIndex].index;
       if (!this.supportsEnvelopeTarget(target, index)) {
         this.envelopes[envelopeIndex].target =
-          Config.instrumentAutomationTargets.dictionary["none"].index;
+          Config.modulationTargets.dictionary["none"].index;
         this.envelopes[envelopeIndex].index = 0;
       }
     }
@@ -2933,21 +2930,23 @@ export class Instrument {
       const envelope: any = candidate;
       const target: number = indexValue(
         envelope.target,
-        Config.instrumentAutomationTargets.length,
+        Config.modulationTargets.length,
       );
       const index: number = integerValue(envelope.index);
-      const automationTarget: AutomationTarget =
-        Config.instrumentAutomationTargets[target];
+      const modulationTarget: ModulationTarget =
+        Config.modulationTargets[target];
       if (
         index < 0 ||
-        index >= automationTarget.maxCount ||
-        (automationTarget.computeIndex == null &&
-          automationTarget.name != "none") ||
-        (automationTarget.compatibleInstruments != null &&
-          automationTarget.compatibleInstruments.indexOf(this.type) == -1) ||
-        (automationTarget.effect != null &&
-          (effects & (1 << automationTarget.effect)) == 0) ||
-        (automationTarget.isFilter && index >= noteFilterState.length)
+        index >= modulationTarget.maxCount ||
+        modulationTarget.supportsEnvelope !== true ||
+        (modulationTarget.compatibleInstruments != null &&
+          modulationTarget.compatibleInstruments.indexOf(this.type) == -1) ||
+        (modulationTarget.effect != null &&
+          (effects & (1 << modulationTarget.effect)) == 0) ||
+        (modulationTarget.isFilter &&
+          index >= (modulationTarget.perNote !== false
+            ? noteFilterState.length
+            : eqFilterState.length))
       ) {
         throw new Error("Invalid .goop instrument envelope target.");
       }
@@ -2955,7 +2954,7 @@ export class Instrument {
       // range than editor-authored amplitude envelopes. Filter coefficients clamp
       // the resulting frequency, whereas allowing those magnitudes for volume or
       // oscillator targets could overflow the audio pipeline.
-      const parameterLimit: number = automationTarget.isFilter
+      const parameterLimit: number = modulationTarget.isFilter
         ? Math.pow(2, 28)
         : 4;
       envelopeStates.push({
@@ -5319,9 +5318,10 @@ export class EnvelopeComputer {
   private _modifiedEnvelopeCount: number = 0;
   public lowpassCutoffDecayVolumeCompensation: number = 1.0;
 
-  constructor(/*private _perNote: boolean*/) {
-    //const length: number = this._perNote ? EnvelopeComputeIndex.length : InstrumentAutomationIndex.length;
-    const length: number = EnvelopeComputeIndex.length;
+  constructor(private readonly _perNote: boolean = true) {
+    const length: number = this._perNote
+      ? EnvelopeComputeIndex.length
+      : InstrumentAutomationIndex.length;
     for (let i: number = 0; i < length; i++) {
       this.envelopeStarts[i] = 1.0;
       this.envelopeEnds[i] = 1.0;
@@ -5455,7 +5455,7 @@ export class EnvelopeComputer {
       envelopeIndex <= instrument.envelopeCount;
       envelopeIndex++
     ) {
-      let automationTarget: AutomationTarget;
+      let modulationTarget: ModulationTarget;
       let targetIndex: number;
       let envelope: Envelope;
       let speed: number;
@@ -5464,8 +5464,8 @@ export class EnvelopeComputer {
       if (envelopeIndex == instrument.envelopeCount) {
         if (usedNoteSize /*|| !this._perNote*/) break;
         // Special case: if no other envelopes used note size, default to applying it to note volume.
-        automationTarget =
-          Config.instrumentAutomationTargets.dictionary["noteVolume"];
+        modulationTarget =
+          Config.modulationTargets.dictionary["noteVolume"];
         targetIndex = 0;
         envelope = Config.envelopes.dictionary["velocity"];
         speed = envelope.speed;
@@ -5474,8 +5474,8 @@ export class EnvelopeComputer {
       } else {
         let envelopeSettings: EnvelopeSettings =
           instrument.envelopes[envelopeIndex];
-        automationTarget =
-          Config.instrumentAutomationTargets[envelopeSettings.target];
+        modulationTarget =
+          Config.modulationTargets[envelopeSettings.target];
         targetIndex = envelopeSettings.index;
         envelope = Config.envelopes[envelopeSettings.envelope];
         speed = envelopeSettings.speed;
@@ -5484,11 +5484,11 @@ export class EnvelopeComputer {
         if (envelope.type == EnvelopeType.noteSize) usedNoteSize = true;
       }
       if (
-        /*automationTarget.perNote == this._perNote &&*/ automationTarget.computeIndex !=
-        null
+        (modulationTarget.perNote !== false) == this._perNote &&
+        modulationTarget.computeIndex != null
       ) {
         const computeIndex: number =
-          automationTarget.computeIndex + targetIndex;
+          modulationTarget.computeIndex + targetIndex;
         let envelopeStart: number = EnvelopeComputer.computeEnvelope(
           envelope,
           noteSecondsStart,
@@ -5562,9 +5562,9 @@ export class EnvelopeComputer {
         this._modifiedEnvelopeIndices[this._modifiedEnvelopeCount++] =
           computeIndex;
 
-        if (automationTarget.isFilter) {
+        if (modulationTarget.isFilter) {
           const filterSettings: FilterSettings =
-            /*this._perNote ?*/ instrument.noteFilter; /*: instrument.eqFilter*/
+            this._perNote ? instrument.noteFilter : instrument.eqFilter;
           if (
             filterSettings.controlPointCount > targetIndex &&
             filterSettings.controlPoints[targetIndex].type == FilterType.lowPass
@@ -5926,7 +5926,7 @@ class InstrumentState {
   public reverbShelfPrevInput2: number = 0.0;
   public reverbShelfPrevInput3: number = 0.0;
 
-  //public readonly envelopeComputer: EnvelopeComputer = new EnvelopeComputer(false);
+  public readonly envelopeComputer: EnvelopeComputer = new EnvelopeComputer(false);
 
   public readonly spectrumWave: SpectrumWaveState = new SpectrumWaveState();
   public readonly harmonicsWave: HarmonicsWaveState = new HarmonicsWaveState();
@@ -6019,6 +6019,8 @@ class InstrumentState {
   }
 
   public deactivate(): void {
+    this.envelopeComputer.clearEnvelopes();
+    this.envelopeComputer.reset();
     this.bitcrusherPrevInput = 0.0;
     this.bitcrusherCurrentOutput = 0.0;
     this.bitcrusherPhase = 1.0;
@@ -6086,7 +6088,7 @@ class InstrumentState {
     instrument: Instrument,
     samplesPerTick: number,
     roundedSamplesPerTick: number,
-    _tone: Tone | null,
+    tone: Tone | null,
   ): void {
     this.computed = true;
     this.type = instrument.type;
@@ -6144,14 +6146,19 @@ class InstrumentState {
 
     this.updateWaves(instrument, samplesPerSecond);
 
-    //const ticksIntoBar: number = synth.getTicksIntoBar();
-    //const tickTimeStart: number = ticksIntoBar;
-    //const tickTimeEnd:   number = ticksIntoBar + 1.0;
-    //const secondsPerTick: number = samplesPerTick / synth.samplesPerSecond;
-    //const currentPart: number = synth.getCurrentPart();
-    //this.envelopeComputer.computeEnvelopes(instrument, currentPart, tickTimeStart, secondsPerTick, tone);
-    //const envelopeStarts: number[] = this.envelopeComputer.envelopeStarts;
-    //const envelopeEnds: number[] = this.envelopeComputer.envelopeEnds;
+    const tickTimeStart: number = synth.getTicksIntoBar();
+    const secondsPerTick: number = samplesPerTick / synth.samplesPerSecond;
+    const currentPart: number = synth.getCurrentPart();
+    this.envelopeComputer.clearEnvelopes();
+    this.envelopeComputer.computeEnvelopes(
+      instrument,
+      currentPart,
+      tickTimeStart,
+      secondsPerTick,
+      tone,
+    );
+    const envelopeStarts: number[] = this.envelopeComputer.envelopeStarts;
+    const envelopeEnds: number[] = this.envelopeComputer.envelopeEnds;
 
     const usesDistortion: boolean = effectsIncludeDistortion(effects);
     const usesBitcrusher: boolean = effectsIncludeBitcrusher(effects);
@@ -6164,7 +6171,7 @@ class InstrumentState {
         0.0,
         Math.min(
           1.0,
-          /*envelopeStarts[InstrumentAutomationIndex.distortion] **/ instrument.distortion /
+          (envelopeStarts[InstrumentAutomationIndex.distortion] * instrument.distortion) /
             (Config.distortionRange - 1),
         ),
       );
@@ -6172,7 +6179,7 @@ class InstrumentState {
         0.0,
         Math.min(
           1.0,
-          /*envelopeEnds[  InstrumentAutomationIndex.distortion] **/ instrument.distortion /
+          (envelopeEnds[InstrumentAutomationIndex.distortion] * instrument.distortion) /
             (Config.distortionRange - 1),
         ),
       );
@@ -6198,13 +6205,21 @@ class InstrumentState {
 
     if (usesBitcrusher) {
       const freqSettingStart: number =
-        instrument.bitcrusherFreq; /** Math.sqrt(envelopeStarts[InstrumentAutomationIndex.bitcrusherFrequency])*/
+        instrument.bitcrusherFreq *
+        Math.sqrt(envelopeStarts[InstrumentAutomationIndex.bitcrusherFrequency]);
       const freqSettingEnd: number =
-        instrument.bitcrusherFreq; /** Math.sqrt(envelopeEnds[  InstrumentAutomationIndex.bitcrusherFrequency])*/
+        instrument.bitcrusherFreq *
+        Math.sqrt(envelopeEnds[InstrumentAutomationIndex.bitcrusherFrequency]);
       const quantizationSettingStart: number =
-        instrument.bitcrusherQuantization; /** Math.sqrt(envelopeStarts[InstrumentAutomationIndex.bitcrusherQuantization])*/
+        instrument.bitcrusherQuantization *
+        Math.sqrt(
+          envelopeStarts[InstrumentAutomationIndex.bitcrusherQuantization],
+        );
       const quantizationSettingEnd: number =
-        instrument.bitcrusherQuantization; /** Math.sqrt(envelopeEnds[  InstrumentAutomationIndex.bitcrusherQuantization])*/
+        instrument.bitcrusherQuantization *
+        Math.sqrt(
+          envelopeEnds[InstrumentAutomationIndex.bitcrusherQuantization],
+        );
 
       const basePitch: number = Config.keys[synth.song!.key].basePitch; // TODO: What if there's a key change mid-song?
       const freqStart: number =
@@ -6287,30 +6302,33 @@ class InstrumentState {
       );
     }
 
-    let eqFilterVolume: number = 1.0; //this.envelopeComputer.lowpassCutoffDecayVolumeCompensation;
+    let eqFilterVolume: number =
+      this.envelopeComputer.lowpassCutoffDecayVolumeCompensation;
     const eqFilterSettings: FilterSettings = instrument.eqFilter;
-    //const eqAllFreqsEnvelopeStart: number = envelopeStarts[InstrumentAutomationIndex.eqFilterAllFreqs];
-    //const eqAllFreqsEnvelopeEnd:   number = envelopeEnds[  InstrumentAutomationIndex.eqFilterAllFreqs];
     const eqFilterCount: number = effectsIncludeEqFilter(effects)
       ? eqFilterSettings.controlPointCount
       : 0;
     for (let i: number = 0; i < eqFilterCount; i++) {
-      //const eqFreqEnvelopeStart: number = envelopeStarts[InstrumentAutomationIndex.eqFilterFreq0 + i];
-      //const eqFreqEnvelopeEnd:   number = envelopeEnds[  InstrumentAutomationIndex.eqFilterFreq0 + i];
-      //const eqPeakEnvelopeStart: number = envelopeStarts[InstrumentAutomationIndex.eqFilterGain0 + i];
-      //const eqPeakEnvelopeEnd:   number = envelopeEnds[  InstrumentAutomationIndex.eqFilterGain0 + i];
+      const eqFreqEnvelopeStart: number =
+        envelopeStarts[InstrumentAutomationIndex.eqFilterFreq0 + i];
+      const eqFreqEnvelopeEnd: number =
+        envelopeEnds[InstrumentAutomationIndex.eqFilterFreq0 + i];
+      const eqGainEnvelopeStart: number =
+        envelopeStarts[InstrumentAutomationIndex.eqFilterGain0 + i];
+      const eqGainEnvelopeEnd: number =
+        envelopeEnds[InstrumentAutomationIndex.eqFilterGain0 + i];
       const point: FilterControlPoint = eqFilterSettings.controlPoints[i];
       point.toCoefficients(
         Synth.tempFilterStartCoefficients,
         samplesPerSecond,
-        /*eqAllFreqsEnvelopeStart * eqFreqEnvelopeStart*/ 1.0,
-        /*eqPeakEnvelopeStart*/ 1.0,
+        eqFreqEnvelopeStart,
+        eqGainEnvelopeStart,
       );
       point.toCoefficients(
         Synth.tempFilterEndCoefficients,
         samplesPerSecond,
-        /*eqAllFreqsEnvelopeEnd   * eqFreqEnvelopeEnd*/ 1.0,
-        /*eqPeakEnvelopeEnd*/ 1.0,
+        eqFreqEnvelopeEnd,
+        eqGainEnvelopeEnd,
       );
       if (this.eqFilters.length <= i)
         this.eqFilters[i] = new DynamicBiquadFilter();
@@ -6329,9 +6347,9 @@ class InstrumentState {
       instrument.volume,
     );
     this.mixVolume =
-      mainInstrumentVolume; /** envelopeStarts[InstrumentAutomationIndex.mixVolume]*/
+      mainInstrumentVolume * envelopeStarts[InstrumentAutomationIndex.mixVolume];
     const mixVolumeEnd =
-      mainInstrumentVolume; /** envelopeEnds[  InstrumentAutomationIndex.mixVolume]*/
+      mainInstrumentVolume * envelopeEnds[InstrumentAutomationIndex.mixVolume];
     this.mixVolumeDelta =
       (mixVolumeEnd - this.mixVolume) / roundedSamplesPerTick;
 
@@ -6340,7 +6358,10 @@ class InstrumentState {
     let delayInputMultStart: number = 1.0;
     let delayInputMultEnd: number = 1.0;
 
-    const pan: number = (instrument.pan - Config.panCenter) / Config.panCenter;
+    const panEnvelope: number =
+      envelopeStarts[InstrumentAutomationIndex.pan];
+    const pan: number =
+      ((instrument.pan - Config.panCenter) * panEnvelope) / Config.panCenter;
     const panningVolumeL: number = Math.cos((1 + pan) * Math.PI * 0.25) * 1.414;
     const panningVolumeR: number = Math.cos((1 - pan) * Math.PI * 0.25) * 1.414;
     const panningDelay: number =
@@ -6357,13 +6378,15 @@ class InstrumentState {
       synth.panningDelayBufferSize;
 
     if (usesChorus) {
-      //const chorusEnvelopeStart: number = envelopeStarts[InstrumentAutomationIndex.chorus];
-      //const chorusEnvelopeEnd:   number = envelopeEnds[  InstrumentAutomationIndex.chorus];
+      const chorusEnvelopeStart: number =
+        envelopeStarts[InstrumentAutomationIndex.chorus];
+      const chorusEnvelopeEnd: number =
+        envelopeEnds[InstrumentAutomationIndex.chorus];
       let chorusStart: number = Math.max(
         0.0,
         Math.min(
           1.0,
-          /*chorusEnvelopeStart **/ instrument.chorus /
+          (chorusEnvelopeStart * instrument.chorus) /
             (Config.chorusRange - 1),
         ),
       );
@@ -6371,7 +6394,7 @@ class InstrumentState {
         0.0,
         Math.min(
           1.0,
-          /*chorusEnvelopeEnd   **/ instrument.chorus /
+          (chorusEnvelopeEnd * instrument.chorus) /
             (Config.chorusRange - 1),
         ),
       );
@@ -6393,28 +6416,27 @@ class InstrumentState {
     let maxEchoMult = 0.0;
     let averageEchoDelaySeconds: number = 0.0;
     if (usesEcho) {
-      //const echoSustainEnvelopeStart: number = envelopeStarts[InstrumentAutomationIndex.echoSustain];
-      //const echoSustainEnvelopeEnd:   number = envelopeEnds[  InstrumentAutomationIndex.echoSustain];
+      const echoSustainEnvelopeStart: number =
+        envelopeStarts[InstrumentAutomationIndex.echoSustain];
+      const echoSustainEnvelopeEnd: number =
+        envelopeEnds[InstrumentAutomationIndex.echoSustain];
       const echoMultStart: number = Synth.echoSustainToVolumeMult(
-        /*echoSustainEnvelopeStart **/ instrument.echoSustain,
+        echoSustainEnvelopeStart * instrument.echoSustain,
       );
       const echoMultEnd: number = Synth.echoSustainToVolumeMult(
-        /*echoSustainEnvelopeEnd   **/ instrument.echoSustain,
+        echoSustainEnvelopeEnd * instrument.echoSustain,
       );
       this.echoMult = echoMultStart;
       this.echoMultDelta =
         (echoMultEnd - echoMultStart) / roundedSamplesPerTick;
       maxEchoMult = Math.max(echoMultStart, echoMultEnd);
 
-      // TODO: After computing a tick's settings once for multiple run lengths (which is
-      // good for audio worklet threads), compute the echo delay envelopes at tick (or
-      // part) boundaries to interpolate between two delay taps.
-      //const echoDelayEnvelopeStart:   number = envelopeStarts[InstrumentAutomationIndex.echoDelay];
-      //const echoDelayEnvelopeEnd:     number = envelopeEnds[  InstrumentAutomationIndex.echoDelay];
+      const echoDelayEnvelopeEnd: number =
+        envelopeEnds[InstrumentAutomationIndex.echoDelay];
       const echoDelayOffset: number = Math.max(
         1,
         Math.round(
-          (instrument.echoDelay + 1) *
+          (instrument.echoDelay * echoDelayEnvelopeEnd + 1) *
             Config.echoDelayStepTicks *
             samplesPerTick,
         ),
@@ -6451,15 +6473,17 @@ class InstrumentState {
 
     let maxReverbMult = 0.0;
     if (usesReverb) {
-      //const reverbEnvelopeStart: number = envelopeStarts[InstrumentAutomationIndex.reverb];
-      //const reverbEnvelopeEnd:   number = envelopeEnds[  InstrumentAutomationIndex.reverb];
+      const reverbEnvelopeStart: number =
+        envelopeStarts[InstrumentAutomationIndex.reverb];
+      const reverbEnvelopeEnd: number =
+        envelopeEnds[InstrumentAutomationIndex.reverb];
       const reverbStart: number =
         Math.pow(
           Math.max(
             0.0,
             Math.min(
               1.0,
-              /*reverbEnvelopeStart **/ instrument.reverb / Config.reverbRange,
+              (reverbEnvelopeStart * instrument.reverb) / Config.reverbRange,
             ),
           ),
           0.667,
@@ -6470,7 +6494,7 @@ class InstrumentState {
             0.0,
             Math.min(
               1.0,
-              /*reverbEnvelopeEnd   **/ instrument.reverb / Config.reverbRange,
+              (reverbEnvelopeEnd * instrument.reverb) / Config.reverbRange,
             ),
           ),
           0.667,
@@ -6644,7 +6668,7 @@ class InstrumentState {
 interface ResolvedAutomationValue {
   readonly channelIndex: number;
   readonly instrumentIndex: number;
-  readonly target: AutomationTarget;
+  readonly target: ModulationTarget;
   readonly targetIndex: number;
   value: number;
 }
@@ -6746,7 +6770,7 @@ export class AutomationRuntime {
 
   private _getInstrumentTargetValue(
     instrument: Instrument,
-    property: AutomationProperty,
+    property: ModulationProperty,
     index: number,
   ): number | null {
     switch (property) {
@@ -6791,7 +6815,7 @@ export class AutomationRuntime {
   private _setInstrumentTargetValue(
     effective: Instrument,
     base: Instrument,
-    property: AutomationProperty,
+    property: ModulationProperty,
     index: number,
     value: number,
   ): void {
@@ -6915,8 +6939,8 @@ export class AutomationRuntime {
     const resolvedValues: Map<number, ResolvedAutomationValue> = new Map();
     const targetStride: number = Config.automationTargetIndexMax + 1;
     let tempoValue: number = song.tempo;
-    const tempoTarget: AutomationTarget =
-      Config.automationTargets.dictionary["tempo"];
+    const tempoTarget: ModulationTarget =
+      Config.modulationTargets.dictionary["tempo"];
     const tempoDomain: AutomationValueDomain = {
       min: tempoTarget.valueMin!,
       max: tempoTarget.valueMax!,
@@ -6938,18 +6962,18 @@ export class AutomationRuntime {
           const operand: number | null =
             this._latchedValues[channelIndex]?.[rowIndex] ?? null;
           if (operand == null || !row.isTargetValid(song)) continue;
-          const target: AutomationTarget = row.getTarget()!;
+          const target: ModulationTarget = row.getTarget()!;
           if (target.scope == "song") {
             tempoValue = operand;
             continue;
           }
           const base: Instrument =
             song.channels[row.targetChannel].instruments[row.targetInstrument];
-          const property: AutomationProperty | undefined = target.property;
+          const property: ModulationProperty | undefined = target.property;
           if (property == undefined) continue;
           const address: number =
             (((row.targetChannel * Config.instrumentCountMax + row.targetInstrument) *
-              Config.automationTargets.length + target.index) * targetStride) +
+              Config.modulationTargets.length + target.index) * targetStride) +
             row.targetIndex;
           let resolved: ResolvedAutomationValue | undefined =
             resolvedValues.get(address);

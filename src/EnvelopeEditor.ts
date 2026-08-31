@@ -140,9 +140,9 @@ export class EnvelopeEditor {
         this._targetSelects[targetSelectIndex].value,
       );
       const target: number =
-        combinedValue % Config.instrumentAutomationTargets.length;
+        combinedValue % Config.modulationTargets.length;
       const index: number =
-        (combinedValue / Config.instrumentAutomationTargets.length) >>> 0;
+        (combinedValue / Config.modulationTargets.length) >>> 0;
       this._doc.record(
         new ChangeSetEnvelopeTarget(
           this._doc,
@@ -170,8 +170,8 @@ export class EnvelopeEditor {
   };
 
   private _makeOption(target: number, index: number): HTMLOptionElement {
-    let displayName = Config.instrumentAutomationTargets[target].displayName;
-    if (Config.instrumentAutomationTargets[target].maxCount > 1) {
+    let displayName = Config.modulationTargets[target].displayName;
+    if (Config.modulationTargets[target].maxCount > 1) {
       if (displayName.indexOf("#") != -1) {
         displayName = displayName.replace("#", String(index + 1));
       } else {
@@ -179,7 +179,7 @@ export class EnvelopeEditor {
       }
     }
     return HTML.option(
-      { value: target + index * Config.instrumentAutomationTargets.length },
+      { value: target + index * Config.modulationTargets.length },
       displayName,
     );
   }
@@ -198,9 +198,9 @@ export class EnvelopeEditor {
       );
       const combinedValue: number = parseInt(option.value);
       const target: number =
-        combinedValue % Config.instrumentAutomationTargets.length;
+        combinedValue % Config.modulationTargets.length;
       const index: number =
-        (combinedValue / Config.instrumentAutomationTargets.length) >>> 0;
+        (combinedValue / Config.modulationTargets.length) >>> 0;
       option.hidden = !instrument.supportsEnvelopeTarget(target, index);
     }
   }
@@ -221,14 +221,14 @@ export class EnvelopeEditor {
       });
       for (
         let target: number = 0;
-        target < Config.instrumentAutomationTargets.length;
+        target < Config.modulationTargets.length;
         target++
       ) {
         const interleaved: boolean =
-          Config.instrumentAutomationTargets[target].interleave;
+          Config.modulationTargets[target].interleave;
         for (
           let index: number = 0;
-          index < Config.instrumentAutomationTargets[target].maxCount;
+          index < Config.modulationTargets[target].maxCount;
           index++
         ) {
           targetSelect.appendChild(this._makeOption(target, index));
@@ -362,7 +362,7 @@ export class EnvelopeEditor {
       this._targetSelects[envelopeIndex].value = String(
         instrument.envelopes[envelopeIndex].target +
           instrument.envelopes[envelopeIndex].index *
-            Config.instrumentAutomationTargets.length,
+            Config.modulationTargets.length,
       );
       this._envelopeSelects[envelopeIndex].selectedIndex =
         instrument.envelopes[envelopeIndex].envelope;
