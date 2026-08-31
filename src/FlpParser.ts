@@ -1,5 +1,5 @@
 // Portions adapted from flpdiff.
-// Copyright (c) 2026 Roman Pronskiy. Used under the MIT License; see LICENSE-MIT.
+// Copyright (c) 2026 Roman Pronskiy. Used under the MIT License; see LICENSE/MIT.
 
 export type FlpErrorKind = "invalid" | "corrupt" | "empty";
 

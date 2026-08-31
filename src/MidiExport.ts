@@ -1,4 +1,4 @@
-// Copyright (c) John Nesky and contributing authors, distributed under the MIT license, see accompanying the LICENSE-MIT file.
+// Copyright (c) John Nesky and contributing authors, distributed under the MIT license, see accompanying the LICENSE/MIT file.
 
 import { InstrumentType } from "../synth/SynthConfig.js";
 import { ArrayBufferWriter } from "./ArrayBufferWriter.js";

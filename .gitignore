@@ -1,17 +1,14 @@
 /*
 
 !/.agents/
-!/.agents/**
 !/.github/
-!/.github/**
 !/src/
 !/synth/
 !/scripts/
 !/test/
+!/LICENSE/
 
 !/.gitignore
 !/AGENTS.md
 !/*.json
-!/UNLICENSE
-!/LICENSE-MIT
 !/README.md

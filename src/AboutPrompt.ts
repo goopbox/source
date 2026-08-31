@@ -60,7 +60,7 @@ export class AboutPrompt implements Prompt {
           },
           "MIT License",
         ),
-        ". The copyright notice and license are reproduced in LICENSE-MIT.",
+        ". The copyright notice and license are reproduced in LICENSE/MIT.",
       ),
       h2(
         a(
