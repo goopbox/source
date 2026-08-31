@@ -4,57 +4,66 @@ import type { EventRange } from "./EventEditing.js";
 
 export type AutomationRowSelection = EventRange;
 
-/** Transient Automation editor state. Each row keeps its own time selection. */
+/** Transient Automation editor state. A time selection belongs to one row. */
 export class AutomationRowSelectionState {
-  public activeRow: number = 0;
-  private readonly _ranges: Map<number, AutomationRowSelection> = new Map();
+  private _activeRow: number = 0;
+  private _range: AutomationRowSelection | null = null;
+
+  public get activeRow(): number {
+    return this._activeRow;
+  }
+
+  public set activeRow(rowIndex: number) {
+    if (rowIndex != this._activeRow) this._range = null;
+    this._activeRow = rowIndex;
+  }
 
   public setRange(rowIndex: number, start: number, end: number): void {
     this.activeRow = rowIndex;
     const rangeStart: number = Math.min(start, end);
     const rangeEnd: number = Math.max(start, end);
     if (rangeStart == rangeEnd) {
-      this._ranges.delete(rowIndex);
+      this._range = null;
     } else {
-      this._ranges.set(rowIndex, { start: rangeStart, end: rangeEnd });
+      this._range = { start: rangeStart, end: rangeEnd };
     }
   }
 
   public getRange(rowIndex: number): AutomationRowSelection | null {
-    return this._ranges.get(rowIndex) ?? null;
+    return rowIndex == this._activeRow ? this._range : null;
   }
 
   public clearRange(rowIndex: number): void {
-    this._ranges.delete(rowIndex);
+    if (rowIndex == this._activeRow) this._range = null;
   }
 
   public clearRanges(): void {
-    this._ranges.clear();
+    this._range = null;
   }
 
   public rangeRows(): number[] {
-    return Array.from(this._ranges.keys()).sort((a, b) => a - b);
+    return this._range == null ? [] : [this._activeRow];
   }
 
   public contains(rowIndex: number, part: number): boolean {
-    const range: AutomationRowSelection | undefined = this._ranges.get(rowIndex);
-    return range != undefined && range.start <= part && part <= range.end;
+    return rowIndex == this._activeRow &&
+      this._range != null &&
+      this._range.start <= part &&
+      part <= this._range.end;
   }
 
   public trim(
     rowCount: number,
     partsPerBar: number = Number.POSITIVE_INFINITY,
   ): void {
-    for (const [rowIndex, range] of this._ranges) {
-      if (rowIndex >= rowCount) {
-        this._ranges.delete(rowIndex);
-        continue;
-      }
-      const start: number = Math.max(0, Math.min(partsPerBar, range.start));
-      const end: number = Math.max(0, Math.min(partsPerBar, range.end));
-      if (start >= end) this._ranges.delete(rowIndex);
-      else this._ranges.set(rowIndex, { start, end });
+    if (this._activeRow < 0 || this._activeRow >= rowCount) {
+      this._range = null;
     }
-    this.activeRow = Math.max(0, Math.min(rowCount - 1, this.activeRow));
+    this._activeRow = Math.max(0, Math.min(rowCount - 1, this._activeRow));
+    if (this._range != null) {
+      const start: number = Math.max(0, Math.min(partsPerBar, this._range.start));
+      const end: number = Math.max(0, Math.min(partsPerBar, this._range.end));
+      this._range = start < end ? { start, end } : null;
+    }
   }
 }

@@ -356,6 +356,11 @@ export class AutomationEditor {
     "stroke-width": "2",
     "pointer-events": "none",
   });
+  private readonly _svgPreviewFill: SVGPathElement = SVG.path({
+    display: "none",
+    fill: "var(--automation-secondary-note)",
+    "pointer-events": "none",
+  });
   private readonly _svgPlayhead: SVGRectElement = SVG.rect({
     width: "4",
     fill: ColorConfig.text,
@@ -394,6 +399,7 @@ export class AutomationEditor {
       this._svgBackground,
       this._svgSelections,
       this._svgEvents,
+      this._svgPreviewFill,
       this._svgPreview,
       this._svgPlayhead,
     );
@@ -641,7 +647,15 @@ export class AutomationEditor {
     drag: AutomationDrag,
     currentPart: number,
   ): Event[] {
-    const delta: number = currentPart - drag.cursorPart;
+    const event: Event | undefined = drag.original[drag.eventIndex];
+    const lastPointIndex: number = (event?.points.length ?? 0) - 1;
+    const pointPart: number = drag.pointIndex == 0
+      ? event?.start ?? drag.cursorPart
+      : drag.pointIndex == lastPointIndex
+        ? event?.end ?? drag.cursorPart
+        : (event?.start ?? 0) +
+          (event?.points[drag.pointIndex]?.time ?? drag.cursorPart);
+    const delta: number = currentPart - pointPart;
     return editEventTime(
       drag.original,
       drag.eventIndex,
@@ -689,6 +703,7 @@ export class AutomationEditor {
     if (replacement.length > Config.automationEventsPerRowMax) return;
     const pattern: Pattern | null = this._doc.getCurrentPattern(this._barOffset);
     if (pattern == null) return;
+    if (drag.change != null) drag.change.undo();
     drag.change = new ChangeEvents(
       this._doc,
       pattern.automationEvents[drag.rowIndex],
@@ -698,14 +713,7 @@ export class AutomationEditor {
   }
 
   private _restoreDrag(drag: AutomationDrag): void {
-    const pattern: Pattern | null = this._doc.getCurrentPattern(this._barOffset);
-    if (pattern != null && drag.change != null) {
-      new ChangeEvents(
-        this._doc,
-        pattern.automationEvents[drag.rowIndex],
-        drag.original,
-      );
-    }
+    if (drag.change != null) drag.change.undo();
     if (drag.originalRange == null) this.selection.clearRange(drag.rowIndex);
     else {
       this.selection.setRange(
@@ -863,15 +871,7 @@ export class AutomationEditor {
         );
         if (delta == 0) {
           if (drag.change != null) {
-            const pattern: Pattern | null =
-              this._doc.getCurrentPattern(this._barOffset);
-            if (pattern != null) {
-              new ChangeEvents(
-                this._doc,
-                pattern.automationEvents[drag.rowIndex],
-                drag.original,
-              );
-            }
+            drag.change.undo();
             drag.change = null;
             this._doc.forgetLastChange();
           }
@@ -1043,10 +1043,17 @@ export class AutomationEditor {
       !this._cursor.valid ||
       (this._drag != null && this._drag.mode != "create")
     ) {
+      this._svgPreviewFill.setAttribute("display", "none");
       this._svgPreview.setAttribute("display", "none");
       return;
     }
     this._svgPreview.setAttribute("display", "");
+    const creating: boolean = this._drag?.mode == "create";
+    this._svgPreview.setAttribute(
+      "fill",
+      creating ? "var(--automation-primary-note)" : "none",
+    );
+    this._svgPreview.setAttribute("stroke", creating ? "none" : ColorConfig.text);
     const range: AutomationRowSelection | null =
       this.selection.getRange(this._cursor.rowIndex);
     if (
@@ -1059,6 +1066,7 @@ export class AutomationEditor {
         "d",
         this._selectionPath(range, this._cursor.rowIndex),
       );
+      this._svgPreviewFill.setAttribute("display", "none");
       return;
     }
     const event: Event | null =
@@ -1082,6 +1090,20 @@ export class AutomationEditor {
         true,
       ),
     );
+    if (creating) {
+      this._svgPreviewFill.setAttribute("display", "");
+      this._svgPreviewFill.setAttribute(
+        "d",
+        this._eventPath(
+          event,
+          this._cursor.rowIndex,
+          this._rowDomain(this._cursor.rowIndex),
+          false,
+        ),
+      );
+    } else {
+      this._svgPreviewFill.setAttribute("display", "none");
+    }
   }
 
   private _animatePlayhead = (): void => {

@@ -643,6 +643,7 @@ class ChipWaveEditor {
 export class SongEditor {
   public readonly doc: SongDocument = new SongDocument();
   public prompt: Prompt | null = null;
+  private _activeEditor: "pattern" | "track" = "pattern";
   private _pendingFlpImport: {
     imported: FlpSongImport;
     apply: () => void;
@@ -1981,8 +1982,8 @@ export class SongEditor {
     this._zoomInButton.addEventListener("click", this._zoomIn);
     this._zoomOutButton.addEventListener("click", this._zoomOut);
 
-    this._patternArea.addEventListener("pointerdown", this._refocusStage);
-    this._trackArea.addEventListener("pointerdown", this._refocusStage);
+    this._patternArea.addEventListener("pointerdown", this._activatePatternEditor);
+    this._trackArea.addEventListener("pointerdown", this._activateTrackEditor);
     this._fadeInOutEditor.container.addEventListener(
       "pointerdown",
       this._refocusStage,
@@ -2276,6 +2277,21 @@ export class SongEditor {
   private _refocusStage = (): void => {
     this.mainLayer.focus({ preventScroll: true });
   };
+
+  private _activatePatternEditor = (): void => {
+    this._activeEditor = "pattern";
+    this._refocusStage();
+  };
+
+  private _activateTrackEditor = (): void => {
+    this._activeEditor = "track";
+    this._refocusStage();
+  };
+
+  private _automationPatternEditorIsActive(): boolean {
+    return this._activeEditor == "pattern" &&
+      this.doc.song.getChannelIsAutomation(this.doc.channel);
+  }
 
   private _onFocusIn = (event: Event): void => {
     if (
@@ -3040,7 +3056,7 @@ export class SongEditor {
     switch (event.keyCode) {
       case 27: // ESC key
         if (!event.ctrlKey && !event.metaKey) {
-          if (this.doc.song.getChannelIsAutomation(this.doc.channel))
+          if (this._automationPatternEditorIsActive())
             this._automationEditor.clearSelection();
           else new ChangePatternSelection(this.doc, 0, 0);
           this.doc.selection.resetBoxSelection();
@@ -3091,7 +3107,7 @@ export class SongEditor {
         if (canPlayNotes) break;
         if (event.shiftKey) {
           this._copyInstrument();
-        } else if (this.doc.song.getChannelIsAutomation(this.doc.channel)) {
+        } else if (this._automationPatternEditorIsActive()) {
           this._automationEditor.copy();
         } else {
           this.doc.selection.copy();
@@ -3100,7 +3116,7 @@ export class SongEditor {
         break;
       case 88: // x
         if (canPlayNotes) break;
-        if (this.doc.song.getChannelIsAutomation(this.doc.channel))
+        if (this._automationPatternEditorIsActive())
           this._automationEditor.cut();
         else this.doc.selection.cut();
         event.preventDefault();
@@ -3121,7 +3137,7 @@ export class SongEditor {
       case 8: // backspace/delete
         if (event.ctrlKey || event.metaKey) {
           this.doc.selection.deleteChannel();
-        } else if (this.doc.song.getChannelIsAutomation(this.doc.channel)) {
+        } else if (this._automationPatternEditorIsActive()) {
           this._automationEditor.deleteSelected();
         } else {
           this.doc.selection.deleteBars();
@@ -3132,7 +3148,7 @@ export class SongEditor {
         if (canPlayNotes) break;
         if (
           !event.shiftKey &&
-          this.doc.song.getChannelIsAutomation(this.doc.channel)
+          this._automationPatternEditorIsActive()
         ) {
           this._automationEditor.selectAll();
         } else if (event.shiftKey) {
@@ -3215,7 +3231,7 @@ export class SongEditor {
           this.doc.selection.pasteNumbers();
         } else if (event.shiftKey) {
           this._pasteInstrument();
-        } else if (this.doc.song.getChannelIsAutomation(this.doc.channel)) {
+        } else if (this._automationPatternEditorIsActive()) {
           this._automationEditor.paste();
         } else {
           this.doc.selection.pasteNotes();
@@ -3991,12 +4007,12 @@ export class SongEditor {
         this.doc.redo();
         break;
       case "copy":
-        if (this.doc.song.getChannelIsAutomation(this.doc.channel))
+        if (this._automationPatternEditorIsActive())
           this._automationEditor.copy();
         else this.doc.selection.copy();
         break;
       case "cut":
-        if (this.doc.song.getChannelIsAutomation(this.doc.channel))
+        if (this._automationPatternEditorIsActive())
           this._automationEditor.cut();
         else this.doc.selection.cut();
         break;
@@ -4004,7 +4020,7 @@ export class SongEditor {
         this.doc.selection.insertBars();
         break;
       case "deleteBars":
-        if (this.doc.song.getChannelIsAutomation(this.doc.channel))
+        if (this._automationPatternEditorIsActive())
           this._automationEditor.deleteSelected();
         else this.doc.selection.deleteBars();
         break;
@@ -4015,7 +4031,7 @@ export class SongEditor {
         this.doc.selection.deleteChannel();
         break;
       case "pasteNotes":
-        if (this.doc.song.getChannelIsAutomation(this.doc.channel))
+        if (this._automationPatternEditorIsActive())
           this._automationEditor.paste();
         else this.doc.selection.pasteNotes();
         break;
@@ -4029,7 +4045,7 @@ export class SongEditor {
         this.doc.selection.transpose(false, false);
         break;
       case "selectAll":
-        if (this.doc.song.getChannelIsAutomation(this.doc.channel))
+        if (this._automationPatternEditorIsActive())
           this._automationEditor.selectAll();
         else this.doc.selection.selectAll();
         break;

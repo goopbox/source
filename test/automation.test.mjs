@@ -661,20 +661,23 @@ test("Automation pattern content, Track compatibility, and MIDI skipping use cha
   );
 });
 
-test("Automation time selections remain independent per row", async (context) => {
+test("Automation time selection stays on one active row", async (context) => {
   const module = await loadAutomationModules();
   context.after(module.cleanup);
   const selection = new module.AutomationRowSelectionState();
   selection.setRange(0, 6, 18);
   selection.setRange(1, 24, 12);
   assert.equal(selection.activeRow, 1);
-  assert.deepEqual(selection.getRange(0), { start: 6, end: 18 });
+  assert.equal(selection.getRange(0), null);
   assert.deepEqual(selection.getRange(1), { start: 12, end: 24 });
-  assert.equal(selection.contains(0, 12), true);
+  assert.equal(selection.contains(0, 12), false);
   assert.equal(selection.contains(1, 6), false);
-  assert.deepEqual(selection.rangeRows(), [0, 1]);
+  assert.deepEqual(selection.rangeRows(), [1]);
   selection.trim(2, 20);
   assert.deepEqual(selection.getRange(1), { start: 12, end: 20 });
+  selection.activeRow = 0;
+  assert.equal(selection.getRange(1), null);
+  assert.deepEqual(selection.rangeRows(), []);
 });
 
 test("Automation time selections clip, split, and value-bend events", async (context) => {
@@ -754,6 +757,19 @@ test("shared event edits clip collisions, flatten values, repeat, and render", a
   assert.deepEqual(
     extended.map((candidate) => [candidate.start, candidate.end]),
     [[0, 6], [8, 18], [18, 20]],
+  );
+
+  const resizable = [event(module, 4, 12, [[0, 2], [8, 2]])];
+  assert.deepEqual(
+    module.editEventTime(resizable, 0, 1, -8, 1, 24, 32),
+    [],
+    "dragging an end point to the start deletes the event",
+  );
+  assert.deepEqual(
+    module.editEventTime(resizable, 0, 1, -4, 1, 24, 32)
+      .map((candidate) => [candidate.start, candidate.end]),
+    [[4, 8]],
+    "the original event can reappear when the drag moves away from zero",
   );
 
   const endpointMerged = module.editEventTime(

@@ -143,6 +143,16 @@ export function editEventTime<T extends Event>(
     return replacement;
   }
 
+  const shiftedEndpoint: number =
+    (pointIndex == 0 ? original.start : original.end) + delta;
+  const others: T[] = events
+    .filter((_event: T, index: number): boolean => index != eventIndex)
+    .map((event: T): T => event.clone());
+  if (
+    (pointIndex == 0 && shiftedEndpoint >= original.end) ||
+    (pointIndex != 0 && shiftedEndpoint <= original.start)
+  ) return others;
+
   const held: T = pointIndex == 0
     ? resizeEventStart(
         original,
@@ -157,9 +167,6 @@ export function editEventTime<T extends Event>(
         ),
         pointCountMax,
       );
-  const others: T[] = events
-    .filter((_event: T, index: number): boolean => index != eventIndex)
-    .map((event: T): T => event.clone());
   return deleteEventRange(others, held.start, held.end)
     .concat(held)
     .sort((a: T, b: T): number => a.start - b.start);
