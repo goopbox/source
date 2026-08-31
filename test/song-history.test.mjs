@@ -437,6 +437,52 @@ test("undo history is durable, contiguous, exact, and crash resistant", async (c
   );
 
   await context.test(
+    "adding channels at a type boundary records each undo step",
+    () => {
+      for (const kind of [
+        ChannelKind.pitch,
+        ChannelKind.noise,
+        ChannelKind.automation,
+      ]) {
+        const browser = new FakeBrowser();
+        const doc = new SongDocument();
+        recordChange(browser, doc, new ChangeChannelCount(doc, 1, 1, 1));
+
+        const channelIndex =
+          kind == ChannelKind.pitch
+            ? 0
+            : kind == ChannelKind.noise
+              ? doc.song.pitchChannelCount
+              : doc.song.pitchChannelCount + doc.song.noiseChannelCount;
+        doc.channel = channelIndex;
+        doc.selection.boxSelectionY0 = channelIndex;
+        doc.selection.boxSelectionY1 = channelIndex;
+        doc.updateCurrentHistoryEntry();
+
+        assert.doesNotThrow(() => doc.selection.insertChannel());
+        browser.flushAnimationFrame();
+        assert.equal(
+          doc.song.getChannelKind(doc.channel),
+          kind,
+          "the first inserted channel should remain selected",
+        );
+        assert.doesNotThrow(() => doc.selection.insertChannel());
+        browser.flushAnimationFrame();
+
+        const count = () =>
+          kind == ChannelKind.pitch
+            ? doc.song.pitchChannelCount
+            : kind == ChannelKind.noise
+              ? doc.song.noiseChannelCount
+              : doc.song.automationChannelCount;
+        assert.equal(count(), 3);
+        doc.undo();
+        assert.equal(count(), 2, "undo should remove only the last channel");
+      }
+    },
+  );
+
+  await context.test(
     "large histories survive undo, redo, reload, and branching",
     () => {
       const largeSong = makeLargeSong(Song, Pattern, Note, Config);

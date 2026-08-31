@@ -2255,7 +2255,11 @@ export class ChangeAddChannel extends ChangeGroup {
           newAutomationChannelCount,
         ),
       );
-      this.append(new ChangeChannelOrder(doc, index, addedChannelIndex - 1, 1));
+      if (index < addedChannelIndex) {
+        this.append(
+          new ChangeChannelOrder(doc, index, addedChannelIndex - 1, 1),
+        );
+      }
     }
   }
 }
