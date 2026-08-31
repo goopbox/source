@@ -1,18 +1,6 @@
-Third-party software
+MIT License
 
-fflate
-Copyright (c) 2026 Arjun Barrett
-
-imperative-html
-Copyright (c) 2020 John Nesky
-
-BeepBox
-Copyright (c) 2012-2024 John Nesky and contributing authors
-
-flpdiff
-Copyright (c) 2026 Roman Pronskiy
-
-fflate, imperative-html, BeepBox, and flpdiff are licensed under the MIT License:
+Copyright (c) [year] [fullname]
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
