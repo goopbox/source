@@ -21,6 +21,7 @@ const goopboxFeatures: ReadonlyArray<string> = [
   "FLP import",
   "Instrument randomizer rework",
   "Loop toggle",
+  "Automations",
 ];
 
 export class AboutPrompt implements Prompt {
