@@ -9,7 +9,6 @@ import {
 import {
   assetCacheEvents,
   getPinnedAssets,
-  isAssetCacheEnabled,
   pinAsset,
   unpinAsset,
 } from "../synth/AssetCache.js";
@@ -71,7 +70,6 @@ export class AssetsPrompt implements Prompt {
   private _render = (): void => {
     this._songRows.replaceChildren();
     let visibleSongAssets: number = 0;
-    const cacheEnabled: boolean = isAssetCacheEnabled();
     const pinnedSources: Set<string> = new Set(
       getPinnedAssets().map((asset: AssetDefinition): string => asset.source),
     );
@@ -122,7 +120,7 @@ export class AssetsPrompt implements Prompt {
           ),
         );
       }
-      if (cacheEnabled && !pinnedSources.has(asset.source)) {
+      if (!pinnedSources.has(asset.source)) {
         const pinButton: HTMLButtonElement = button({ type: "button" }, "Pin");
         pinButton.addEventListener("click", () => {
           pinAsset(asset);
@@ -162,8 +160,6 @@ export class AssetsPrompt implements Prompt {
       this._addButton,
     );
     this._columns.replaceChildren(songColumn);
-    if (!cacheEnabled) return;
-
     this._pinnedRows.replaceChildren();
     const pinnedAssets: AssetDefinition[] = getPinnedAssets();
     let visiblePinnedAssets: number = 0;

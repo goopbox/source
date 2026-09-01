@@ -10,10 +10,7 @@ import { ColorConfig } from "./ColorConfig.js";
 import { ctrlSymbol } from "./EditorConfig.js";
 import { KeyboardLayout } from "./KeyboardLayout.js";
 import { Piano } from "./Piano.js";
-import {
-  disableAndDeleteAssetCache,
-  enableAssetCache,
-} from "../synth/AssetCache.js";
+import { resetAssetCache } from "../synth/AssetCache.js";
 import { Preferences } from "./Preferences.js";
 
 const { button, div, input, option, select } = HTML;
@@ -140,25 +137,15 @@ export class PreferencesPrompt implements Prompt {
   }
 
   private _renderCacheButton(): void {
-    this._cacheButton.textContent = this._doc.prefs.assetCacheEnabled
-      ? "Disable and delete cache"
-      : "Cache assets automatically";
+    this._cacheButton.textContent = "Reset cache";
   }
 
   private _toggleAssetCache = async (): Promise<void> => {
     this._cacheButton.disabled = true;
     try {
-      if (this._doc.prefs.assetCacheEnabled) {
-        this._doc.prefs.assetCacheEnabled = false;
-        this._doc.prefs.save();
-        await disableAndDeleteAssetCache();
-      } else {
-        this._doc.prefs.assetCacheEnabled = true;
-        this._doc.prefs.save();
-        this._cacheButton.textContent = "Caching...";
-        this._cacheButton.classList.add("assetCaching");
-        await enableAssetCache();
-      }
+      this._cacheButton.textContent = "Resetting...";
+      this._cacheButton.classList.add("assetCaching");
+      await resetAssetCache();
       this._doc.notifier.changed();
     } finally {
       this._cacheButton.classList.remove("assetCaching");

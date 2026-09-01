@@ -22,7 +22,6 @@ export class Preferences {
   public ignorePerformedNotesNotInScale!: boolean;
   public metronomeCountIn!: boolean;
   public metronomeWhileRecording!: boolean;
-  public assetCacheEnabled!: boolean;
 
   constructor() {
     this.reload();
@@ -56,7 +55,6 @@ export class Preferences {
       "metronomeWhileRecording",
       true,
     );
-    this.assetCacheEnabled = this._loadBoolean("assetCacheEnabled", true);
     this.keyboardLayout =
       this._getStorageItem("keyboardLayout") || "wickiHayden";
     this.layout = this._getStorageItem("layout") || "long";
@@ -117,10 +115,6 @@ export class Preferences {
     this._setStorageItem(
       "metronomeWhileRecording",
       this.metronomeWhileRecording ? "true" : "false",
-    );
-    this._setStorageItem(
-      "assetCacheEnabled",
-      this.assetCacheEnabled ? "true" : "false",
     );
     this._setStorageItem("keyboardLayout", this.keyboardLayout);
     this._setStorageItem("volume", String(this.masterVolume));

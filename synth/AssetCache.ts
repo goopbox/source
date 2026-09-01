@@ -4,20 +4,8 @@ import { assetCacheName } from "./AssetCacheConfig.js";
 export { assetCacheName };
 export const assetCacheEvents: EventTarget = new EventTarget();
 
-const enabledStorageKey: string = "assetCacheEnabled";
 const pinnedStorageKey: string = "pinnedAssets";
 let pendingCacheOperation: Promise<void> = Promise.resolve();
-
-export function isAssetCacheEnabled(): boolean {
-  return (
-    typeof localStorage != "undefined" &&
-    localStorage.getItem(enabledStorageKey) != "false"
-  );
-}
-
-export function setAssetCacheEnabled(enabled: boolean): void {
-  localStorage.setItem(enabledStorageKey, String(enabled));
-}
 
 function readPinnedSources(): string[] {
   try {
@@ -49,9 +37,8 @@ function enqueueCacheOperation(operation: () => Promise<void>): Promise<void> {
 }
 
 export function cacheAsset(asset: AssetDefinition, response: Response): void {
-  if (!isAssetCacheEnabled() || typeof caches == "undefined") return;
+  if (typeof caches == "undefined") return;
   void enqueueCacheOperation(async (): Promise<void> => {
-    if (!isAssetCacheEnabled()) return;
     await (await caches.open(assetCacheName)).put(asset.url, response);
   }).catch((): void => {
     /* Caching is opportunistic. */
@@ -59,7 +46,6 @@ export function cacheAsset(asset: AssetDefinition, response: Response): void {
 }
 
 export function getPinnedAssets(): AssetDefinition[] {
-  if (!isAssetCacheEnabled()) return [];
   return readPinnedSources().flatMap((source: string): AssetDefinition[] => {
     const asset: AssetDefinition | null = parseAssetDefinition(source);
     return asset == null ? [] : [asset];
@@ -67,7 +53,6 @@ export function getPinnedAssets(): AssetDefinition[] {
 }
 
 export function pinAsset(asset: AssetDefinition): void {
-  if (!isAssetCacheEnabled()) return;
   const sources: string[] = readPinnedSources().filter(
     (source: string): boolean => source != asset.source,
   );
@@ -81,33 +66,14 @@ export function unpinAsset(asset: AssetDefinition): void {
       (source: string): boolean => source != asset.source,
     ),
   );
-  if (typeof caches == "undefined") return;
-  void enqueueCacheOperation(async (): Promise<void> => {
-    if (typeof caches != "undefined")
-      await (await caches.open(assetCacheName)).delete(asset.url);
-  }).catch((): void => {
-    /* Cache deletion is opportunistic. */
-  });
 }
 
-export function enableAssetCache(): Promise<void> {
-  setAssetCacheEnabled(true);
-  return enqueueCacheOperation(async (): Promise<void> => {
-    try {
-      if (typeof caches != "undefined") await caches.open(assetCacheName);
-    } finally {
-      assetCacheEvents.dispatchEvent(new Event("change"));
-    }
-  });
-}
-
-export function disableAndDeleteAssetCache(): Promise<void> {
-  setAssetCacheEnabled(false);
+export function resetAssetCache(): Promise<void> {
   return enqueueCacheOperation(async (): Promise<void> => {
     try {
       if (typeof caches != "undefined") await caches.delete(assetCacheName);
     } finally {
-      writePinnedSources([]);
+      assetCacheEvents.dispatchEvent(new Event("change"));
     }
   });
 }

@@ -43,8 +43,8 @@ async function loadAssetCache() {
   };
 }
 
-test("asset caching defaults on and pinned assets are manual", async (context) => {
-  const { module, storage, cleanup } = await loadAssetCache();
+test("assets are cached independently from pinned assets", async (context) => {
+  const { module, cleanup } = await loadAssetCache();
   context.after(cleanup);
   const asset = {
     source: "!r48!https://example.com/piano.wav",
@@ -55,7 +55,6 @@ test("asset caching defaults on and pinned assets are manual", async (context) =
     type: "sample",
   };
 
-  assert.equal(module.isAssetCacheEnabled(), true);
   assert.deepEqual(module.getPinnedAssets(), []);
   module.pinAsset(asset);
   assert.deepEqual(
@@ -64,10 +63,9 @@ test("asset caching defaults on and pinned assets are manual", async (context) =
   );
   module.unpinAsset(asset);
   assert.deepEqual(module.getPinnedAssets(), []);
-  assert.equal(storage.get("assetCacheEnabled"), undefined);
 });
 
-test("disabling the cache deletes responses and pinned assets", async (context) => {
+test("resetting the cache deletes responses but preserves pinned assets", async (context) => {
   const { module, cachedResponses, cleanup } = await loadAssetCache();
   context.after(cleanup);
   const asset = {
@@ -81,9 +79,8 @@ test("disabling the cache deletes responses and pinned assets", async (context) 
 
   module.pinAsset(asset);
   module.cacheAsset(asset, new Response("audio"));
-  await module.disableAndDeleteAssetCache();
+  await module.resetAssetCache();
 
-  assert.equal(module.isAssetCacheEnabled(), false);
-  assert.deepEqual(module.getPinnedAssets(), []);
+  assert.deepEqual(module.getPinnedAssets().map((candidate) => candidate.source), [asset.source]);
   assert.equal(cachedResponses.size, 0);
 });
