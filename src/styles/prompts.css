@@ -253,6 +253,11 @@ dialog.prompt:not([open]) {
     align-items: center;
     gap: 4px;
 }
+.assetLoadIndicator {
+    display: flex;
+    flex: 1;
+    min-width: 0;
+}
 .assetLoadProgress {
     flex: 1;
     min-width: 0;

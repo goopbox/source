@@ -16,6 +16,7 @@ import { SongDocument } from "./SongDocument.js";
 import { ChangeAssets } from "./changes.js";
 import { ColorConfig } from "./ColorConfig.js";
 import type { Prompt } from "./Prompt.js";
+import { rewritePastedAssetSource } from "./AssetSourcePaste.js";
 
 const { button, dialog, div, h2, h3, input, label, progress, span } = HTML;
 
@@ -47,13 +48,17 @@ export class AssetsPrompt implements Prompt {
   private readonly _columns: HTMLDivElement = div({
     class: "assetsPromptColumns",
   });
+  private readonly _loadIndicators: Map<string, HTMLSpanElement[]> = new Map();
 
   public constructor(private readonly _doc: SongDocument) {
     this.container.append(this._search, this._columns, this._closeButton);
     this._addButton.addEventListener("click", this._addAsset);
     this._closeButton.addEventListener("click", this._close);
     this._search.addEventListener("input", this._render);
-    this._doc.synth.assetLoadEvents.addEventListener("change", this._render);
+    this._doc.synth.assetLoadEvents.addEventListener(
+      "change",
+      this._updateLoadIndicators,
+    );
     assetCacheEvents.addEventListener("change", this._render);
     this._render();
   }
@@ -68,6 +73,7 @@ export class AssetsPrompt implements Prompt {
   }
 
   private _render = (): void => {
+    this._loadIndicators.clear();
     this._songRows.replaceChildren();
     let visibleSongAssets: number = 0;
     const pinnedSources: Set<string> = new Set(
@@ -94,40 +100,27 @@ export class AssetsPrompt implements Prompt {
         { type: "button", "aria-label": "Move asset down" },
         "↓",
       );
+      const loadIndicator: HTMLSpanElement = span({
+        class: "assetLoadIndicator",
+      });
+      const indicators: HTMLSpanElement[] =
+        this._loadIndicators.get(asset.id) ?? [];
+      indicators.push(loadIndicator);
+      this._loadIndicators.set(asset.id, indicators);
+      this._updateLoadIndicator(asset.id, loadIndicator);
       const controls: HTMLDivElement = div(
         { class: "assetControls" },
-        upButton,
-        downButton,
-        removeButton,
+        loadIndicator,
       );
-      const loadStatus: string | null = this._doc.synth.getAssetLoadStatus(
-        asset.id,
-      );
-      if (loadStatus == "loading") {
-        const loadingBar: HTMLProgressElement = progress({
-          class: "assetLoadProgress",
-          max: "1",
-        });
-        const downloadProgress: number | null =
-          this._doc.synth.getAssetLoadProgress(asset.id);
-        if (downloadProgress != null) loadingBar.value = downloadProgress;
-        controls.prepend(loadingBar);
-      } else if (loadStatus == "error") {
-        controls.prepend(
-          span(
-            { class: "assetError", style: `color: ${ColorConfig.error};` },
-            `Error: ${this._doc.synth.getAssetLoadError(asset.id) ?? "Unknown error"}`,
-          ),
-        );
-      }
       if (!pinnedSources.has(asset.source)) {
         const pinButton: HTMLButtonElement = button({ type: "button" }, "Pin");
         pinButton.addEventListener("click", () => {
           pinAsset(asset);
           this._render();
         });
-        controls.prepend(pinButton);
+        controls.append(pinButton);
       }
+      controls.append(upButton, downButton, removeButton);
       const row: HTMLDivElement = div(
         { class: "assetCard" },
         label({ class: "assetName" }, getAssetName(asset.url)),
@@ -137,6 +130,19 @@ export class AssetsPrompt implements Prompt {
       sourceInput.addEventListener("change", () =>
         this._updateAsset(asset, sourceInput.value),
       );
+      sourceInput.addEventListener("paste", (event: ClipboardEvent) => {
+        const pasted: string = event.clipboardData?.getData("text") ?? "";
+        const rewritten: string = rewritePastedAssetSource(pasted);
+        if (rewritten == pasted) return;
+        event.preventDefault();
+        sourceInput.setRangeText(
+          rewritten,
+          sourceInput.selectionStart ?? sourceInput.value.length,
+          sourceInput.selectionEnd ?? sourceInput.value.length,
+          "end",
+        );
+        this._updateAsset(asset, sourceInput.value);
+      });
       removeButton.addEventListener("click", () => this._removeAsset(asset));
       upButton.disabled = index == 0;
       downButton.disabled = index == this._doc.song.assets.length - 1;
@@ -215,11 +221,45 @@ export class AssetsPrompt implements Prompt {
     );
   };
 
+  private _updateLoadIndicator(
+    assetId: string,
+    indicator: HTMLSpanElement,
+  ): void {
+    const loadStatus: string | null =
+      this._doc.synth.getAssetLoadStatus(assetId);
+    if (loadStatus == "loading") {
+      const loadingBar: HTMLProgressElement = progress({
+        class: "assetLoadProgress",
+        max: "1",
+      });
+      const downloadProgress: number | null =
+        this._doc.synth.getAssetLoadProgress(assetId);
+      if (downloadProgress != null) loadingBar.value = downloadProgress;
+      indicator.replaceChildren(loadingBar);
+    } else if (loadStatus == "error") {
+      indicator.replaceChildren(
+        span(
+          { class: "assetError", style: `color: ${ColorConfig.error};` },
+          `Error: ${this._doc.synth.getAssetLoadError(assetId) ?? "Unknown error"}`,
+        ),
+      );
+    } else {
+      indicator.replaceChildren();
+    }
+  }
+
+  private _updateLoadIndicators = (): void => {
+    for (const [assetId, indicators] of this._loadIndicators)
+      for (const indicator of indicators)
+        this._updateLoadIndicator(assetId, indicator);
+  };
+
   private _addAsset = (): void => {
     const asset: AssetDefinition | null = parseAssetDefinition("https://");
     if (asset == null) return;
     this._record([...this._doc.song.assets, asset]);
     this._render();
+    this._songRows.scrollTop = this._songRows.scrollHeight;
   };
 
   private _insertAsset(asset: AssetDefinition): void {
@@ -239,10 +279,12 @@ export class AssetsPrompt implements Prompt {
     if (replacement == null) return;
     const index: number = this._doc.song.assets.indexOf(asset);
     if (index < 0) return;
+    const scrollTop: number = this._songRows.scrollTop;
     const assets: AssetDefinition[] = [...this._doc.song.assets];
     assets[index] = replacement;
     this._record(assets);
     this._render();
+    this._songRows.scrollTop = scrollTop;
   }
 
   private _removeAsset = (asset: AssetDefinition): void => {
@@ -274,7 +316,10 @@ export class AssetsPrompt implements Prompt {
     this._addButton.removeEventListener("click", this._addAsset);
     this._closeButton.removeEventListener("click", this._close);
     this._search.removeEventListener("input", this._render);
-    this._doc.synth.assetLoadEvents.removeEventListener("change", this._render);
+    this._doc.synth.assetLoadEvents.removeEventListener(
+      "change",
+      this._updateLoadIndicators,
+    );
     assetCacheEvents.removeEventListener("change", this._render);
   };
 }
