@@ -2953,10 +2953,12 @@ export class Instrument {
       // SoundFont filter envelopes can legitimately span a much wider multiplier
       // range than editor-authored amplitude envelopes. Filter coefficients clamp
       // the resulting frequency, whereas allowing those magnitudes for volume or
-      // oscillator targets could overflow the audio pipeline.
-      const parameterLimit: number = modulationTarget.isFilter
-        ? Math.pow(2, 28)
-        : 4;
+      // oscillator targets could overflow the audio pipeline. Disabled envelopes
+      // retain their former parameters, but the "none" target never applies them.
+      const parameterLimit: number =
+        modulationTarget.isFilter || modulationTarget.name == "none"
+          ? Math.pow(2, 28)
+          : 4;
       envelopeStates.push({
         target: target,
         index: index,

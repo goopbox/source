@@ -1013,6 +1013,49 @@ test("real channel, instrument, effect, and filter edits preserve or invalidate 
   assert.equal(rows[3].targetElementMissing, true);
 });
 
+test("removing a note filter point keeps its disabled envelope serializable", async (context) => {
+  const module = await loadAutomationModules();
+  context.after(module.cleanup);
+  const song = new module.Song();
+  const doc = makeChangeDocument(song);
+  const instrument = song.channels[0].instruments[0];
+  const target = module.Config.modulationTargets.dictionary.noteFilterAllFreqs;
+  instrument.effects |= 1 << module.EffectType.noteFilter;
+  instrument.noteFilter.reset();
+  instrument.noteFilter.addPoint(module.FilterType.lowPass, 8, 7);
+  instrument.addEnvelope(
+    target.index,
+    0,
+    module.Config.envelopes.dictionary.decay.index,
+    3.25,
+    50,
+    3.75,
+  );
+
+  const point = instrument.noteFilter.controlPoints[0];
+  const deletion = new module.ChangeFilterAddPoint(
+    doc,
+    instrument.noteFilter,
+    point,
+    0,
+    true,
+    true,
+  );
+  assert.equal(instrument.noteFilter.controlPointCount, 0);
+  assert.equal(
+    instrument.envelopes[0].target,
+    module.Config.modulationTargets.dictionary.none.index,
+  );
+  const restored = new module.Song(song.toBinary());
+  assert.equal(restored.channels[0].instruments[0].envelopes[0].a, 50);
+
+  deletion.undo();
+  assert.equal(instrument.noteFilter.controlPointCount, 1);
+  assert.equal(instrument.envelopes[0].target, target.index);
+  deletion.redo();
+  assert.doesNotThrow(() => new module.Song(song.toBinary()));
+});
+
 test("Automation events survive beat stretching, splicing, overflow, and wrap movement", async (context) => {
   const module = await loadAutomationModules();
   context.after(module.cleanup);
