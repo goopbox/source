@@ -16,6 +16,7 @@ export interface ChannelColors extends NamedOption {
   readonly primaryChannel: ColorGradient;
   readonly secondaryNote: ColorGradient;
   readonly primaryNote: ColorGradient;
+  readonly primaryButton: ColorGradient;
 }
 
 export interface SvgGradient {
@@ -131,8 +132,10 @@ const channelCss = (
       `${name}-primary-channel-end: ${end};`,
       `${name}-secondary-note-start: ${mix(start, "#000", 0.75)};`,
       `${name}-secondary-note-end: ${mix(end, "#000", 0.75)};`,
-      `${name}-primary-note-start: ${mix(start, "#fff", 0.45)};`,
-      `${name}-primary-note-end: ${mix(end, "#fff", 0.45)};`,
+      `${name}-primary-note-start: ${start};`,
+      `${name}-primary-note-end: ${end};`,
+      `${name}-primary-button-start: ${mix(start, "#fff", 0.45)};`,
+      `${name}-primary-button-end: ${mix(end, "#fff", 0.45)};`,
     ].join(" ");
   }).join("\n");
 
@@ -290,13 +293,14 @@ export class ColorConfig {
           primaryChannel: gradient("primary-channel"),
           secondaryNote: gradient("secondary-note"),
           primaryNote: gradient("primary-note"),
+          primaryButton: gradient("primary-button"),
         };
       }),
     );
   }
 
   public static cssGradient(colors: ColorGradient): string {
-    return `linear-gradient(90deg, ${colors[0]}, ${colors[1]})`;
+    return `linear-gradient(135deg, ${colors[0]} 0%, ${colors[0]} 60%, ${colors[1]} 100%)`;
   }
 
   public static svgGradient(
@@ -326,8 +330,8 @@ export class ColorConfig {
   public static controlGradient(): SvgGradient {
     const gradient: SvgGradient = this.svgGradient(
       [
-        "var(--channel-primary-note-start)",
-        "var(--channel-primary-note-end)",
+        "var(--channel-primary-button-start)",
+        "var(--channel-primary-button-end)",
       ],
       "userSpaceOnUse",
     );
@@ -344,6 +348,7 @@ export class ColorConfig {
       ["primary-channel", colors.primaryChannel],
       ["secondary-note", colors.secondaryNote],
       ["primary-note", colors.primaryNote],
+      ["primary-button", colors.primaryButton],
     ] as const) {
       container.style.setProperty(`--channel-${name}-start`, gradient[0]);
       container.style.setProperty(`--channel-${name}-end`, gradient[1]);
@@ -352,7 +357,7 @@ export class ColorConfig {
         this.cssGradient(gradient),
       );
     }
-    container.style.color = colors.primaryNote[0];
+    container.style.color = colors.primaryButton[0];
     container.classList.add("channel-colors");
 
     const units: HTMLElement[] = Array.from(

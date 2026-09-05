@@ -2604,7 +2604,7 @@ export class SongEditor {
       for (let i: number = 0; i < Config.operatorCount; i++) {
         const isCarrier: boolean =
           i < Config.algorithms[instrument.algorithm].carrierCount;
-        this._operatorRows[i].style.color = colors.primaryNote[0];
+        this._operatorRows[i].style.color = colors.primaryButton[0];
         this._operatorFrequencyInputs[i].updateValue(
           instrument.operators[i].frequency,
         );
@@ -2795,7 +2795,7 @@ export class SongEditor {
 
     this._instrumentsButtonBar.style.setProperty(
       "--text-color-lit",
-      colors.primaryNote[0],
+      colors.primaryButton[0],
     );
     this._instrumentsButtonBar.style.setProperty(
       "--background-color-lit",

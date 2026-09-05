@@ -118,7 +118,7 @@ input[type="range"]::-moz-range-thumb {
 }
 
 .channel-colors .channel-gradient-unit input[type="range"]::-webkit-slider-thumb {
-    background: var(--channel-primary-note);
+    background: var(--channel-primary-button);
     background-position: var(--channel-gradient-left) 0;
     background-size: var(--channel-gradient-width) 100vh;
     background-repeat: no-repeat;
@@ -126,7 +126,7 @@ input[type="range"]::-moz-range-thumb {
 }
 
 .channel-colors .channel-gradient-unit input[type="range"]::-moz-range-thumb {
-    background: var(--channel-primary-note);
+    background: var(--channel-primary-button);
     background-position: var(--channel-gradient-left) 0;
     background-size: var(--channel-gradient-width) 100vh;
     background-repeat: no-repeat;
@@ -134,7 +134,7 @@ input[type="range"]::-moz-range-thumb {
 }
 
 .channel-colors .channel-gradient-unit input[type="number"] {
-    color: var(--channel-primary-note-start);
+    color: var(--channel-primary-button-start);
 }
 progress {
     -webkit-appearance: none;

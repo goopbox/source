@@ -177,7 +177,7 @@
 
 .channel-colors .channel-gradient-unit .channel-gradient-text {
     color: transparent;
-    background: var(--channel-primary-note);
+    background: var(--channel-primary-button);
     background-position: var(--channel-gradient-left) 0;
     background-size: var(--channel-gradient-width) 100vh;
     background-repeat: no-repeat;
@@ -203,7 +203,7 @@
     overflow: hidden;
     color: transparent;
     white-space: nowrap;
-    background: var(--channel-primary-note);
+    background: var(--channel-primary-button);
     background-position: var(--channel-gradient-left) 0;
     background-size: var(--channel-gradient-width) 100vh;
     background-repeat: no-repeat;
@@ -214,7 +214,7 @@
 }
 
 .channel-colors .channel-gradient-unit :is(button, .effects-menu)::before {
-    background: var(--channel-primary-note);
+    background: var(--channel-primary-button);
     background-position: var(--channel-gradient-left) 0;
     background-size: var(--channel-gradient-width) 100vh;
     background-repeat: no-repeat;
