@@ -200,12 +200,7 @@ export class ColorConfig {
         ["#429bff", "#58bbff"],
         ["#ff9638", "#ffb653"],
         ["#42ffd0", "#62f5b5"],
-        ["#ff487c", "#ff639a"],
-        ["#20c9b7", "#38ddca"],
-        ["#ffba42", "#ff9e42"],
-        ["#5685ff", "#729bff"],
         ["#ff4ca9", "#ff6cbe"],
-        ["#38efbd", "#55ffda"],
         ["#ff793b", "#ff9750"],
         ["#27bdd0", "#3cd7d5"],
         ["#ff5267", "#ff728b"],
@@ -395,8 +390,14 @@ export class ColorConfig {
         const viewBoxWidth: number = svg.viewBox.baseVal.width;
         if (svgBounds.width == 0 || viewBoxWidth == 0) continue;
         const scale: number = viewBoxWidth / svgBounds.width;
-        gradient.setAttribute("x1", String((bounds.left - svgBounds.left) * scale));
-        gradient.setAttribute("x2", String((bounds.right - svgBounds.left) * scale));
+        gradient.setAttribute(
+          "x1",
+          String((bounds.left - svgBounds.left) * scale),
+        );
+        gradient.setAttribute(
+          "x2",
+          String((bounds.right - svgBounds.left) * scale),
+        );
       }
     }
 
@@ -406,7 +407,8 @@ export class ColorConfig {
           child.nodeType != Node.TEXT_NODE ||
           child.textContent == null ||
           child.textContent.trim() == ""
-        ) continue;
+        )
+          continue;
         const text: HTMLSpanElement = HTML.span(
           { class: "channel-gradient-text" },
           child.textContent,
@@ -418,7 +420,8 @@ export class ColorConfig {
     for (const select of container.querySelectorAll("select")) {
       const invalid: boolean = select.classList.contains("invalid-reference");
       select.classList.toggle("channel-gradient-select", !invalid);
-      let text: HTMLSpanElement | undefined = this._selectGradientText.get(select);
+      let text: HTMLSpanElement | undefined =
+        this._selectGradientText.get(select);
       if (text == undefined) {
         text = HTML.span({
           class: "channel-gradient-select-text",
@@ -459,7 +462,8 @@ export class ColorConfig {
     this.makeChannelColors("automation", Config.automationChannelCountMax);
 
   public static getChannelColor(song: Song, channel: number): ChannelColors {
-    if (song.getChannelIsPitch(channel)) return ColorConfig.pitchChannels[channel];
+    if (song.getChannelIsPitch(channel))
+      return ColorConfig.pitchChannels[channel];
     if (song.getChannelIsNoise(channel))
       return ColorConfig.noiseChannels[channel - song.pitchChannelCount];
     return ColorConfig.automationChannels[
