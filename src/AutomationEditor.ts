@@ -1062,7 +1062,7 @@ export class AutomationEditor {
     const creating: boolean = this._drag?.mode == "create";
     this._svgPreview.setAttribute(
       "fill",
-      creating ? "var(--automation-primary-note)" : "none",
+      creating ? this._primaryNoteGradient.paint : "none",
     );
     this._svgPreview.setAttribute("stroke", creating ? "none" : ColorConfig.text);
     const range: AutomationRowSelection | null =
