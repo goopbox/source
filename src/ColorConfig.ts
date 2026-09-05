@@ -334,18 +334,6 @@ export class ColorConfig {
     };
   }
 
-  public static controlGradient(): SvgGradient {
-    const gradient: SvgGradient = this.svgGradient(
-      [
-        "var(--channel-primary-button-start)",
-        "var(--channel-primary-button-end)",
-      ],
-      "userSpaceOnUse",
-    );
-    gradient.definition.classList.add("channel-control-gradient");
-    return gradient;
-  }
-
   public static applyChannelColors(
     container: HTMLElement,
     colors: ChannelColors,
@@ -381,24 +369,6 @@ export class ColorConfig {
       unit.classList.add("channel-gradient-unit");
       unit.style.setProperty("--channel-gradient-left", `${bounds.left}px`);
       unit.style.setProperty("--channel-gradient-width", `${bounds.width}px`);
-      for (const gradient of unit.querySelectorAll<SVGLinearGradientElement>(
-        ".channel-control-gradient",
-      )) {
-        const svg: SVGSVGElement | null = gradient.ownerSVGElement;
-        if (svg == null) continue;
-        const svgBounds: DOMRect = svg.getBoundingClientRect();
-        const viewBoxWidth: number = svg.viewBox.baseVal.width;
-        if (svgBounds.width == 0 || viewBoxWidth == 0) continue;
-        const scale: number = viewBoxWidth / svgBounds.width;
-        gradient.setAttribute(
-          "x1",
-          String((bounds.left - svgBounds.left) * scale),
-        );
-        gradient.setAttribute(
-          "x2",
-          String((bounds.right - svgBounds.left) * scale),
-        );
-      }
     }
 
     for (const button of container.querySelectorAll("button")) {

@@ -1113,7 +1113,7 @@ export class SongEditor {
     title: "SoundFont Instrument",
   });
   private readonly _soundFontSelectRow: HTMLDivElement = div(
-    { class: "selectRow instrument-unlabeled-control" },
+    { class: "selectRow instrument-unlabeled-control asset-select-control" },
     this._soundFontSelect,
   );
   private readonly _soundFontPresetSelectRow: HTMLDivElement = div(
@@ -2095,18 +2095,9 @@ export class SongEditor {
       return;
     }
 
-    this._soundFontPresetSelectRow.style.display = "";
     const presets = this.doc.synth.getSoundFontPresets(selectedId);
-    if (presets == null) {
-      const status = this.doc.synth.getAssetLoadStatus(selectedId);
-      this._soundFontPresetSelect.appendChild(
-        option(
-          { disabled: true },
-          status == "error" ? "Failed to load" : "Loading…",
-        ),
-      );
-      return;
-    }
+    this._soundFontPresetSelectRow.style.display = presets == null ? "none" : "";
+    if (presets == null) return;
     for (const preset of presets)
       this._soundFontPresetSelect.appendChild(
         option({ value: preset.index }, preset.name),
@@ -2131,6 +2122,12 @@ export class SongEditor {
       chipWave?.sampleId != undefined &&
       this.doc.synth.getAssetLoadStatus(chipWave.sampleId) == "loading";
     this._chipWaveSelectRow.classList.toggle("asset-loading", loading);
+    this._soundFontSelectRow.classList.toggle(
+      "asset-loading",
+      instrument?.type == InstrumentType.soundFont &&
+        instrument.soundFontId != null &&
+        this.doc.synth.getAssetLoadStatus(instrument.soundFontId) == "loading",
+    );
   }
 
   private _echoDelayToBeats(value: number): number {
@@ -2574,6 +2571,7 @@ export class SongEditor {
 
     this._syncChipWaveOptions();
     this._syncSoundFontOptions();
+    this._updateAssetLoadingIndicator();
     if (instrument.type == InstrumentType.chip) {
       this._chipWaveEditor.container.style.display = "";
       this._chipWaveEditor.render(
@@ -2581,10 +2579,8 @@ export class SongEditor {
         instrument.chipWaveSettings.pitch,
         instrument.chipWaveSettings.tempo,
       );
-      this._updateAssetLoadingIndicator();
     } else {
       this._chipWaveEditor.container.style.display = "none";
-      this._chipWaveSelectRow.classList.remove("asset-loading");
     }
     if (instrument.type == InstrumentType.soundFont) {
       this._soundFontSelectRow.style.display = "";
@@ -2870,7 +2866,7 @@ export class SongEditor {
     this._instrumentVolumeInput.updateValue(instrument.volume);
     this._addEnvelopeButton.disabled =
       instrument.envelopeCount >= Config.maxEnvelopeCount;
-    ColorConfig.applyChannelColors(this._instrumentSettingsControls, colors);
+    this._instrumentSettingsControls.style.color = colors.primaryButton[0];
 
     // If an interface element was selected, but becomes invisible (e.g. an instrument
     // select menu) just select the editor container so keyboard commands still work.

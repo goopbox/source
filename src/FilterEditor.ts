@@ -19,19 +19,18 @@ export class FilterEditor {
   private readonly _editorWidth: number = 120;
   private readonly _editorHeight: number = 26;
   private readonly _pointRadius: number = 2;
-  private readonly _gradient = ColorConfig.controlGradient();
   private readonly _responsePath: SVGPathElement = SVG.path({
     fill: ColorConfig.uiWidgetBackground,
     "pointer-events": "none",
   });
   //private readonly _octaves: SVGSVGElement = SVG.svg({"pointer-events": "none", overflow: "visible"});
   private readonly _controlPointPath: SVGPathElement = SVG.path({
-    fill: this._gradient.paint,
+    fill: "currentColor",
     "pointer-events": "none",
   });
   private readonly _dottedLinePath: SVGPathElement = SVG.path({
     fill: "none",
-    stroke: this._gradient.paint,
+    stroke: "currentColor",
     "stroke-width": 1,
     "stroke-dasharray": "3, 2",
     "pointer-events": "none",
@@ -50,7 +49,6 @@ export class FilterEditor {
       viewBox: "0 0 " + this._editorWidth + " " + this._editorHeight,
       preserveAspectRatio: "none",
     },
-    SVG.defs(this._gradient.definition),
     this._responsePath,
     //this._octaves,
     this._dottedLinePath,
@@ -58,7 +56,6 @@ export class FilterEditor {
     this._controlPointPath,
   );
   private readonly _label: HTMLDivElement = HTML.div({
-    class: "channel-gradient-text",
     style:
       "position: absolute; bottom: 0; left: 2px; font-size: 8px; line-height: 1; pointer-events: none;",
   });

@@ -217,19 +217,6 @@
     background-repeat: no-repeat;
 }
 
-.channel-colors .instrument-bar .selected-instrument {
-    color: var(--background);
-    background: var(--channel-primary-channel);
-    background-position: var(--channel-gradient-offset, 0px) 0;
-    background-size: var(--channel-gradient-width) 100%;
-    background-repeat: no-repeat;
-}
-
-.channel-colors .instrument-bar .selected-instrument .channel-gradient-text {
-    color: var(--background);
-    background: none;
-}
-
 .groupedSettings :is(.fadeInOut, .filterEditor, .spectrum, .harmonics) > svg {
     background-color: transparent !important;
 }
