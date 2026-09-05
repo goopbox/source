@@ -76,15 +76,26 @@ export class PatternEditor {
     y: "0",
     "pointer-events": "none",
   });
+  private _svgGhostNoteContainer: SVGSVGElement = SVG.svg();
   private _svgNoteContainer: SVGSVGElement = SVG.svg();
   private readonly _hitCanvas: HTMLCanvasElement = HTML.canvas({
     "aria-hidden": "true",
     style: "position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none;",
   });
   private readonly _railCanvas: HTMLCanvasElement = this._hitCanvas.cloneNode() as HTMLCanvasElement;
+  private readonly _ghostHitCanvas: HTMLCanvasElement = this._hitCanvas.cloneNode() as HTMLCanvasElement;
+  private readonly _ghostRailCanvas: HTMLCanvasElement = this._hitCanvas.cloneNode() as HTMLCanvasElement;
+  private readonly _svgGhostEffects: SVGForeignObjectElement = SVG.foreignObject(
+    { width: "100%", height: "100%", "pointer-events": "none" },
+    HTML.div(
+      { style: "position: relative; width: 100%; height: 100%;" },
+      this._ghostRailCanvas,
+      this._ghostHitCanvas,
+    ),
+  );
   private readonly _expandingCanvas: HTMLCanvasElement = HTML.canvas();
   private _hitNotes: { note: Note; pitch: number; offset: number; channel: number; color: string; path: Path2D }[] = [];
-  private _hitCopies: { path: Path2D; time: number }[] = [];
+  private _hitCopies: { path: Path2D; time: number; channel: number }[] = [];
   private _lastHitPosition: number | null = null;
   private _lastHitBar: number = -1;
   private _hitView: string = "";
@@ -112,6 +123,8 @@ export class PatternEditor {
   private readonly _svgContent: SVGGElement = SVG.g(
     this._svgBackground,
     this._selectionRect,
+    this._svgGhostNoteContainer,
+    this._svgGhostEffects,
     this._svgNoteContainer,
     this._svgPreview,
   );
@@ -724,33 +737,26 @@ export class PatternEditor {
   };
 
   private _animateNoteHits(timestamp: number): void {
-    const canvas = this._hitCanvas;
-    const context = canvas.getContext("2d");
-    const railCanvas = this._railCanvas;
-    const railContext = railCanvas.getContext("2d");
+    const mainContext = this._hitCanvas.getContext("2d");
+    const mainRailContext = this._railCanvas.getContext("2d");
+    const ghostContext = this._ghostHitCanvas.getContext("2d");
+    const ghostRailContext = this._ghostRailCanvas.getContext("2d");
     const expandingCanvas = this._expandingCanvas;
     const expandingContext = expandingCanvas.getContext("2d");
-    if (context == null || railContext == null || expandingContext == null) return;
+    if (mainContext == null || mainRailContext == null || ghostContext == null ||
+        ghostRailContext == null || expandingContext == null) return;
     const scale = window.devicePixelRatio;
     const width = Math.round(this._editorWidth * scale);
     const height = Math.round(this._editorHeight * scale);
-    if (canvas.width != width || canvas.height != height) {
-      canvas.width = width;
-      canvas.height = height;
+    for (const context of [mainContext, mainRailContext, ghostContext, ghostRailContext, expandingContext]) {
+      const canvas = context.canvas;
+      if (canvas.width != width || canvas.height != height) {
+        canvas.width = width;
+        canvas.height = height;
+      }
+      context.setTransform(scale, 0, 0, scale, 0, 0);
+      context.clearRect(0, 0, this._editorWidth, this._editorHeight);
     }
-    if (railCanvas.width != width || railCanvas.height != height) {
-      railCanvas.width = width;
-      railCanvas.height = height;
-    }
-    if (expandingCanvas.width != width || expandingCanvas.height != height) {
-      expandingCanvas.width = width;
-      expandingCanvas.height = height;
-    }
-    context.setTransform(scale, 0, 0, scale, 0, 0);
-    railContext.setTransform(scale, 0, 0, scale, 0, 0);
-    expandingContext.setTransform(scale, 0, 0, scale, 0, 0);
-    context.clearRect(0, 0, this._editorWidth, this._editorHeight);
-    railContext.clearRect(0, 0, this._editorWidth, this._editorHeight);
     if (!this.container.isConnected || !this._doc.synth.playing ||
         this._doc.song.getChannelIsAutomation(this._doc.channel) ||
         this._svgPlayhead.getAttribute("display") == "none") {
@@ -767,10 +773,12 @@ export class PatternEditor {
     const x = position * this._partWidth;
     for (const entry of this._hitNotes) {
       const { note, pitch, offset, channel, color, path } = entry;
+      const context = channel == this._doc.channel ? mainContext : ghostContext;
+      const railContext = channel == this._doc.channel ? mainRailContext : ghostRailContext;
       if (this._doc.song.channels[channel].muted ||
           this._doc.song.getPattern(channel, bar) != this._doc.song.getPattern(channel, this._doc.bar + this._barOffset)) continue;
       if (noteWasHit(note.start, note.end, position, previous)) {
-        this._hitCopies.push({ path, time: timestamp });
+        this._hitCopies.push({ path, time: timestamp, channel });
       }
       if (position < note.start || position >= note.end) {
         continue;
@@ -798,8 +806,8 @@ export class PatternEditor {
     }
     this._hitCopies = this._hitCopies.filter((copy) => hitIsActive(timestamp, copy.time));
     expandingContext.fillStyle = expandingContext.strokeStyle = "white";
-    expandingContext.lineJoin = "round";
     for (const copy of this._hitCopies) {
+      const context = copy.channel == this._doc.channel ? mainContext : ghostContext;
       const opacity = hitOpacity(timestamp, copy.time);
       expandingContext.clearRect(0, 0, this._editorWidth, this._editorHeight);
       expandingContext.lineWidth = 3 + (1 - opacity) * 16;
@@ -808,7 +816,7 @@ export class PatternEditor {
       context.globalAlpha = opacity * 0.55;
       context.drawImage(expandingCanvas, 0, 0, width, height, 0, 0, this._editorWidth, this._editorHeight);
     }
-    context.globalAlpha = 1;
+    mainContext.globalAlpha = ghostContext.globalAlpha = 1;
     this._lastHitPosition = position;
     this._lastHitBar = bar;
   }
@@ -1956,6 +1964,9 @@ export class PatternEditor {
       this._hitView = hitView;
     }
     this._hitNotes.length = 0;
+    this._svgGhostNoteContainer = makeEmptyReplacementElement(
+      this._svgGhostNoteContainer,
+    );
     this._svgNoteContainer = makeEmptyReplacementElement(
       this._svgNoteContainer,
     );
@@ -2001,7 +2012,7 @@ export class PatternEditor {
             false,
             octaveOffset,
           );
-          this._svgNoteContainer.appendChild(notePath);
+          this._svgGhostNoteContainer.appendChild(notePath);
           this._cacheHitNote(note, pitch, octaveOffset, channel, notePath);
         }
       }

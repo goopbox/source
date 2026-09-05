@@ -93,22 +93,36 @@ test("note hit effects start immediately, expire after 250ms, repeat on loops, a
   context.after(cleanup);
   const editor = Object.create(PatternEditor.prototype);
   const gradientStops = [];
+  const gradientBounds = [];
+  const railBounds = [];
   const drawing = {
     setTransform() {}, clearRect() {}, fill() {}, stroke() {}, fillRect() {}, drawImage() {},
-    createLinearGradient: () => ({ addColorStop(offset, color) {
-      gradientStops.push([offset, color]);
-    } }),
+    createLinearGradient: (...bounds) => {
+      gradientBounds.push(bounds);
+      return { addColorStop(offset, color) {
+        gradientStops.push([offset, color]);
+      } };
+    },
   };
   const railDrawing = Object.create(drawing);
+  railDrawing.fillRect = (...bounds) => railBounds.push(bounds);
+  const ghostDrawing = Object.create(drawing);
+  const ghostRailDrawing = Object.create(drawing);
+  const expandingDrawing = Object.create(drawing);
+  const canvasFor = (context) => context.canvas = {
+    width: 100, height: 100, getContext: () => context,
+  };
   const pattern = {};
   const note = {
     start: 0, end: 24,
     pins: [{ time: 0, interval: 0, size: 3 }, { time: 24, interval: 0, size: 3 }],
   };
   Object.assign(editor, {
-    _hitCanvas: { width: 100, height: 100, getContext: () => drawing },
-    _railCanvas: { width: 100, height: 100, getContext: () => railDrawing },
-    _expandingCanvas: { width: 100, height: 100, getContext: () => drawing },
+    _hitCanvas: canvasFor(drawing),
+    _railCanvas: canvasFor(railDrawing),
+    _ghostHitCanvas: canvasFor(ghostDrawing),
+    _ghostRailCanvas: canvasFor(ghostRailDrawing),
+    _expandingCanvas: canvasFor(expandingDrawing),
     container: { isConnected: true },
     _svgPlayhead: { getAttribute: () => "" },
     _editorWidth: 100, _editorHeight: 100, _partWidth: 1,
@@ -117,7 +131,7 @@ test("note hit effects start immediately, expire after 250ms, repeat on loops, a
     _hitCopies: [], _lastHitPosition: null, _lastHitBar: -1,
     _barOffset: 0,
     _doc: {
-      bar: 0,
+      bar: 0, channel: 0,
       synth: { playing: true, playhead: 0 },
       song: {
         beatsPerBar: 4, pitchChannelCount: 1, noiseChannelCount: 0,
@@ -131,6 +145,18 @@ test("note hit effects start immediately, expire after 250ms, repeat on loops, a
   assert.equal(editor._hitCopies.length, 1);
   assert.equal(railDrawing.globalAlpha, 0.9, "rail starts at full opacity");
   assert.deepEqual(gradientStops, [[0, "white"], [1, "#88aaff00"]]);
+  assert.deepEqual(gradientBounds, [[0, 0, 48, 0]], "gradient fades only to the right of the playhead");
+  assert.deepEqual(railBounds, [[0, 113, 48, 4]], "rail starts at the playhead");
+  editor._doc.synth.playhead = 0.125;
+  editor._animateNoteHits(125);
+  assert.deepEqual(gradientBounds.at(-1), [12, 0, 60, 0], "gradient follows the playhead");
+  assert.equal(railDrawing.globalAlpha, 0.45, "rail shares the sustain fade");
+  note.pins[1].interval = 4;
+  note.pins[1].size = 10;
+  editor._animateNoteHits(150);
+  assert.deepEqual(railBounds.at(-1), [12, 91.75, 48, 6.5], "gradient follows the pitch and size at the playhead");
+  note.pins[1].interval = 0;
+  note.pins[1].size = 3;
   editor._doc.synth.playhead = 0.3;
   editor._animateNoteHits(249);
   assert.equal(editor._hitCopies.length, 1, "copy survives after the short note ends");
@@ -163,6 +189,41 @@ test("note hit effects start immediately, expire after 250ms, repeat on loops, a
   editor._hitNotes = [];
   editor._cacheHitNote(note, 0, 0, 0, {});
   assert.equal(editor._hitNotes.length, 0, "automation is excluded from the note cache");
+
+  editor._doc.song.getChannelIsAutomation = () => false;
+  editor._doc.song.channels.push({ muted: false });
+  editor._doc.synth.playhead = 0.125;
+  note.start = 0;
+  note.end = 24;
+  const mainPath = {};
+  const ghostPath = {};
+  editor._hitNotes = [
+    { note, pitch: 0, offset: 0, channel: 1, color: "#ffaa88", path: ghostPath },
+    { note, pitch: 0, offset: 0, channel: 0, color: "#88aaff", path: mainPath },
+  ];
+  const calls = new Map();
+  for (const layer of [drawing, railDrawing, ghostDrawing, ghostRailDrawing, expandingDrawing]) {
+    calls.set(layer, { fills: [], rails: 0, copies: 0, clears: 0 });
+    layer.fill = (path) => calls.get(layer).fills.push(path);
+    layer.fillRect = () => calls.get(layer).rails++;
+    layer.drawImage = () => calls.get(layer).copies++;
+    layer.clearRect = () => calls.get(layer).clears++;
+  }
+  expandingDrawing.lineJoin = "miter";
+  editor._animateNoteHits(1000010);
+  assert.deepEqual(calls.get(drawing).fills, [mainPath], "main sustain uses the main layer");
+  assert.deepEqual(calls.get(ghostDrawing).fills, [ghostPath], "ghost sustain uses the ghost layer");
+  assert.equal(calls.get(railDrawing).rails, 1);
+  assert.equal(calls.get(ghostRailDrawing).rails, 1);
+  assert.equal(calls.get(drawing).copies, 1, "main expanding copy uses the main layer");
+  assert.equal(calls.get(ghostDrawing).copies, 1, "ghost expanding copy uses the ghost layer");
+  assert.equal(expandingDrawing.lineJoin, "miter", "expanding copies retain sharp corners");
+  editor._doc.synth.playing = false;
+  editor._animateNoteHits(1000011);
+  for (const layer of [drawing, railDrawing, ghostDrawing, ghostRailDrawing]) {
+    assert.equal(calls.get(layer).clears, 2, "every effect layer clears on stop");
+  }
+  assert.equal(editor._hitCopies.length, 0);
 });
 
 test("hit effect fades start immediately and end after 250ms", async (context) => {
