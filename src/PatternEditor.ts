@@ -15,6 +15,7 @@ import {
 import { SongDocument } from "./SongDocument.js";
 import { HTML, SVG } from "imperative-html/dist/esm/elements-strict.js";
 import { EasyPointers, Point2d } from "./EasyPointers.js";
+import { hitOpacity, noteWasHit } from "./NoteHitAnimation.js";
 import { eventPath } from "./EventEditing.js";
 import { ChangeSequence, UndoableChange } from "./Change.js";
 import {
@@ -76,6 +77,15 @@ export class PatternEditor {
     "pointer-events": "none",
   });
   private _svgNoteContainer: SVGSVGElement = SVG.svg();
+  private readonly _hitCanvas: HTMLCanvasElement = HTML.canvas({
+    "aria-hidden": "true",
+    style: "position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none;",
+  });
+  private _hitNotes: { note: Note; pitch: number; offset: number; channel: number; color: string; path: Path2D }[] = [];
+  private _hitCopies: { path: Path2D; time: number }[] = [];
+  private _lastHitPosition: number | null = null;
+  private _lastHitBar: number = -1;
+  private _hitView: string = "";
   private readonly _svgPlayhead: SVGRectElement = SVG.rect({
     x: "0",
     y: "0",
@@ -119,6 +129,7 @@ export class PatternEditor {
         "height: 100%; overflow:hidden; position: relative; flex-grow: 1; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none;",
     },
     this._svg,
+    this._hitCanvas,
   );
   private readonly _blurSvg: SVGSVGElement | null;
 
@@ -699,8 +710,89 @@ export class PatternEditor {
       this._redrawNotePatterns();
     }
 
+    this._animateNoteHits(_timestamp);
     window.requestAnimationFrame(this._animatePlayhead);
   };
+
+  private _animateNoteHits(timestamp: number): void {
+    const canvas = this._hitCanvas;
+    const context = canvas.getContext("2d");
+    if (context == null) return;
+    const scale = window.devicePixelRatio;
+    const width = Math.round(this._editorWidth * scale);
+    const height = Math.round(this._editorHeight * scale);
+    if (canvas.width != width || canvas.height != height) {
+      canvas.width = width;
+      canvas.height = height;
+    }
+    context.setTransform(scale, 0, 0, scale, 0, 0);
+    context.clearRect(0, 0, this._editorWidth, this._editorHeight);
+    if (!this.container.isConnected || !this._doc.synth.playing ||
+        this._doc.song.getChannelIsAutomation(this._doc.channel) ||
+        this._svgPlayhead.getAttribute("display") == "none") {
+      this._hitCopies.length = 0;
+      this._lastHitPosition = null;
+      this._lastHitBar = -1;
+      return;
+    }
+    const bar = Math.floor(this._doc.synth.playhead);
+    const position = (this._doc.synth.playhead - bar) * this._doc.song.beatsPerBar * Config.partsPerBeat;
+    const previous = bar != this._lastHitBar ||
+      (this._lastHitPosition != null && position < this._lastHitPosition)
+      ? null : this._lastHitPosition;
+    const x = position * this._partWidth;
+    for (const entry of this._hitNotes) {
+      const { note, pitch, offset, channel, color, path } = entry;
+      if (this._doc.song.channels[channel].muted ||
+          this._doc.song.getPattern(channel, bar) != this._doc.song.getPattern(channel, this._doc.bar + this._barOffset)) continue;
+      if (noteWasHit(note.start, note.end, position, previous)) {
+        this._hitCopies.push({ path, time: timestamp });
+      }
+      if (position < note.start || position >= note.end) continue;
+      context.fillStyle = "white";
+      context.globalAlpha = 0.65 * (1 - (position - note.start) / (note.end - note.start));
+      context.fill(path);
+      const time = position - note.start;
+      let pinIndex = 1;
+      while (pinIndex < note.pins.length - 1 && note.pins[pinIndex].time < time) pinIndex++;
+      const left = note.pins[pinIndex - 1];
+      const right = note.pins[pinIndex];
+      const ratio = (time - left.time) / (right.time - left.time);
+      const interval = left.interval + (right.interval - left.interval) * ratio;
+      const size = left.size + (right.size - left.size) * ratio;
+      const y = this._pitchToPixelHeight(pitch + interval - offset);
+      const radius = Math.max(2, this._pitchHeight * size / Config.noteSizeMax / 2);
+      const length = 48;
+      const gradient = context.createLinearGradient(x, 0, x + length, 0);
+      gradient.addColorStop(0, color);
+      gradient.addColorStop(1, "transparent");
+      context.globalAlpha = 0.9;
+      context.fillStyle = gradient;
+      context.fillRect(x, y - radius, length, radius * 2);
+    }
+    this._hitCopies = this._hitCopies.filter((copy) => hitOpacity(timestamp, copy.time) > 0);
+    context.fillStyle = context.strokeStyle = "white";
+    context.lineJoin = "round";
+    for (const copy of this._hitCopies) {
+      const opacity = hitOpacity(timestamp, copy.time);
+      context.globalAlpha = opacity * 0.55;
+      context.lineWidth = 1 + (1 - opacity) * 16;
+      context.fill(copy.path);
+      context.stroke(copy.path);
+    }
+    context.globalAlpha = 1;
+    this._lastHitPosition = position;
+    this._lastHitBar = bar;
+  }
+
+  private _cacheHitNote(note: Note, pitch: number, offset: number, channel: number, path: SVGPathElement): void {
+    if (this._interactive && !this._doc.song.getChannelIsAutomation(channel)) {
+      const colors = ColorConfig.getChannelColor(this._doc.song, channel);
+      const color = getComputedStyle(this.container)
+        .getPropertyValue(`--${colors.name}-primary-note-start`).trim();
+      this._hitNotes.push({ note, pitch, offset, channel, color, path: new Path2D(path.getAttribute("d")!) });
+    }
+  }
 
   private _onPointerLeave = (_event: PointerEvent): void => {
     this._updatePreview();
@@ -1822,6 +1914,13 @@ export class PatternEditor {
   }
 
   private _redrawNotePatterns(): void {
+    const hitView = `${this._doc.channel}:${this._doc.bar + this._barOffset}:${this._editorWidth}:${this._editorHeight}:${this._octaveOffset}`;
+    if (hitView != this._hitView) {
+      this._hitCopies.length = 0;
+      this._lastHitPosition = null;
+      this._hitView = hitView;
+    }
+    this._hitNotes.length = 0;
     this._svgNoteContainer = makeEmptyReplacementElement(
       this._svgNoteContainer,
     );
@@ -1868,6 +1967,7 @@ export class PatternEditor {
             octaveOffset,
           );
           this._svgNoteContainer.appendChild(notePath);
+          this._cacheHitNote(note, pitch, octaveOffset, channel, notePath);
         }
       }
     }
@@ -1923,6 +2023,8 @@ export class PatternEditor {
             this._octaveOffset,
           );
           this._svgNoteContainer.appendChild(notePath);
+
+          this._cacheHitNote(note, pitch, this._octaveOffset, this._doc.channel, notePath);
 
           let indicatorOffset: number = 2;
           if (note.continuesLastPattern) {

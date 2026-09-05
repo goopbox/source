@@ -70,3 +70,74 @@ test("unrestricted and drum pitches do not look up a named scale", async (contex
   editor._doc.song.getChannelIsNoise = () => true;
   assert.equal(editor._snapToPitch(12.8, 0, 10), 10);
 });
+
+test("note hit effects expire after 500ms, repeat on loops, and clear on stop", async (context) => {
+  const { PatternEditor, cleanup } = await loadPatternEditor();
+  context.after(cleanup);
+  const editor = Object.create(PatternEditor.prototype);
+  const drawing = {
+    setTransform() {}, clearRect() {}, fill() {}, stroke() {}, fillRect() {},
+    createLinearGradient: () => ({ addColorStop(_offset, color) {
+      assert.match(color, /^(#[0-9a-f]+|transparent)$/i, "canvas receives resolved colors");
+    } }),
+  };
+  const pattern = {};
+  const note = {
+    start: 0, end: 24,
+    pins: [{ time: 0, interval: 0, size: 3 }, { time: 24, interval: 0, size: 3 }],
+  };
+  Object.assign(editor, {
+    _hitCanvas: { width: 100, height: 100, getContext: () => drawing },
+    container: { isConnected: true },
+    _svgPlayhead: { getAttribute: () => "" },
+    _editorWidth: 100, _editorHeight: 100, _partWidth: 1,
+    _pitchHeight: 10, _pitchCount: 12,
+    _hitNotes: [{ note, pitch: 0, offset: 0, channel: 0, color: "#88aaff", path: {} }],
+    _hitCopies: [], _lastHitPosition: null, _lastHitBar: -1,
+    _barOffset: 0,
+    _doc: {
+      bar: 0,
+      synth: { playing: true, playhead: 0 },
+      song: {
+        beatsPerBar: 4, pitchChannelCount: 1, noiseChannelCount: 0,
+        channels: [{ muted: false }], getPattern: () => pattern,
+        getChannelIsPitch: () => true, getChannelIsNoise: () => false, getChannelIsAutomation: () => false,
+      },
+    },
+  });
+  window.devicePixelRatio = 1;
+  editor._animateNoteHits(0);
+  assert.equal(editor._hitCopies.length, 1);
+  editor._doc.synth.playhead = 0.3;
+  editor._animateNoteHits(499);
+  assert.equal(editor._hitCopies.length, 1, "copy survives after the short note ends");
+  editor._animateNoteHits(500);
+  assert.equal(editor._hitCopies.length, 0);
+  for (let loop = 1; loop <= 1000; loop++) {
+    editor._doc.synth.playhead = loop;
+    editor._animateNoteHits(loop * 1000);
+    assert.equal(editor._hitCopies.length, 1, "looping does not accumulate expired copies");
+  }
+  editor._doc.synth.playing = false;
+  editor._animateNoteHits(1000001);
+  assert.equal(editor._hitCopies.length, 0);
+  assert.equal(editor._lastHitPosition, null);
+  editor._doc.synth.playing = true;
+  editor._doc.song.channels[0].muted = true;
+  editor._animateNoteHits(1000002);
+  assert.equal(editor._hitCopies.length, 0, "muted notes do not flash");
+  editor._doc.song.channels[0].muted = false;
+  editor._lastHitPosition = 0;
+  editor._lastHitBar = 0;
+  note.start = 12;
+  note.end = 13;
+  editor._doc.synth.playhead = 0.2;
+  editor._animateNoteHits(1000003);
+  assert.equal(editor._hitCopies.length, 1, "short hits between frames still flash");
+  editor._doc.song.getChannelIsAutomation = () => true;
+  editor._animateNoteHits(1000004);
+  assert.equal(editor._hitCopies.length, 0, "switching to automation clears effects");
+  editor._hitNotes = [];
+  editor._cacheHitNote(note, 0, 0, 0, {});
+  assert.equal(editor._hitNotes.length, 0, "automation is excluded from the note cache");
+});
