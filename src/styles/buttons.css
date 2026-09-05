@@ -31,7 +31,6 @@ button.reveal-arrow {
     flex-shrink: 0;
     font-size: 8px;
     line-height: 1;
-    transform: translateY(-1px);
 }
 
 .playback-bar-controls {

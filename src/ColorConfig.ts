@@ -437,6 +437,18 @@ export class ColorConfig {
       text.style.width = `${selectBounds.width}px`;
       text.style.height = `${selectBounds.height}px`;
     }
+
+    // Keep backgrounds local to each control so text clipping follows scrolling.
+    for (const element of container.querySelectorAll<HTMLElement>(
+      ".channel-gradient-text, .channel-gradient-select-text, button, .effects-menu",
+    )) {
+      const unit = element.closest<HTMLElement>(".channel-gradient-unit");
+      if (unit == null) continue;
+      element.style.setProperty(
+        "--channel-gradient-offset",
+        `${unit.getBoundingClientRect().left - element.getBoundingClientRect().left}px`,
+      );
+    }
   }
 
   public static readonly pitchChannels: DictionaryArray<ChannelColors> =

@@ -8,6 +8,10 @@
     outline: none;
 }
 
+[hidden] {
+    display: none !important;
+}
+
 html {
     background: var(--background, black);
     color-scheme: dark;

@@ -21,9 +21,8 @@
 .reveal-control > .reveal-arrow {
     position: absolute;
     right: calc(100% + 6px);
-    top: 50%;
+    top: calc(50% - 6px);
     margin-right: 0;
-    transform: translateY(-50%);
 }
 
 .reveal-control > select {
@@ -178,10 +177,9 @@
 .channel-colors .channel-gradient-unit .channel-gradient-text {
     color: transparent;
     background: var(--channel-primary-button);
-    background-position: var(--channel-gradient-left) 0;
-    background-size: var(--channel-gradient-width) 100vh;
+    background-position: var(--channel-gradient-offset, 0px) 0;
+    background-size: var(--channel-gradient-width) 100%;
     background-repeat: no-repeat;
-    background-attachment: fixed;
     background-clip: text;
     -webkit-background-clip: text;
     pointer-events: none;
@@ -204,10 +202,9 @@
     color: transparent;
     white-space: nowrap;
     background: var(--channel-primary-button);
-    background-position: var(--channel-gradient-left) 0;
-    background-size: var(--channel-gradient-width) 100vh;
+    background-position: var(--channel-gradient-offset, 0px) 0;
+    background-size: var(--channel-gradient-width) 100%;
     background-repeat: no-repeat;
-    background-attachment: fixed;
     background-clip: text;
     -webkit-background-clip: text;
     pointer-events: none;
@@ -215,19 +212,17 @@
 
 .channel-colors .channel-gradient-unit :is(button, .effects-menu)::before {
     background: var(--channel-primary-button);
-    background-position: var(--channel-gradient-left) 0;
-    background-size: var(--channel-gradient-width) 100vh;
+    background-position: var(--channel-gradient-offset, 0px) 0;
+    background-size: var(--channel-gradient-width) 100%;
     background-repeat: no-repeat;
-    background-attachment: fixed;
 }
 
 .channel-colors .instrument-bar .selected-instrument {
     color: var(--background);
     background: var(--channel-primary-channel);
-    background-position: var(--channel-gradient-left) 0;
-    background-size: var(--channel-gradient-width) 100vh;
+    background-position: var(--channel-gradient-offset, 0px) 0;
+    background-size: var(--channel-gradient-width) 100%;
     background-repeat: no-repeat;
-    background-attachment: fixed;
 }
 
 .channel-colors .instrument-bar .selected-instrument .channel-gradient-text {
