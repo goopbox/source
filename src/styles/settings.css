@@ -132,11 +132,12 @@
 .settingsGroupTitle > :first-child {
     grid-column: 1 / -1;
     grid-row: 1;
-    text-align: center;
+    justify-self: start;
+    text-align: left;
 }
 
 .settingsGroupTitle.hasAction > :first-child {
-    grid-column: 2;
+    grid-column: 1;
 }
 
 .settingsGroupTitle > :last-child:not(:first-child) {
