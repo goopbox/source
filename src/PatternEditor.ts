@@ -15,7 +15,7 @@ import {
 import { SongDocument } from "./SongDocument.js";
 import { HTML, SVG } from "imperative-html/dist/esm/elements-strict.js";
 import { EasyPointers, Point2d } from "./EasyPointers.js";
-import { hitOpacity, noteWasHit } from "./NoteHitAnimation.js";
+import { hitIsActive, hitOpacity, noteWasHit } from "./NoteHitAnimation.js";
 import { eventPath } from "./EventEditing.js";
 import { ChangeSequence, UndoableChange } from "./Change.js";
 import {
@@ -81,6 +81,8 @@ export class PatternEditor {
     "aria-hidden": "true",
     style: "position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none;",
   });
+  private readonly _railCanvas: HTMLCanvasElement = this._hitCanvas.cloneNode() as HTMLCanvasElement;
+  private readonly _expandingCanvas: HTMLCanvasElement = HTML.canvas();
   private _hitNotes: { note: Note; pitch: number; offset: number; channel: number; color: string; path: Path2D }[] = [];
   private _hitCopies: { path: Path2D; time: number }[] = [];
   private _lastHitPosition: number | null = null;
@@ -112,7 +114,6 @@ export class PatternEditor {
     this._selectionRect,
     this._svgNoteContainer,
     this._svgPreview,
-    this._svgPlayhead,
   );
   private readonly _svg: SVGSVGElement = SVG.svg(
     {
@@ -123,12 +124,20 @@ export class PatternEditor {
     this._svgDefs,
     this._svgContent,
   );
+  private readonly _svgPlayheadOverlay: SVGSVGElement = SVG.svg(
+    {
+      style: "position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none;",
+    },
+    this._svgPlayhead,
+  );
   public readonly container: HTMLDivElement = HTML.div(
     {
       style:
         "height: 100%; overflow:hidden; position: relative; flex-grow: 1; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none;",
     },
     this._svg,
+    this._railCanvas,
+    this._svgPlayheadOverlay,
     this._hitCanvas,
   );
   private readonly _blurSvg: SVGSVGElement | null;
@@ -717,7 +726,11 @@ export class PatternEditor {
   private _animateNoteHits(timestamp: number): void {
     const canvas = this._hitCanvas;
     const context = canvas.getContext("2d");
-    if (context == null) return;
+    const railCanvas = this._railCanvas;
+    const railContext = railCanvas.getContext("2d");
+    const expandingCanvas = this._expandingCanvas;
+    const expandingContext = expandingCanvas.getContext("2d");
+    if (context == null || railContext == null || expandingContext == null) return;
     const scale = window.devicePixelRatio;
     const width = Math.round(this._editorWidth * scale);
     const height = Math.round(this._editorHeight * scale);
@@ -725,8 +738,19 @@ export class PatternEditor {
       canvas.width = width;
       canvas.height = height;
     }
+    if (railCanvas.width != width || railCanvas.height != height) {
+      railCanvas.width = width;
+      railCanvas.height = height;
+    }
+    if (expandingCanvas.width != width || expandingCanvas.height != height) {
+      expandingCanvas.width = width;
+      expandingCanvas.height = height;
+    }
     context.setTransform(scale, 0, 0, scale, 0, 0);
+    railContext.setTransform(scale, 0, 0, scale, 0, 0);
+    expandingContext.setTransform(scale, 0, 0, scale, 0, 0);
     context.clearRect(0, 0, this._editorWidth, this._editorHeight);
+    railContext.clearRect(0, 0, this._editorWidth, this._editorHeight);
     if (!this.container.isConnected || !this._doc.synth.playing ||
         this._doc.song.getChannelIsAutomation(this._doc.channel) ||
         this._svgPlayhead.getAttribute("display") == "none") {
@@ -748,7 +772,9 @@ export class PatternEditor {
       if (noteWasHit(note.start, note.end, position, previous)) {
         this._hitCopies.push({ path, time: timestamp });
       }
-      if (position < note.start || position >= note.end) continue;
+      if (position < note.start || position >= note.end) {
+        continue;
+      }
       context.fillStyle = "white";
       context.globalAlpha = 0.65 * (1 - (position - note.start) / (note.end - note.start));
       context.fill(path);
@@ -763,22 +789,24 @@ export class PatternEditor {
       const y = this._pitchToPixelHeight(pitch + interval - offset);
       const radius = Math.max(2, this._pitchHeight * size / Config.noteSizeMax / 2);
       const length = 48;
-      const gradient = context.createLinearGradient(x, 0, x + length, 0);
-      gradient.addColorStop(0, color);
-      gradient.addColorStop(1, "transparent");
-      context.globalAlpha = 0.9;
-      context.fillStyle = gradient;
-      context.fillRect(x, y - radius, length, radius * 2);
+      const gradient = railContext.createLinearGradient(x, 0, x + length, 0);
+      gradient.addColorStop(0, "white");
+      gradient.addColorStop(1, `${color}00`);
+      railContext.globalAlpha = 0.9 * (1 - (position - note.start) / (note.end - note.start));
+      railContext.fillStyle = gradient;
+      railContext.fillRect(x, y - radius, length, radius * 2);
     }
-    this._hitCopies = this._hitCopies.filter((copy) => hitOpacity(timestamp, copy.time) > 0);
-    context.fillStyle = context.strokeStyle = "white";
-    context.lineJoin = "round";
+    this._hitCopies = this._hitCopies.filter((copy) => hitIsActive(timestamp, copy.time));
+    expandingContext.fillStyle = expandingContext.strokeStyle = "white";
+    expandingContext.lineJoin = "round";
     for (const copy of this._hitCopies) {
       const opacity = hitOpacity(timestamp, copy.time);
+      expandingContext.clearRect(0, 0, this._editorWidth, this._editorHeight);
+      expandingContext.lineWidth = 3 + (1 - opacity) * 16;
+      expandingContext.fill(copy.path);
+      expandingContext.stroke(copy.path);
       context.globalAlpha = opacity * 0.55;
-      context.lineWidth = 1 + (1 - opacity) * 16;
-      context.fill(copy.path);
-      context.stroke(copy.path);
+      context.drawImage(expandingCanvas, 0, 0, width, height, 0, 0, this._editorWidth, this._editorHeight);
     }
     context.globalAlpha = 1;
     this._lastHitPosition = position;
@@ -790,7 +818,14 @@ export class PatternEditor {
       const colors = ColorConfig.getChannelColor(this._doc.song, channel);
       const color = getComputedStyle(this.container)
         .getPropertyValue(`--${colors.name}-primary-note-start`).trim();
-      this._hitNotes.push({ note, pitch, offset, channel, color, path: new Path2D(path.getAttribute("d")!) });
+      this._hitNotes.push({
+        note,
+        pitch,
+        offset,
+        channel,
+        color,
+        path: new Path2D(path.getAttribute("d")!),
+      });
     }
   }
 

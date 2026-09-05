@@ -50,6 +50,23 @@ async function loadPatternEditor() {
   };
 }
 
+async function loadHitAnimation() {
+  const directory = await mkdtemp(
+    join(tmpdir(), "goopbox-hit-animation-test-"),
+  );
+  const outfile = join(directory, "module.mjs");
+  await build({
+    entryPoints: ["src/NoteHitAnimation.ts"],
+    bundle: true,
+    platform: "node",
+    format: "esm",
+    outfile,
+    logLevel: "silent",
+  });
+  const module = await import(pathToFileURL(outfile).href);
+  return { module, cleanup: () => rm(directory, { recursive: true }) };
+}
+
 test("unrestricted and drum pitches do not look up a named scale", async (context) => {
   const { PatternEditor, cleanup } = await loadPatternEditor();
   context.after(cleanup);
@@ -71,16 +88,18 @@ test("unrestricted and drum pitches do not look up a named scale", async (contex
   assert.equal(editor._snapToPitch(12.8, 0, 10), 10);
 });
 
-test("note hit effects expire after 500ms, repeat on loops, and clear on stop", async (context) => {
+test("note hit effects start immediately, expire after 250ms, repeat on loops, and clear on stop", async (context) => {
   const { PatternEditor, cleanup } = await loadPatternEditor();
   context.after(cleanup);
   const editor = Object.create(PatternEditor.prototype);
+  const gradientStops = [];
   const drawing = {
-    setTransform() {}, clearRect() {}, fill() {}, stroke() {}, fillRect() {},
-    createLinearGradient: () => ({ addColorStop(_offset, color) {
-      assert.match(color, /^(#[0-9a-f]+|transparent)$/i, "canvas receives resolved colors");
+    setTransform() {}, clearRect() {}, fill() {}, stroke() {}, fillRect() {}, drawImage() {},
+    createLinearGradient: () => ({ addColorStop(offset, color) {
+      gradientStops.push([offset, color]);
     } }),
   };
+  const railDrawing = Object.create(drawing);
   const pattern = {};
   const note = {
     start: 0, end: 24,
@@ -88,6 +107,8 @@ test("note hit effects expire after 500ms, repeat on loops, and clear on stop", 
   };
   Object.assign(editor, {
     _hitCanvas: { width: 100, height: 100, getContext: () => drawing },
+    _railCanvas: { width: 100, height: 100, getContext: () => railDrawing },
+    _expandingCanvas: { width: 100, height: 100, getContext: () => drawing },
     container: { isConnected: true },
     _svgPlayhead: { getAttribute: () => "" },
     _editorWidth: 100, _editorHeight: 100, _partWidth: 1,
@@ -108,10 +129,12 @@ test("note hit effects expire after 500ms, repeat on loops, and clear on stop", 
   window.devicePixelRatio = 1;
   editor._animateNoteHits(0);
   assert.equal(editor._hitCopies.length, 1);
+  assert.equal(railDrawing.globalAlpha, 0.9, "rail starts at full opacity");
+  assert.deepEqual(gradientStops, [[0, "white"], [1, "#88aaff00"]]);
   editor._doc.synth.playhead = 0.3;
-  editor._animateNoteHits(499);
+  editor._animateNoteHits(249);
   assert.equal(editor._hitCopies.length, 1, "copy survives after the short note ends");
-  editor._animateNoteHits(500);
+  editor._animateNoteHits(250);
   assert.equal(editor._hitCopies.length, 0);
   for (let loop = 1; loop <= 1000; loop++) {
     editor._doc.synth.playhead = loop;
@@ -140,4 +163,15 @@ test("note hit effects expire after 500ms, repeat on loops, and clear on stop", 
   editor._hitNotes = [];
   editor._cacheHitNote(note, 0, 0, 0, {});
   assert.equal(editor._hitNotes.length, 0, "automation is excluded from the note cache");
+});
+
+test("hit effect fades start immediately and end after 250ms", async (context) => {
+  const { module, cleanup } = await loadHitAnimation();
+  context.after(cleanup);
+
+  assert.equal(module.hitOpacity(0, 0), 1);
+  assert.equal(module.hitOpacity(125, 0), 0.5);
+  assert.equal(module.hitIsActive(249, 0), true);
+  assert.equal(module.hitIsActive(250, 0), false);
+  assert.equal(module.hitOpacity(250, 0), 0);
 });
