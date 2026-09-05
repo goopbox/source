@@ -124,16 +124,18 @@ const channelCss = (
 ): string =>
   Array.from({ length: channelCount }, (_, index) => {
     const [start, end] = colors[index % colors.length];
+    const noteStart = mix(start, "#fff", 0.85);
+    const noteEnd = mix(end, "#fff", 0.85);
     const name = `--${type}${index + 1}`;
     return [
       `${name}-secondary-channel-start: ${mix(start, "#000", 0.6)};`,
       `${name}-secondary-channel-end: ${mix(end, "#000", 0.6)};`,
       `${name}-primary-channel-start: ${start};`,
       `${name}-primary-channel-end: ${end};`,
-      `${name}-secondary-note-start: ${mix(start, "#000", 0.75)};`,
-      `${name}-secondary-note-end: ${mix(end, "#000", 0.75)};`,
-      `${name}-primary-note-start: ${start};`,
-      `${name}-primary-note-end: ${end};`,
+      `${name}-secondary-note-start: ${mix(noteStart, "#000", 0.75)};`,
+      `${name}-secondary-note-end: ${mix(noteEnd, "#000", 0.75)};`,
+      `${name}-primary-note-start: ${noteStart};`,
+      `${name}-primary-note-end: ${noteEnd};`,
       `${name}-primary-button-start: ${mix(start, "#fff", 0.45)};`,
       `${name}-primary-button-end: ${mix(end, "#fff", 0.45)};`,
     ].join(" ");
@@ -195,10 +197,20 @@ export class ColorConfig {
       thirdNote: "#2e3663",
       fifthNote: "#224f63",
       pitchChannels: [
-        ["#25f3ff", "#5478ff"],
-        ["#ff9752", "#ff4f9a"],
-        ["#50ffc9", "#b6ff50"],
-        ["#ff98a4", "#ce8bff"],
+        ["#429bff", "#58bbff"],
+        ["#ff9638", "#ffb653"],
+        ["#42ffd0", "#62f5b5"],
+        ["#ff487c", "#ff639a"],
+        ["#20c9b7", "#38ddca"],
+        ["#ffba42", "#ff9e42"],
+        ["#5685ff", "#729bff"],
+        ["#ff4ca9", "#ff6cbe"],
+        ["#38efbd", "#55ffda"],
+        ["#ff793b", "#ff9750"],
+        ["#27bdd0", "#3cd7d5"],
+        ["#ff5267", "#ff728b"],
+        ["#38b7ff", "#58d1ff"],
+        ["#ff66b3", "#ff80a0"],
       ],
       noiseChannels: [
         ["#aaa", "#e0e0e0"],
