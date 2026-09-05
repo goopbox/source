@@ -175,6 +175,66 @@
     visibility: hidden;
 }
 
+.channel-colors .channel-gradient-unit .channel-gradient-text {
+    color: transparent;
+    background: var(--channel-primary-note);
+    background-position: var(--channel-gradient-left) 0;
+    background-size: var(--channel-gradient-width) 100vh;
+    background-repeat: no-repeat;
+    background-attachment: fixed;
+    background-clip: text;
+    -webkit-background-clip: text;
+    pointer-events: none;
+}
+
+.channel-colors .channel-gradient-unit {
+    position: relative;
+}
+
+.channel-colors .channel-gradient-unit .channel-gradient-select {
+    color: transparent;
+}
+
+.channel-colors .channel-gradient-select-text {
+    position: absolute;
+    z-index: 1;
+    align-items: center;
+    padding: 0 var(--button-size) 0 4px;
+    overflow: hidden;
+    color: transparent;
+    white-space: nowrap;
+    background: var(--channel-primary-note);
+    background-position: var(--channel-gradient-left) 0;
+    background-size: var(--channel-gradient-width) 100vh;
+    background-repeat: no-repeat;
+    background-attachment: fixed;
+    background-clip: text;
+    -webkit-background-clip: text;
+    pointer-events: none;
+}
+
+.channel-colors .channel-gradient-unit :is(button, .effects-menu)::before {
+    background: var(--channel-primary-note);
+    background-position: var(--channel-gradient-left) 0;
+    background-size: var(--channel-gradient-width) 100vh;
+    background-repeat: no-repeat;
+    background-attachment: fixed;
+}
+
+.channel-colors .instrument-bar .selected-instrument {
+    color: var(--background);
+    background: var(--channel-primary-channel);
+    background-position: var(--channel-gradient-left) 0;
+    background-size: var(--channel-gradient-width) 100vh;
+    background-repeat: no-repeat;
+    background-attachment: fixed;
+}
+
+.channel-colors .instrument-bar .selected-instrument .channel-gradient-text {
+    color: var(--background);
+    background: none;
+}
+
 .groupedSettings :is(.fadeInOut, .filterEditor, .spectrum, .harmonics) > svg {
     background-color: transparent !important;
 }

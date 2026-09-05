@@ -1,7 +1,11 @@
 // Copyright (c) John Nesky and contributing authors, distributed under the MIT license, see accompanying the LICENSE.md file.
 
 import { Pattern } from "../synth/synth.js";
-import { ColorConfig, type ChannelColors } from "./ColorConfig.js";
+import {
+  ColorConfig,
+  type ChannelColors,
+  type ColorGradient,
+} from "./ColorConfig.js";
 import { SongDocument } from "./SongDocument.js";
 import { HTML } from "imperative-html/dist/esm/elements-strict.js";
 
@@ -19,9 +23,12 @@ export class Box {
     this._label,
   );
   private _renderedIndex: number = -1;
-  constructor(_channel: number, color: string) {
+  constructor(color: ColorGradient) {
     this.container.style.background = ColorConfig.uiWidgetBackground;
-    this._label.style.color = color;
+    this._label.style.setProperty(
+      "--pattern-number-gradient",
+      ColorConfig.cssGradient(color),
+    );
   }
 
   public setWidth(width: number): void {
@@ -32,16 +39,24 @@ export class Box {
     index: number,
     selected: boolean,
     empty: boolean,
-    color: string,
+    color: ColorGradient,
   ): void {
     if (this._renderedIndex != index) {
       this._renderedIndex = index;
       this._text.data = String(index);
     }
-    this._label.style.color = selected ? ColorConfig.background : color;
+    this._label.style.setProperty(
+      "--pattern-number-gradient",
+      selected
+        ? ColorConfig.cssGradient([
+            ColorConfig.background,
+            ColorConfig.background,
+          ])
+        : ColorConfig.cssGradient(color),
+    );
     this._label.classList.toggle("smaller-digits", index >= 100);
     this.container.style.background = selected
-      ? color
+      ? ColorConfig.cssGradient(color)
       : empty
         ? ColorConfig.surface
         : index == 0
@@ -85,7 +100,6 @@ export class ChannelRow {
         x++
       ) {
         const box: Box = new Box(
-          this.index,
           ColorConfig.getChannelColor(this._doc.song, this.index)
             .secondaryChannel,
         );

@@ -2352,13 +2352,9 @@ export class SongEditor {
         this.doc.song,
         this.doc.channel,
       );
-      this._automationEditorRow.style.setProperty(
-        "--automation-primary-note",
-        automationColors.primaryNote,
-      );
-      this._automationEditorRow.style.setProperty(
-        "--automation-secondary-note",
-        automationColors.secondaryNote,
+      ColorConfig.applyChannelColors(
+        this._automationEditorRow,
+        automationColors,
       );
     }
     const editorRow: HTMLDivElement = isAutomationChannel
@@ -2419,6 +2415,10 @@ export class SongEditor {
       this._instrumentSettingsControls.style.display = "none";
       this._automationSettings.container.style.display = "";
       this._automationSettings.render();
+      ColorConfig.applyChannelColors(
+        this._automationSettings.container,
+        ColorConfig.getChannelColor(this.doc.song, this.doc.channel),
+      );
       this._setPrompt(this.doc.prompt);
       if (prefs.autoFollow && !this.doc.synth.playing)
         this.doc.synth.goToBar(this.doc.bar);
@@ -2604,7 +2604,7 @@ export class SongEditor {
       for (let i: number = 0; i < Config.operatorCount; i++) {
         const isCarrier: boolean =
           i < Config.algorithms[instrument.algorithm].carrierCount;
-        this._operatorRows[i].style.color = colors.primaryNote;
+        this._operatorRows[i].style.color = colors.primaryNote[0];
         this._operatorFrequencyInputs[i].updateValue(
           instrument.operators[i].frequency,
         );
@@ -2795,11 +2795,11 @@ export class SongEditor {
 
     this._instrumentsButtonBar.style.setProperty(
       "--text-color-lit",
-      colors.primaryNote,
+      colors.primaryNote[0],
     );
     this._instrumentsButtonBar.style.setProperty(
       "--background-color-lit",
-      colors.primaryChannel,
+      colors.primaryChannel[0],
     );
 
     const maxInstrumentsPerChannel =
@@ -2860,8 +2860,6 @@ export class SongEditor {
       this._highlightedInstrumentIndex = -1;
     }
 
-    this._instrumentSettingsControls.style.color = colors.primaryNote;
-
     if (effectsIncludeEqFilter(instrument.effects)) {
       this._eqFilterRow.style.display = "";
       this._eqFilterEditor.render();
@@ -2872,6 +2870,7 @@ export class SongEditor {
     this._instrumentVolumeInput.updateValue(instrument.volume);
     this._addEnvelopeButton.disabled =
       instrument.envelopeCount >= Config.maxEnvelopeCount;
+    ColorConfig.applyChannelColors(this._instrumentSettingsControls, colors);
 
     // If an interface element was selected, but becomes invisible (e.g. an instrument
     // select menu) just select the editor container so keyboard commands still work.

@@ -350,6 +350,14 @@ export class AutomationEditor {
   private readonly _svgEvents: SVGGElement = SVG.g({
     "pointer-events": "none",
   });
+  private readonly _secondaryNoteGradient = ColorConfig.svgGradient([
+    "var(--channel-secondary-note-start)",
+    "var(--channel-secondary-note-end)",
+  ]);
+  private readonly _primaryNoteGradient = ColorConfig.svgGradient([
+    "var(--channel-primary-note-start)",
+    "var(--channel-primary-note-end)",
+  ]);
   private readonly _svgPreview: SVGPathElement = SVG.path({
     fill: "none",
     stroke: ColorConfig.text,
@@ -358,7 +366,7 @@ export class AutomationEditor {
   });
   private readonly _svgPreviewFill: SVGPathElement = SVG.path({
     display: "none",
-    fill: "var(--automation-secondary-note)",
+    fill: this._secondaryNoteGradient.paint,
     "pointer-events": "none",
   });
   private readonly _svgPlayhead: SVGRectElement = SVG.rect({
@@ -411,7 +419,11 @@ export class AutomationEditor {
         role: _interactive ? "application" : "img",
         "aria-label": _interactive ? "Automation pattern editor" : "Automation pattern preview",
       },
-      SVG.defs(this._backgroundPattern),
+      SVG.defs(
+        this._backgroundPattern,
+        this._secondaryNoteGradient.definition,
+        this._primaryNoteGradient.definition,
+      ),
       this._svgContent,
     );
     this.container = HTML.div(
@@ -1366,11 +1378,11 @@ export class AutomationEditor {
       for (const event of pattern?.automationEvents[rowIndex] ?? []) {
         paths.push(SVG.path({
           d: this._eventPath(event, rowIndex, domain, false),
-          fill: "var(--automation-secondary-note)",
+          fill: this._secondaryNoteGradient.paint,
         }));
         paths.push(SVG.path({
           d: this._eventPath(event, rowIndex, domain, true),
-          fill: "var(--automation-primary-note)",
+          fill: this._primaryNoteGradient.paint,
         }));
       }
     }

@@ -164,6 +164,10 @@ canvas {
     font-size: 20px;
     font-family: sans-serif;
     font-weight: bold;
+    color: transparent;
+    background: var(--pattern-number-gradient);
+    background-clip: text;
+    -webkit-background-clip: text;
 }
 
 .channelBoxLabel.smaller-digits {

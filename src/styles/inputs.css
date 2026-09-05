@@ -116,6 +116,26 @@ input[type="range"]::-moz-range-thumb {
     background: currentColor;
     cursor: pointer;
 }
+
+.channel-colors .channel-gradient-unit input[type="range"]::-webkit-slider-thumb {
+    background: var(--channel-primary-note);
+    background-position: var(--channel-gradient-left) 0;
+    background-size: var(--channel-gradient-width) 100vh;
+    background-repeat: no-repeat;
+    background-attachment: fixed;
+}
+
+.channel-colors .channel-gradient-unit input[type="range"]::-moz-range-thumb {
+    background: var(--channel-primary-note);
+    background-position: var(--channel-gradient-left) 0;
+    background-size: var(--channel-gradient-width) 100vh;
+    background-repeat: no-repeat;
+    background-attachment: fixed;
+}
+
+.channel-colors .channel-gradient-unit input[type="number"] {
+    color: var(--channel-primary-note-start);
+}
 progress {
     -webkit-appearance: none;
     -moz-appearance: none;

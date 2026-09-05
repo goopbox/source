@@ -12,20 +12,21 @@ import { ChangeFadeInOut } from "./changes.js";
 export class FadeInOutEditor {
   private readonly _editorWidth: number = 120;
   private readonly _editorHeight: number = 26;
+  private readonly _gradient = ColorConfig.controlGradient();
   private readonly _fadeCurve: SVGPathElement = SVG.path({
     fill: ColorConfig.uiWidgetBackground,
     "pointer-events": "none",
   });
   private readonly _dottedLinePath: SVGPathElement = SVG.path({
     fill: "none",
-    stroke: "currentColor",
+    stroke: this._gradient.paint,
     "stroke-width": 1,
     "stroke-dasharray": "3, 2",
     "pointer-events": "none",
   });
   private readonly _controlCurve: SVGPathElement = SVG.path({
     fill: "none",
-    stroke: "currentColor",
+    stroke: this._gradient.paint,
     "stroke-width": 2,
     "pointer-events": "none",
   });
@@ -37,6 +38,7 @@ export class FadeInOutEditor {
       viewBox: "0 0 " + this._editorWidth + " " + this._editorHeight,
       preserveAspectRatio: "none",
     },
+    SVG.defs(this._gradient.definition),
     this._fadeCurve,
     this._dottedLinePath,
     this._controlCurve,

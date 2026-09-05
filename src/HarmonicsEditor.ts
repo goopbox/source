@@ -12,6 +12,7 @@ import { ChangeHarmonics } from "./changes.js";
 export class HarmonicsEditor {
   private readonly _editorWidth: number = 120;
   private readonly _editorHeight: number = 26;
+  private readonly _gradient = ColorConfig.controlGradient();
   private readonly _octaves: SVGSVGElement = SVG.svg({
     "pointer-events": "none",
   });
@@ -20,7 +21,7 @@ export class HarmonicsEditor {
   });
   private readonly _curve: SVGPathElement = SVG.path({
     fill: "none",
-    stroke: "currentColor",
+    stroke: this._gradient.paint,
     "stroke-width": 2,
     "pointer-events": "none",
   });
@@ -36,6 +37,7 @@ export class HarmonicsEditor {
       viewBox: "0 0 " + this._editorWidth + " " + this._editorHeight,
       preserveAspectRatio: "none",
     },
+    SVG.defs(this._gradient.definition),
     this._octaves,
     this._fifths,
     this._curve,
@@ -88,7 +90,7 @@ export class HarmonicsEditor {
     }
     for (let i: number = 0; i < 4; i++) {
       const rect: SVGRectElement = SVG.rect({
-        fill: "currentColor",
+        fill: this._gradient.paint,
         x: this._editorWidth - i * 2 - 1,
         y: 0,
         width: 1,

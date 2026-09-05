@@ -7,13 +7,20 @@ import {
   toNameMap,
 } from "../synth/SynthConfig.js";
 import { Song } from "../synth/synth.js";
-import { HTML } from "imperative-html/dist/esm/elements-strict.js";
+import { HTML, SVG } from "imperative-html/dist/esm/elements-strict.js";
+
+export type ColorGradient = readonly [start: string, end: string];
 
 export interface ChannelColors extends NamedOption {
-  readonly secondaryChannel: string;
-  readonly primaryChannel: string;
-  readonly secondaryNote: string;
-  readonly primaryNote: string;
+  readonly secondaryChannel: ColorGradient;
+  readonly primaryChannel: ColorGradient;
+  readonly secondaryNote: ColorGradient;
+  readonly primaryNote: ColorGradient;
+}
+
+export interface SvgGradient {
+  readonly definition: SVGLinearGradientElement;
+  readonly paint: string;
 }
 
 interface Theme {
@@ -29,9 +36,9 @@ interface Theme {
   readonly tonic: string;
   readonly thirdNote: string;
   readonly fifthNote: string;
-  readonly pitchChannels: readonly string[];
-  readonly noiseChannels: readonly string[];
-  readonly automationChannels: readonly string[];
+  readonly pitchChannels: readonly ColorGradient[];
+  readonly noiseChannels: readonly ColorGradient[];
+  readonly automationChannels: readonly ColorGradient[];
 }
 
 const mix = (first: string, second: string, firstWeight: number): string => {
@@ -111,13 +118,22 @@ const mix = (first: string, second: string, firstWeight: number): string => {
 
 const channelCss = (
   type: string,
-  colors: readonly string[],
+  colors: readonly ColorGradient[],
   channelCount: number,
 ): string =>
   Array.from({ length: channelCount }, (_, index) => {
-    const color = colors[index % colors.length];
+    const [start, end] = colors[index % colors.length];
     const name = `--${type}${index + 1}`;
-    return `${name}-secondary-channel: ${mix(color, "#000", 0.6)}; ${name}-primary-channel: ${color}; ${name}-secondary-note: ${mix(color, "#000", 0.75)}; ${name}-primary-note: ${mix(color, "#fff", 0.45)};`;
+    return [
+      `${name}-secondary-channel-start: ${mix(start, "#000", 0.6)};`,
+      `${name}-secondary-channel-end: ${mix(end, "#000", 0.6)};`,
+      `${name}-primary-channel-start: ${start};`,
+      `${name}-primary-channel-end: ${end};`,
+      `${name}-secondary-note-start: ${mix(start, "#000", 0.75)};`,
+      `${name}-secondary-note-end: ${mix(end, "#000", 0.75)};`,
+      `${name}-primary-note-start: ${mix(start, "#fff", 0.45)};`,
+      `${name}-primary-note-end: ${mix(end, "#fff", 0.45)};`,
+    ].join(" ");
   }).join("\n");
 
 const themeCss = (theme: Theme): { css: string; widgetBackground: string } => {
@@ -155,6 +171,12 @@ const themeCss = (theme: Theme): { css: string; widgetBackground: string } => {
 };
 
 export class ColorConfig {
+  private static _nextGradientId: number = 0;
+  private static readonly _selectGradientText: WeakMap<
+    HTMLSelectElement,
+    HTMLSpanElement
+  > = new WeakMap();
+
   public static readonly themes: { readonly [name: string]: Theme } = {
     "GoopBox Dark": {
       background: "#03040f",
@@ -169,9 +191,25 @@ export class ColorConfig {
       tonic: "#3e588c",
       thirdNote: "#2e3663",
       fifthNote: "#224f63",
-      pitchChannels: ["#25f3ff", "#ff9752", "#50ffc9", "#ff98a4"],
-      noiseChannels: ["#aaa", "#da7", "#7ad", "#af82d2", "#a2bb77"],
-      automationChannels: ["#e875ff", "#ff6fae", "#9f8cff", "#65cfff"],
+      pitchChannels: [
+        ["#25f3ff", "#5478ff"],
+        ["#ff9752", "#ff4f9a"],
+        ["#50ffc9", "#b6ff50"],
+        ["#ff98a4", "#ce8bff"],
+      ],
+      noiseChannels: [
+        ["#aaa", "#e0e0e0"],
+        ["#da7", "#f0d35f"],
+        ["#7ad", "#75e0cf"],
+        ["#af82d2", "#e879c1"],
+        ["#a2bb77", "#62c596"],
+      ],
+      automationChannels: [
+        ["#e875ff", "#7c8cff"],
+        ["#ff6fae", "#ff9a5f"],
+        ["#9f8cff", "#59d4ff"],
+        ["#65cfff", "#58ffc3"],
+      ],
     },
     "BeepBox Dark": {
       background: "#000",
@@ -187,19 +225,30 @@ export class ColorConfig {
       thirdNote: "#444",
       fifthNote: "#468",
       pitchChannels: [
-        "#25f3ff",
-        "#ffff25",
-        "#ff9752",
-        "#50ff50",
-        "#ff90ff",
-        "#a0a0ff",
-        "#deff25",
-        "#ff98a4",
-        "#50ffc9",
-        "#ce8bff",
+        ["#25f3ff", "#25f3ff"],
+        ["#ffff25", "#ffff25"],
+        ["#ff9752", "#ff9752"],
+        ["#50ff50", "#50ff50"],
+        ["#ff90ff", "#ff90ff"],
+        ["#a0a0ff", "#a0a0ff"],
+        ["#deff25", "#deff25"],
+        ["#ff98a4", "#ff98a4"],
+        ["#50ffc9", "#50ffc9"],
+        ["#ce8bff", "#ce8bff"],
       ],
-      noiseChannels: ["#aaa", "#da7", "#7ad", "#af82d2", "#a2bb77"],
-      automationChannels: ["#e875ff", "#ff6fae", "#9f8cff", "#65cfff"],
+      noiseChannels: [
+        ["#aaa", "#aaa"],
+        ["#da7", "#da7"],
+        ["#7ad", "#7ad"],
+        ["#af82d2", "#af82d2"],
+        ["#a2bb77", "#a2bb77"],
+      ],
+      automationChannels: [
+        ["#e875ff", "#e875ff"],
+        ["#ff6fae", "#ff6fae"],
+        ["#9f8cff", "#9f8cff"],
+        ["#65cfff", "#65cfff"],
+      ],
     },
   };
 
@@ -231,15 +280,146 @@ export class ColorConfig {
     return toNameMap(
       Array.from({ length: channelCount }, (_, index) => {
         const name = `${type}${index + 1}`;
+        const gradient = (purpose: string): ColorGradient => [
+          `var(--${name}-${purpose}-start)`,
+          `var(--${name}-${purpose}-end)`,
+        ];
         return {
           name,
-          secondaryChannel: `var(--${name}-secondary-channel)`,
-          primaryChannel: `var(--${name}-primary-channel)`,
-          secondaryNote: `var(--${name}-secondary-note)`,
-          primaryNote: `var(--${name}-primary-note)`,
+          secondaryChannel: gradient("secondary-channel"),
+          primaryChannel: gradient("primary-channel"),
+          secondaryNote: gradient("secondary-note"),
+          primaryNote: gradient("primary-note"),
         };
       }),
     );
+  }
+
+  public static cssGradient(colors: ColorGradient): string {
+    return `linear-gradient(90deg, ${colors[0]}, ${colors[1]})`;
+  }
+
+  public static svgGradient(
+    colors: ColorGradient,
+    gradientUnits: "objectBoundingBox" | "userSpaceOnUse" = "objectBoundingBox",
+    x1: string = "0",
+    x2: string = gradientUnits == "objectBoundingBox" ? "1" : "120",
+  ): SvgGradient {
+    const id: string = `channelGradient${this._nextGradientId++}`;
+    return {
+      definition: SVG.linearGradient(
+        {
+          id,
+          gradientUnits,
+          x1,
+          y1: "0",
+          x2,
+          y2: "0",
+        },
+        SVG.stop({ offset: "0", "stop-color": colors[0] }),
+        SVG.stop({ offset: "1", "stop-color": colors[1] }),
+      ),
+      paint: `url(#${id})`,
+    };
+  }
+
+  public static controlGradient(): SvgGradient {
+    const gradient: SvgGradient = this.svgGradient(
+      [
+        "var(--channel-primary-note-start)",
+        "var(--channel-primary-note-end)",
+      ],
+      "userSpaceOnUse",
+    );
+    gradient.definition.classList.add("channel-control-gradient");
+    return gradient;
+  }
+
+  public static applyChannelColors(
+    container: HTMLElement,
+    colors: ChannelColors,
+  ): void {
+    for (const [name, gradient] of [
+      ["secondary-channel", colors.secondaryChannel],
+      ["primary-channel", colors.primaryChannel],
+      ["secondary-note", colors.secondaryNote],
+      ["primary-note", colors.primaryNote],
+    ] as const) {
+      container.style.setProperty(`--channel-${name}-start`, gradient[0]);
+      container.style.setProperty(`--channel-${name}-end`, gradient[1]);
+      container.style.setProperty(
+        `--channel-${name}`,
+        this.cssGradient(gradient),
+      );
+    }
+    container.style.color = colors.primaryNote[0];
+    container.classList.add("channel-colors");
+
+    const units: HTMLElement[] = Array.from(
+      container.querySelectorAll<HTMLElement>(
+        ".selectRow, .instrumentActionRow, .instrument-bar, .settingsGroupTitle, .envelope-row, .envelope-parameter",
+      ),
+    );
+    for (const child of container.children) {
+      if (child instanceof HTMLButtonElement) units.push(child);
+    }
+    for (const unit of units) {
+      const bounds: DOMRect = unit.getBoundingClientRect();
+      if (bounds.width == 0) continue;
+      unit.classList.add("channel-gradient-unit");
+      unit.style.setProperty("--channel-gradient-left", `${bounds.left}px`);
+      unit.style.setProperty("--channel-gradient-width", `${bounds.width}px`);
+      for (const gradient of unit.querySelectorAll<SVGLinearGradientElement>(
+        ".channel-control-gradient",
+      )) {
+        const svg: SVGSVGElement | null = gradient.ownerSVGElement;
+        if (svg == null) continue;
+        const svgBounds: DOMRect = svg.getBoundingClientRect();
+        const viewBoxWidth: number = svg.viewBox.baseVal.width;
+        if (svgBounds.width == 0 || viewBoxWidth == 0) continue;
+        const scale: number = viewBoxWidth / svgBounds.width;
+        gradient.setAttribute("x1", String((bounds.left - svgBounds.left) * scale));
+        gradient.setAttribute("x2", String((bounds.right - svgBounds.left) * scale));
+      }
+    }
+
+    for (const button of container.querySelectorAll("button")) {
+      for (const child of Array.from(button.childNodes)) {
+        if (
+          child.nodeType != Node.TEXT_NODE ||
+          child.textContent == null ||
+          child.textContent.trim() == ""
+        ) continue;
+        const text: HTMLSpanElement = HTML.span(
+          { class: "channel-gradient-text" },
+          child.textContent,
+        );
+        button.replaceChild(text, child);
+      }
+    }
+
+    for (const select of container.querySelectorAll("select")) {
+      const invalid: boolean = select.classList.contains("invalid-reference");
+      select.classList.toggle("channel-gradient-select", !invalid);
+      let text: HTMLSpanElement | undefined = this._selectGradientText.get(select);
+      if (text == undefined) {
+        text = HTML.span({
+          class: "channel-gradient-select-text",
+          "aria-hidden": "true",
+        });
+        this._selectGradientText.set(select, text);
+        select.parentElement!.insertBefore(text, select);
+      }
+      text.style.display = invalid ? "none" : "flex";
+      text.textContent = select.selectedOptions[0]?.textContent ?? "";
+      text.style.opacity = select.disabled ? "0.5" : "";
+      const hostBounds: DOMRect = select.parentElement!.getBoundingClientRect();
+      const selectBounds: DOMRect = select.getBoundingClientRect();
+      text.style.left = `${selectBounds.left - hostBounds.left}px`;
+      text.style.top = `${selectBounds.top - hostBounds.top}px`;
+      text.style.width = `${selectBounds.width}px`;
+      text.style.height = `${selectBounds.height}px`;
+    }
   }
 
   public static readonly pitchChannels: DictionaryArray<ChannelColors> =

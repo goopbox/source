@@ -12,6 +12,7 @@ import { ChangeSpectrum } from "./changes.js";
 export class SpectrumEditor {
   private readonly _editorWidth: number = 120;
   private readonly _editorHeight: number = 26;
+  private readonly _gradient = ColorConfig.controlGradient();
   private readonly _fill: SVGPathElement = SVG.path({
     fill: ColorConfig.uiWidgetBackground,
     "pointer-events": "none",
@@ -24,12 +25,12 @@ export class SpectrumEditor {
   });
   private readonly _curve: SVGPathElement = SVG.path({
     fill: "none",
-    stroke: "currentColor",
+    stroke: this._gradient.paint,
     "stroke-width": 2,
     "pointer-events": "none",
   });
   private readonly _arrow: SVGPathElement = SVG.path({
-    fill: "currentColor",
+    fill: this._gradient.paint,
     "pointer-events": "none",
   });
   private readonly _svg: SVGSVGElement = SVG.svg(
@@ -40,6 +41,7 @@ export class SpectrumEditor {
       viewBox: "0 0 " + this._editorWidth + " " + this._editorHeight,
       preserveAspectRatio: "none",
     },
+    SVG.defs(this._gradient.definition),
     this._fill,
     this._octaves,
     this._fifths,

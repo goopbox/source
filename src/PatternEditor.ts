@@ -2,7 +2,7 @@
 
 import { type Chord, type Transition, Config } from "../synth/SynthConfig.js";
 import { prettyNumber } from "./EditorConfig.js";
-import { ColorConfig } from "./ColorConfig.js";
+import { ColorConfig, type ColorGradient } from "./ColorConfig.js";
 import {
   Event,
   type EventPoint,
@@ -65,6 +65,11 @@ export class PatternEditor {
     y: "0",
     patternUnits: "userSpaceOnUse",
   });
+  private readonly _svgDefs: SVGDefsElement = SVG.defs(
+    this._svgNoteBackground,
+    this._svgDrumBackground,
+  );
+  private readonly _svgGradients: Map<ColorGradient, string> = new Map();
   private readonly _svgBackground: SVGRectElement = SVG.rect({
     x: "0",
     y: "0",
@@ -105,7 +110,7 @@ export class PatternEditor {
       width: "100%",
       height: "100%",
     },
-    SVG.defs(this._svgNoteBackground, this._svgDrumBackground),
+    this._svgDefs,
     this._svgContent,
   );
   public readonly container: HTMLDivElement = HTML.div(
@@ -240,6 +245,16 @@ export class PatternEditor {
     return this._doc.song.getChannelIsNoise(this._doc.channel)
       ? Config.drumCount - 1
       : Config.maxPitch;
+  }
+
+  private _getGradientPaint(colors: ColorGradient): string {
+    let paint: string | undefined = this._svgGradients.get(colors);
+    if (paint != undefined) return paint;
+    const gradient = ColorConfig.svgGradient(colors);
+    this._svgDefs.appendChild(gradient.definition);
+    paint = gradient.paint;
+    this._svgGradients.set(colors, paint);
+    return paint;
   }
 
   private _getMaxDivision(): number {
@@ -1845,7 +1860,9 @@ export class PatternEditor {
           const notePath: SVGPathElement = SVG.path();
           notePath.setAttribute(
             "fill",
-            ColorConfig.getChannelColor(this._doc.song, channel).secondaryNote,
+            this._getGradientPaint(
+              ColorConfig.getChannelColor(this._doc.song, channel).secondaryNote,
+            ),
           );
           notePath.setAttribute("pointer-events", "none");
           this._drawNote(
@@ -1879,8 +1896,10 @@ export class PatternEditor {
           let notePath: SVGPathElement = SVG.path();
           notePath.setAttribute(
             "fill",
-            ColorConfig.getChannelColor(this._doc.song, this._doc.channel)
-              .secondaryNote,
+            this._getGradientPaint(
+              ColorConfig.getChannelColor(this._doc.song, this._doc.channel)
+                .secondaryNote,
+            ),
           );
           notePath.setAttribute("pointer-events", "none");
           this._drawNote(
@@ -1895,8 +1914,10 @@ export class PatternEditor {
           notePath = SVG.path();
           notePath.setAttribute(
             "fill",
-            ColorConfig.getChannelColor(this._doc.song, this._doc.channel)
-              .primaryNote,
+            this._getGradientPaint(
+              ColorConfig.getChannelColor(this._doc.song, this._doc.channel)
+                .primaryNote,
+            ),
           );
           notePath.setAttribute("pointer-events", "none");
           this._drawNote(
