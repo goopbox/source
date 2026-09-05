@@ -156,7 +156,6 @@ export class PatternEditor {
   private _lastChangeWasPatternSelection: boolean = false;
   private _cursor: PatternCursor = new PatternCursor();
   private _pattern: Pattern | null = null;
-  private _playheadX: number = 0.0;
   private _octaveOffset: number = 0;
   private _renderedWidth: number = -1;
   private _renderedHeight: number = -1;
@@ -670,14 +669,9 @@ export class PatternEditor {
     ) {
       this._svgPlayhead.setAttribute("display", "");
       const modPlayhead: number = this._doc.synth.playhead - playheadBar;
-      if (Math.abs(modPlayhead - this._playheadX) > 0.1) {
-        this._playheadX = modPlayhead;
-      } else {
-        this._playheadX += (modPlayhead - this._playheadX) * 0.2;
-      }
       this._svgPlayhead.setAttribute(
         "x",
-        "" + prettyNumber(this._playheadX * this._editorWidth - 2),
+        "" + prettyNumber(modPlayhead * this._editorWidth - 2),
       );
     } else {
       this._svgPlayhead.setAttribute("display", "none");

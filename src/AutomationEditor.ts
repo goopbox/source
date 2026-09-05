@@ -388,7 +388,6 @@ export class AutomationEditor {
   private _mouseY: number = -1;
   private _pointerPresent: boolean = false;
   private _lastMousePart: number = 0;
-  private _playheadX: number = 0;
 
   public constructor(
     private readonly _doc: SongDocument,
@@ -1126,11 +1125,9 @@ export class AutomationEditor {
     ) {
       this._svgPlayhead.setAttribute("display", "");
       const target: number = this._doc.synth.playhead - playheadBar;
-      if (Math.abs(target - this._playheadX) > 0.1) this._playheadX = target;
-      else this._playheadX += (target - this._playheadX) * 0.2;
       this._svgPlayhead.setAttribute(
         "x",
-        prettyNumber(this._playheadX * this._editorWidth - 2),
+        prettyNumber(target * this._editorWidth - 2),
       );
     } else {
       this._svgPlayhead.setAttribute("display", "none");
