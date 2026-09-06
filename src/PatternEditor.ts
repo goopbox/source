@@ -11,6 +11,7 @@ import {
   makeNotePin,
   Pattern,
   Instrument,
+  Synth,
 } from "../synth/synth.js";
 import { SongDocument } from "./SongDocument.js";
 import { HTML, SVG } from "imperative-html/dist/esm/elements-strict.js";
@@ -768,7 +769,8 @@ export class PatternEditor {
       const context = channel == this._doc.channel ? mainContext : ghostContext;
       if (this._doc.song.channels[channel].muted ||
           this._doc.song.getPattern(channel, bar) != this._doc.song.getPattern(channel, this._doc.bar + this._barOffset)) continue;
-      if (noteWasHit(note.start, note.end, position, previous)) {
+      if (!this._noteContinuesFromPreviousBar(note, channel, bar) &&
+          noteWasHit(note.start, note.end, position, previous)) {
         this._hitCopies.push({ path, time: timestamp, channel });
       }
       if (position < note.start || position >= note.end) {
@@ -793,6 +795,20 @@ export class PatternEditor {
     mainContext.globalAlpha = ghostContext.globalAlpha = 1;
     this._lastHitPosition = position;
     this._lastHitBar = bar;
+  }
+
+  private _noteContinuesFromPreviousBar(note: Note, channel: number, bar: number): boolean {
+    if (!note.continuesLastPattern || this._lastHitBar < 0 || this._lastHitBar == bar) return false;
+    const song = this._doc.song;
+    const followsPreviousBar = bar == this._lastHitBar + 1;
+    const followsLoopEnd = bar == song.loopStart &&
+      this._lastHitBar == song.loopStart + song.loopLength - 1;
+    if (!followsPreviousBar && !followsLoopEnd) return false;
+    const previousPattern = song.getPattern(channel, this._lastHitBar);
+    const previousNote = previousPattern?.notes.at(-1);
+    return previousNote != null &&
+      previousNote.end == song.beatsPerBar * Config.partsPerBeat &&
+      Synth.adjacentNotesHaveMatchingPitches(previousNote, note);
   }
 
   private _cacheHitNote(note: Note, pitch: number, offset: number, channel: number, path: SVGPathElement): void {

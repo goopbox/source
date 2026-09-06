@@ -101,9 +101,10 @@ test("note hit effects start immediately, expire after 250ms, repeat on loops, a
   const canvasFor = (context) => context.canvas = {
     width: 100, height: 100, getContext: () => context,
   };
-  const pattern = {};
+  const pattern = { notes: [] };
   const note = {
     start: 0, end: 24,
+    pitches: [0],
     pins: [{ time: 0, interval: 0, size: 3 }, { time: 24, interval: 0, size: 3 }],
   };
   Object.assign(editor, {
@@ -142,6 +143,20 @@ test("note hit effects start immediately, expire after 250ms, repeat on loops, a
   assert.equal(editor._hitCopies.length, 1, "copy survives after the short note ends");
   editor._animateNoteHits(250);
   assert.equal(editor._hitCopies.length, 0);
+  note.continuesLastPattern = true;
+  editor._doc.synth.playhead = 1;
+  editor._animateNoteHits(1000);
+  assert.equal(editor._hitCopies.length, 1, "a stale continuation flag still produces a hit");
+  pattern.notes = [{
+    end: 96,
+    pitches: [0],
+    pins: [{ interval: 0 }],
+  }];
+  editor._lastHitBar = 0;
+  editor._animateNoteHits(1250);
+  assert.equal(editor._hitCopies.length, 0, "a valid tie from the previous bar does not hit again");
+  note.continuesLastPattern = false;
+  editor._lastHitBar = 0;
   for (let loop = 1; loop <= 1000; loop++) {
     editor._doc.synth.playhead = loop;
     editor._animateNoteHits(loop * 1000);
