@@ -761,9 +761,7 @@ export class PatternEditor {
     }
     const bar = Math.floor(this._doc.synth.playhead);
     const position = (this._doc.synth.playhead - bar) * this._doc.song.beatsPerBar * Config.partsPerBeat;
-    const previous = bar != this._lastHitBar ||
-      (this._lastHitPosition != null && position < this._lastHitPosition)
-      ? null : this._lastHitPosition;
+    const previous = bar != this._lastHitBar ? null : this._lastHitPosition;
     for (const entry of this._hitNotes) {
       const { note, channel, path } = entry;
       const context = channel == this._doc.channel ? mainContext : ghostContext;

@@ -133,6 +133,9 @@ test("note hit effects start immediately, expire after 250ms, repeat on loops, a
   assert.equal(editor._hitCopies.length, 1);
   editor._doc.synth.playhead = 0.125;
   editor._animateNoteHits(125);
+  editor._doc.synth.playhead = 0.12;
+  editor._animateNoteHits(130);
+  assert.equal(editor._hitCopies.length, 1, "a backward playhead correction does not repeat an active note hit");
   note.pins[1].interval = 4;
   note.pins[1].size = 10;
   editor._animateNoteHits(150);
