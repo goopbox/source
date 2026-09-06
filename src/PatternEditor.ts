@@ -82,14 +82,11 @@ export class PatternEditor {
     "aria-hidden": "true",
     style: "position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none;",
   });
-  private readonly _railCanvas: HTMLCanvasElement = this._hitCanvas.cloneNode() as HTMLCanvasElement;
   private readonly _ghostHitCanvas: HTMLCanvasElement = this._hitCanvas.cloneNode() as HTMLCanvasElement;
-  private readonly _ghostRailCanvas: HTMLCanvasElement = this._hitCanvas.cloneNode() as HTMLCanvasElement;
   private readonly _svgGhostEffects: SVGForeignObjectElement = SVG.foreignObject(
     { width: "100%", height: "100%", "pointer-events": "none" },
     HTML.div(
       { style: "position: relative; width: 100%; height: 100%;" },
-      this._ghostRailCanvas,
       this._ghostHitCanvas,
     ),
   );
@@ -149,7 +146,6 @@ export class PatternEditor {
         "height: 100%; overflow:hidden; position: relative; flex-grow: 1; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none;",
     },
     this._svg,
-    this._railCanvas,
     this._svgPlayheadOverlay,
     this._hitCanvas,
   );
@@ -738,17 +734,14 @@ export class PatternEditor {
 
   private _animateNoteHits(timestamp: number): void {
     const mainContext = this._hitCanvas.getContext("2d");
-    const mainRailContext = this._railCanvas.getContext("2d");
     const ghostContext = this._ghostHitCanvas.getContext("2d");
-    const ghostRailContext = this._ghostRailCanvas.getContext("2d");
     const expandingCanvas = this._expandingCanvas;
     const expandingContext = expandingCanvas.getContext("2d");
-    if (mainContext == null || mainRailContext == null || ghostContext == null ||
-        ghostRailContext == null || expandingContext == null) return;
+    if (mainContext == null || ghostContext == null || expandingContext == null) return;
     const scale = window.devicePixelRatio;
     const width = Math.round(this._editorWidth * scale);
     const height = Math.round(this._editorHeight * scale);
-    for (const context of [mainContext, mainRailContext, ghostContext, ghostRailContext, expandingContext]) {
+    for (const context of [mainContext, ghostContext, expandingContext]) {
       const canvas = context.canvas;
       if (canvas.width != width || canvas.height != height) {
         canvas.width = width;
@@ -770,11 +763,9 @@ export class PatternEditor {
     const previous = bar != this._lastHitBar ||
       (this._lastHitPosition != null && position < this._lastHitPosition)
       ? null : this._lastHitPosition;
-    const x = position * this._partWidth;
     for (const entry of this._hitNotes) {
-      const { note, pitch, offset, channel, color, path } = entry;
+      const { note, channel, path } = entry;
       const context = channel == this._doc.channel ? mainContext : ghostContext;
-      const railContext = channel == this._doc.channel ? mainRailContext : ghostRailContext;
       if (this._doc.song.channels[channel].muted ||
           this._doc.song.getPattern(channel, bar) != this._doc.song.getPattern(channel, this._doc.bar + this._barOffset)) continue;
       if (noteWasHit(note.start, note.end, position, previous)) {
@@ -786,23 +777,6 @@ export class PatternEditor {
       context.fillStyle = "white";
       context.globalAlpha = 0.65 * (1 - (position - note.start) / (note.end - note.start));
       context.fill(path);
-      const time = position - note.start;
-      let pinIndex = 1;
-      while (pinIndex < note.pins.length - 1 && note.pins[pinIndex].time < time) pinIndex++;
-      const left = note.pins[pinIndex - 1];
-      const right = note.pins[pinIndex];
-      const ratio = (time - left.time) / (right.time - left.time);
-      const interval = left.interval + (right.interval - left.interval) * ratio;
-      const size = left.size + (right.size - left.size) * ratio;
-      const y = this._pitchToPixelHeight(pitch + interval - offset);
-      const radius = Math.max(2, this._pitchHeight * size / Config.noteSizeMax / 2);
-      const length = 48;
-      const gradient = railContext.createLinearGradient(x, 0, x + length, 0);
-      gradient.addColorStop(0, "white");
-      gradient.addColorStop(1, `${color}00`);
-      railContext.globalAlpha = 0.9 * (1 - (position - note.start) / (note.end - note.start));
-      railContext.fillStyle = gradient;
-      railContext.fillRect(x, y - radius, length, radius * 2);
     }
     this._hitCopies = this._hitCopies.filter((copy) => hitIsActive(timestamp, copy.time));
     expandingContext.fillStyle = expandingContext.strokeStyle = "white";
