@@ -95,6 +95,43 @@ test("song synchronization compares binary contents and channel mutes", async (c
   );
 });
 
+test("tieover playback history follows audio reports and resets on seeks", async (context) => {
+  const { SynthController, cleanup } = await loadSynthController();
+  context.after(cleanup);
+  const controller = new SynthController();
+  const report = (playhead, previousBar) => controller.applySnapshot({
+    playhead, previousBar, tempo: 120,
+    playing: true, recording: false, countIn: false,
+  });
+
+  assert.equal(controller.getPreviousBar(0), null);
+  report(4.1, 3);
+  assert.equal(controller.getPreviousBar(4), 3, "missed display frames do not lose audio history");
+  assert.equal(controller.getPreviousBar(5), 4, "interpolation crossing a bar uses the adjacent bar");
+  report(2.1, 7);
+  assert.equal(controller.getPreviousBar(2), 7, "loop reports retain the actual loop end");
+  report(2.1, 2);
+  assert.equal(controller.getPreviousBar(2), 2, "single-bar loops retain their predecessor");
+
+  for (const seek of [
+    () => { controller.playhead = 2; },
+    () => controller.goToBar(2),
+    () => controller.snapToBar(),
+    () => controller.snapToStart(),
+    () => controller.goToPrevBar(),
+    () => controller.jumpIntoLoop(),
+  ]) {
+    report(4.1, 3);
+    controller.song.loopStart = 0;
+    controller.song.loopLength = 1;
+    seek();
+    assert.equal(controller.getPreviousBar(Math.floor(controller.playhead)), null, "seeks clear stale tieover history immediately");
+  }
+  report(4.1, 3);
+  controller.goToNextBar();
+  assert.equal(controller.getPreviousBar(5), 4, "next-bar navigation matches the synth's continuation behavior");
+});
+
 test("master volume clamps and updates the output gain", async (context) => {
   const { SynthController, cleanup } = await loadSynthController();
   context.after(cleanup);

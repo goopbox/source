@@ -207,6 +207,7 @@ class SynthProcessor extends AudioWorkletProcessor {
   private snapshot(): TransportSnapshot {
     return {
       playhead: this.synth.playhead,
+      previousBar: this.synth.previousBar,
       tempo:
         this.synth.song?.automationChannelCount
           ? this.synth.automationRuntime.getEffectiveTempo()

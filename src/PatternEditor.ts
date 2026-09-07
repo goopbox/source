@@ -759,8 +759,9 @@ export class PatternEditor {
       this._lastHitBar = -1;
       return;
     }
-    const bar = Math.floor(this._doc.synth.playhead);
-    const position = (this._doc.synth.playhead - bar) * this._doc.song.beatsPerBar * Config.partsPerBeat;
+    const playhead = this._doc.synth.playhead;
+    const bar = Math.floor(playhead);
+    const position = (playhead - bar) * this._doc.song.beatsPerBar * Config.partsPerBeat;
     const previous = bar != this._lastHitBar ? null : this._lastHitPosition;
     for (const entry of this._hitNotes) {
       const { note, channel, path } = entry;
@@ -796,13 +797,11 @@ export class PatternEditor {
   }
 
   private _noteContinuesFromPreviousBar(note: Note, channel: number, bar: number): boolean {
-    if (!note.continuesLastPattern || this._lastHitBar < 0 || this._lastHitBar == bar) return false;
+    if (!note.continuesLastPattern || note.start != 0) return false;
     const song = this._doc.song;
-    const followsPreviousBar = bar == this._lastHitBar + 1;
-    const followsLoopEnd = bar == song.loopStart &&
-      this._lastHitBar == song.loopStart + song.loopLength - 1;
-    if (!followsPreviousBar && !followsLoopEnd) return false;
-    const previousPattern = song.getPattern(channel, this._lastHitBar);
+    const previousBar = this._doc.synth.getPreviousBar(bar);
+    if (previousBar == null) return false;
+    const previousPattern = song.getPattern(channel, previousBar);
     const previousNote = previousPattern?.notes.at(-1);
     return previousNote != null &&
       previousNote.end == song.beatsPerBar * Config.partsPerBeat &&

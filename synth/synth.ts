@@ -7192,6 +7192,10 @@ export class Synth {
     return this.playheadInternal;
   }
 
+  public get previousBar(): number | null {
+    return this.prevBar;
+  }
+
   public set playhead(value: number) {
     if (this.song != null) {
       this.playheadInternal = Math.max(0, Math.min(this.song.barCount, value));

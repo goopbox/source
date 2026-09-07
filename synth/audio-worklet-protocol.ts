@@ -62,6 +62,7 @@ export type SynthCommand =
 
 export interface TransportSnapshot {
   readonly playhead: number;
+  readonly previousBar: number | null;
   readonly tempo: number;
   readonly playing: boolean;
   readonly recording: boolean;

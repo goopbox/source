@@ -120,7 +120,10 @@ test("note hit effects start immediately, expire after 250ms, repeat on loops, a
     _barOffset: 0,
     _doc: {
       bar: 0, channel: 0,
-      synth: { playing: true, playhead: 0 },
+      synth: {
+        playing: true, playhead: 0, previousBar: null,
+        getPreviousBar() { return this.previousBar; },
+      },
       song: {
         beatsPerBar: 4, pitchChannelCount: 1, noiseChannelCount: 0,
         channels: [{ muted: false }], getPattern: () => pattern,
@@ -156,8 +159,37 @@ test("note hit effects start immediately, expire after 250ms, repeat on loops, a
     pins: [{ interval: 0 }],
   }];
   editor._lastHitBar = 0;
+  editor._doc.synth.previousBar = 0;
   editor._animateNoteHits(1250);
   assert.equal(editor._hitCopies.length, 0, "a valid tie from the previous bar does not hit again");
+  for (const lastRenderedBar of [-1, 1, 7]) {
+    editor._lastHitBar = lastRenderedBar;
+    editor._lastHitPosition = null;
+    editor._animateNoteHits(1300);
+    assert.equal(editor._hitCopies.length, 0, "ties survive hidden views, redraws, and missed frames");
+  }
+  editor._doc.synth.playhead = 0;
+  editor._lastHitBar = 0;
+  editor._lastHitPosition = null;
+  editor._animateNoteHits(1400);
+  assert.equal(editor._hitCopies.length, 0, "ties also survive a single-bar loop");
+  editor._doc.synth.previousBar = 7;
+  editor._lastHitBar = -1;
+  editor._animateNoteHits(1450);
+  assert.equal(editor._hitCopies.length, 0, "loop ties use the audio predecessor even without a rendered loop end");
+  pattern.notes[0].end = 95;
+  assert.equal(editor._noteContinuesFromPreviousBar(note, 0, 0), false, "a gap breaks the tie");
+  pattern.notes[0].end = 96;
+  pattern.notes[0].pitches = [1];
+  assert.equal(editor._noteContinuesFromPreviousBar(note, 0, 0), false, "different pitches break the tie");
+  pattern.notes[0].pins[0].interval = -1;
+  assert.equal(editor._noteContinuesFromPreviousBar(note, 0, 0), true, "pitch bends ending on the next pitch preserve the tie");
+  editor._doc.synth.previousBar = null;
+  editor._lastHitPosition = null;
+  editor._animateNoteHits(1500);
+  assert.equal(editor._hitCopies.length, 1, "starting playback on a tied note still hits without an audio predecessor");
+  editor._animateNoteHits(1750);
+  assert.equal(editor._hitCopies.length, 0);
   note.continuesLastPattern = false;
   editor._lastHitBar = 0;
   for (let loop = 1; loop <= 1000; loop++) {

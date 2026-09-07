@@ -104,6 +104,7 @@ export class SynthController {
   private desiredPlaying: boolean = false;
   private desiredRecording: boolean = false;
   private reportedPlayhead: number = 0;
+  private reportedPreviousBar: number | null = null;
   private reportedTempo: number = 120;
   private reportContextTime: number = 0;
   private reportedCountIn: boolean = false;
@@ -313,8 +314,16 @@ export class SynthController {
 
   public set playhead(value: number) {
     this.reportedPlayhead = Math.max(0, Math.min(this.song.barCount, value));
+    this.reportedPreviousBar = null;
     this.markReportTime();
     this.post({ type: "setPlayhead", playhead: this.reportedPlayhead });
+  }
+
+  public getPreviousBar(bar: number): number | null {
+    // The visual playhead can advance beyond the latest audio report.
+    return bar > Math.floor(this.reportedPlayhead)
+      ? bar - 1
+      : this.reportedPreviousBar;
   }
 
   public get loopRepeatCount(): number {
@@ -689,6 +698,7 @@ export class SynthController {
 
   private applySnapshot(snapshot: TransportSnapshot): void {
     this.reportedPlayhead = snapshot.playhead;
+    this.reportedPreviousBar = snapshot.previousBar;
     this.reportedTempo = snapshot.tempo;
     this.desiredPlaying = snapshot.playing;
     this.desiredRecording = snapshot.recording;
@@ -837,16 +847,19 @@ export class SynthController {
 
   public snapToStart(): void {
     this.reportedPlayhead = 0;
+    this.reportedPreviousBar = null;
     this.markReportTime();
     this.post({ type: "snapToStart" });
   }
   public goToBar(bar: number): void {
     this.reportedPlayhead = bar;
+    this.reportedPreviousBar = null;
     this.markReportTime();
     this.post({ type: "goToBar", bar });
   }
   public snapToBar(): void {
     this.reportedPlayhead = Math.floor(this.playhead);
+    this.reportedPreviousBar = null;
     this.markReportTime();
     this.post({ type: "snapToBar" });
   }
@@ -854,18 +867,22 @@ export class SynthController {
     if (
       this.reportedPlayhead < this.song.loopStart ||
       this.reportedPlayhead >= this.song.loopStart + this.song.loopLength
-    )
+    ) {
       this.reportedPlayhead = this.song.loopStart;
+      this.reportedPreviousBar = null;
+    }
     this.markReportTime();
     this.post({ type: "jumpIntoLoop" });
   }
   public goToNextBar(): void {
+    this.reportedPreviousBar = Math.floor(this.playhead);
     this.reportedPlayhead =
-      (Math.floor(this.playhead) + 1) % this.song.barCount;
+      (this.reportedPreviousBar + 1) % this.song.barCount;
     this.markReportTime();
     this.post({ type: "goToNextBar" });
   }
   public goToPrevBar(): void {
+    this.reportedPreviousBar = null;
     this.reportedPlayhead =
       (Math.floor(this.playhead) - 1 + this.song.barCount) % this.song.barCount;
     this.markReportTime();
