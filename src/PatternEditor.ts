@@ -93,7 +93,7 @@ export class PatternEditor {
   );
   private readonly _expandingCanvas: HTMLCanvasElement = HTML.canvas();
   private _hitNotes: { note: Note; pitch: number; offset: number; channel: number; color: string; path: Path2D }[] = [];
-  private _hitCopies: { path: Path2D; time: number; channel: number }[] = [];
+  private _hitCopies: { path: Path2D; time: number; channel: number; color: string }[] = [];
   private _lastHitPosition: number | null = null;
   private _lastHitBar: number = -1;
   private _hitView: string = "";
@@ -764,13 +764,13 @@ export class PatternEditor {
     const position = (playhead - bar) * this._doc.song.beatsPerBar * Config.partsPerBeat;
     const previous = bar != this._lastHitBar ? null : this._lastHitPosition;
     for (const entry of this._hitNotes) {
-      const { note, channel, path } = entry;
+      const { note, channel, path, color } = entry;
       const context = channel == this._doc.channel ? mainContext : ghostContext;
       if (this._doc.song.channels[channel].muted ||
           this._doc.song.getPattern(channel, bar) != this._doc.song.getPattern(channel, this._doc.bar + this._barOffset)) continue;
       if (!this._noteContinuesFromPreviousBar(note, channel, bar) &&
           noteWasHit(note.start, note.end, position, previous)) {
-        this._hitCopies.push({ path, time: timestamp, channel });
+        this._hitCopies.push({ path, time: timestamp, channel, color });
       }
       if (position < note.start || position >= note.end) {
         continue;
@@ -780,10 +780,10 @@ export class PatternEditor {
       context.fill(path);
     }
     this._hitCopies = this._hitCopies.filter((copy) => hitIsActive(timestamp, copy.time));
-    expandingContext.fillStyle = expandingContext.strokeStyle = "white";
     for (const copy of this._hitCopies) {
       const context = copy.channel == this._doc.channel ? mainContext : ghostContext;
       const opacity = hitOpacity(timestamp, copy.time);
+      expandingContext.fillStyle = expandingContext.strokeStyle = `color-mix(in srgb, white ${opacity * 100}%, ${copy.color})`;
       expandingContext.clearRect(0, 0, this._editorWidth, this._editorHeight);
       expandingContext.lineWidth = 3 + (1 - opacity) * 16;
       expandingContext.fill(copy.path);
