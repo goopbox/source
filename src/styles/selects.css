@@ -7,14 +7,20 @@ select {
     padding: 0 var(--button-size) 0 4px;
     display: block;
     color: inherit;
-    background-image: var(--menu-down-symbol);
+    background-image: conic-gradient(
+        from -38.66deg at 50% 100%,
+        currentColor 0 77.32deg,
+        transparent 0
+    );
     background-repeat: no-repeat;
-    background-position: right center;
+    background-position: right 9px center;
+    background-size: 8px 5px;
 }
 select option,
 select optgroup {
     background-color: var(--ui-widget-background, #444);
     color: var(--text, white);
+    -webkit-text-fill-color: var(--text, white);
 }
 select.menu {
     text-align: center;

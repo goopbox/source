@@ -191,7 +191,8 @@
 }
 
 .channel-colors .channel-gradient-unit .channel-gradient-select {
-    color: transparent;
+    color: var(--channel-primary-button-end);
+    -webkit-text-fill-color: transparent;
 }
 
 .channel-colors .channel-gradient-select-text {
