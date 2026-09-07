@@ -120,6 +120,10 @@
     background: var(--surface);
 }
 
+.envelopeEditor:empty {
+    display: none;
+}
+
 .settingsGroupTitle {
     min-height: 1.25em;
     display: grid;
