@@ -88,6 +88,50 @@ export class AboutPrompt implements Prompt {
       h2(
         a(
           {
+            href: "https://github.com/101arrowz/fflate",
+            target: "_blank",
+            rel: "noopener",
+          },
+          "fflate",
+        ),
+      ),
+      p(
+        "Song compression and decompression use fflate by Arjun Barrett under the ",
+        a(
+          {
+            href: "https://github.com/101arrowz/fflate/blob/master/LICENSE",
+            target: "_blank",
+            rel: "noopener",
+          },
+          "MIT License",
+        ),
+        ".",
+      ),
+      h2(
+        a(
+          {
+            href: "https://github.com/audiojs/stretch/tree/main/packages/stretch-transient",
+            target: "_blank",
+            rel: "noopener",
+          },
+          "@audio/stretch-transient",
+        ),
+      ),
+      p(
+        "Sample time stretching uses @audio/stretch-transient by Dmitry Iv under the ",
+        a(
+          {
+            href: "https://github.com/audiojs/stretch/blob/main/packages/stretch-transient/LICENSE",
+            target: "_blank",
+            rel: "noopener",
+          },
+          "MIT License",
+        ),
+        ".",
+      ),
+      h2(
+        a(
+          {
             href: "https://github.com/goopbox/source",
             target: "_blank",
             rel: "noopener",
