@@ -1,5 +1,7 @@
 // Copyright (c) John Nesky and contributing authors, distributed under the MIT license, see accompanying the LICENSE.md file.
 
+import { TimeStretch, interpolateChipWaveSample, advanceChipWavePhase } from "./TimeStretch.js";
+
 import {
   type Dictionary,
   type DictionaryArray,
@@ -5699,7 +5701,7 @@ class Tone {
   public readonly phaseDeltas: number[] = [];
   public readonly phaseDeltaScales: number[] = [];
   public readonly phaseCatchUpCycles: number[] = [];
-  public readonly chipWaveGrainPhases: number[] = [];
+  public readonly chipWaveStretchers: (TimeStretch | null)[] = [];
   public readonly chipWaveStarted: boolean[] = [];
   public expression: number = 0.0;
   public expressionDelta: number = 0.0;
@@ -5763,7 +5765,7 @@ class Tone {
     ) {
       this.phases[i] = 0.0;
       this.phaseCatchUpCycles[i] = 0.0;
-      this.chipWaveGrainPhases[i] = 0.0;
+      this.chipWaveStretchers[i]?.reset();
       this.chipWaveStarted[i] = false;
       if (i < Config.operatorCount * 2) this.feedbackOutputs[i] = 0.0;
       if (i < Config.maxPitchOrOperatorCount)
@@ -7035,6 +7037,7 @@ class ChannelState {
 interface AssetData {
   readonly samples: Float32Array;
   readonly sampleRate: number;
+  readonly peak: number;
 }
 
 export class Synth {
@@ -7147,6 +7150,9 @@ export class Synth {
   public tickSampleCountdown: number = 0;
   private isPlayingSong: boolean = false;
   private isRecording: boolean = false;
+  private pendingSampleSeek: boolean = false;
+  private readonly seekBufferL: Float32Array = new Float32Array(1024);
+  private readonly seekBufferR: Float32Array = new Float32Array(1024);
 
   public static readonly tempFilterStartCoefficients: FilterCoefficients =
     new FilterCoefficients();
@@ -7212,6 +7218,7 @@ export class Synth {
       this.prevBar = null;
       this.automationRuntime.invalidatePosition();
       this.songEnded = false;
+      this.pendingSampleSeek = true;
     }
   }
 
@@ -7279,7 +7286,10 @@ export class Synth {
   ): void {
     if (samples.length == 0 || !Number.isFinite(sampleRate) || sampleRate <= 0)
       return;
-    this.assetData.set(sampleId, { samples, sampleRate });
+    let peak: number = 0;
+    for (let i: number = 0; i < samples.length; i++)
+      peak = Math.max(peak, Math.abs(samples[i]));
+    this.assetData.set(sampleId, { samples, sampleRate, peak });
   }
 
   public setSoundFont(soundFontId: string, data: ArrayBuffer): void {
@@ -7287,6 +7297,10 @@ export class Synth {
   }
 
   public setSampleRate(sampleRate: number): void {
+    if (sampleRate != this.samplesPerSecond) {
+      this.resetEffects();
+      this.pendingSampleSeek = true;
+    }
     this.samplesPerSecond = sampleRate;
     this.computeDelayBufferSizes();
   }
@@ -7337,6 +7351,7 @@ export class Synth {
     this.prevBar = null;
     this.songEnded = false;
     this.automationRuntime.invalidatePosition();
+    this.pendingSampleSeek = true;
   }
 
   public snapToBar(): void {
@@ -7349,6 +7364,7 @@ export class Synth {
     this.prevBar = null;
     this.songEnded = false;
     this.automationRuntime.invalidatePosition();
+    this.pendingSampleSeek = true;
   }
 
   public resetEffects(): void {
@@ -7375,6 +7391,7 @@ export class Synth {
       this.playheadInternal += this.bar - oldBar;
       this.prevBar = null;
       this.automationRuntime.invalidatePosition();
+      this.pendingSampleSeek = true;
     }
   }
 
@@ -7388,6 +7405,7 @@ export class Synth {
     }
     this.playheadInternal += this.bar - oldBar;
     this.automationRuntime.invalidatePosition();
+    this.pendingSampleSeek = true;
   }
 
   public goToPrevBar(): void {
@@ -7400,6 +7418,81 @@ export class Synth {
     }
     this.playheadInternal += this.bar - oldBar;
     this.automationRuntime.invalidatePosition();
+    this.pendingSampleSeek = true;
+  }
+
+  private restoreSampleSeek(): void {
+    this.pendingSampleSeek = false;
+    const song: Song = this.song!;
+    if (
+      !song.channels.some((channel) =>
+        channel.instruments.some((instrument) =>
+          instrument.type == InstrumentType.chip
+            ? Config.chipWaves[instrument.chipWave]?.sampleId != null
+            : instrument.type == InstrumentType.fm &&
+              instrument.operators.some(
+                (operator) =>
+                  operator.wave > 0 &&
+                  Config.chipWaves[operator.wave - 1]?.sampleId != null,
+              ),
+        ),
+      )
+    )
+      return;
+
+    // A source cursor cannot reconstruct vocoder phases, FM feedback, automation,
+    // or a chain of continued notes. Replay the same tick path into scratch buffers.
+    const ticks: number =
+      this.bar * song.beatsPerBar * Config.partsPerBeat * Config.ticksPerPart +
+      this.getTicksIntoBar();
+    const repeats: number = this.loopRepeatCount;
+    const remaining: number | null = this.renderTicksRemaining;
+    const liveDuration: number = this.liveInputDuration;
+    const liveStarted: boolean = this.liveInputStarted;
+    const recording: boolean = this.isRecording;
+    const countIn: boolean = this.countInMetronome;
+    this.resetEffects();
+    this.startedMetronome = false;
+    this.metronomeSamplesRemaining = -1;
+    this.playhead = 0;
+    this.pendingSampleSeek = false;
+    this.automationRuntime.reset(song);
+    this.loopRepeatCount = 0;
+    this.renderTicksRemaining = null;
+    this.liveInputDuration = 0;
+    this.liveInputStarted = false;
+    this.isRecording = false;
+    this.countInMetronome = false;
+    try {
+      for (let tick: number = 0; tick < ticks; tick++) {
+        // Tempo automation can change the length of every tick.
+        this.automationRuntime.update(
+          song,
+          this.bar,
+          this.getCurrentPart() + this.tick / Config.ticksPerPart,
+          true,
+        );
+        let samples: number = Math.ceil(
+          this.tickSampleCountdown > 0
+            ? this.tickSampleCountdown
+            : this.getSamplesPerTick(),
+        );
+        while (samples > 0) {
+          const count: number = Math.min(samples, this.seekBufferL.length);
+          this.seekBufferL.fill(0);
+          this.seekBufferR.fill(0);
+          this.synthesize(this.seekBufferL, this.seekBufferR, count);
+          samples -= count;
+        }
+      }
+    } finally {
+      this.loopRepeatCount = repeats;
+      this.renderTicksRemaining = remaining;
+      this.liveInputDuration = liveDuration;
+      this.liveInputStarted = liveStarted;
+      this.isRecording = recording;
+      this.countInMetronome = countIn;
+    }
   }
 
   private getNextBar(): number {
@@ -7423,6 +7516,8 @@ export class Synth {
     outputBufferLength: number,
     playSong: boolean = true,
   ): void {
+    if (this.pendingSampleSeek && playSong && this.song != null)
+      this.restoreSampleSeek();
     this.lastSynthesizeSampleCount = 0;
     if (this.songEnded) {
       outputDataL.fill(0, 0, outputBufferLength);
@@ -9691,14 +9786,9 @@ export class Synth {
       2.0,
       (unison.offset - unison.spread) / 12.0,
     );
-    const elapsedSamples: number =
-      elapsedParts * secondsPerPart * this.samplesPerSecond;
-    const grainPhase: number =
-      (elapsedSamples / Synth.chipWaveGrainLength(this.samplesPerSecond)) % 1.0;
     const setCatchUp = (index: number, cycles: number): void => {
       if (tone.chipWaveStarted[index]) return;
       tone.phaseCatchUpCycles[index] = cycles;
-      tone.chipWaveGrainPhases[index] = grainPhase;
     };
 
     if (instrument.type == InstrumentType.chip) {
@@ -9810,8 +9900,7 @@ export class Synth {
       );
       if (i + 1 < notes.length) {
         const previousNote: Note = notes[i + 1];
-        pitch -=
-          previousNote.pins[previousNote.pins.length - 1].interval;
+        pitch -= previousNote.pins[previousNote.pins.length - 1].interval;
       }
     }
     return cycles;
@@ -9840,11 +9929,9 @@ export class Synth {
       const endRatio: number =
         (segmentEnd - pinStartPart) / (pinEndPart - pinStartPart);
       const intervalStart: number =
-        startPin.interval +
-        (endPin.interval - startPin.interval) * startRatio;
+        startPin.interval + (endPin.interval - startPin.interval) * startRatio;
       const intervalEnd: number =
-        startPin.interval +
-        (endPin.interval - startPin.interval) * endRatio;
+        startPin.interval + (endPin.interval - startPin.interval) * endRatio;
       const frequencyStart: number = Instrument.frequencyFromPitch(
         basePitch + intervalStart * intervalScale,
       );
@@ -9881,126 +9968,46 @@ export class Synth {
     return percent / 100.0;
   }
 
-  public static chipWaveGrainLength(samplesPerSecond: number): number {
-    return Math.max(64, samplesPerSecond * 0.04);
-  }
+  public static readonly interpolateChipWaveSample = interpolateChipWaveSample;
+  public static readonly advanceChipWavePhase = advanceChipWavePhase;
 
-  public static interpolateChipWaveSample(
+  public static prepareChipWaveStretch(
+    tone: Tone,
+    index: number,
     wave: Float32Array,
     phase: number,
-    loopStart: number = 0,
-    loopEnd: number = wave.length,
-    oneshot: boolean = false,
-    referencePhase: number = phase,
-  ): number {
-    const waveLength: number = wave.length;
-    if (waveLength == 0) return 0.0;
-    loopStart = Math.max(0, Math.min(waveLength - 1, loopStart));
-    loopEnd = Math.max(loopStart + 1, Math.min(waveLength, loopEnd));
-    const loopLength: number = loopEnd - loopStart;
-    if (oneshot && referencePhase >= loopEnd) return 0.0;
-    if (phase >= loopEnd) {
-      if (oneshot) return 0.0;
-      phase =
-        loopStart +
-        (((phase - loopStart) % loopLength) + loopLength) % loopLength;
-    } else if (!oneshot && phase < loopStart && referencePhase >= loopStart) {
-      phase =
-        loopStart +
-        (((phase - loopStart) % loopLength) + loopLength) % loopLength;
-    }
-    if (phase < 0) return 0.0;
-    const phaseFloor: number = Math.floor(phase);
-    const index: number = Math.min(waveLength - 1, phaseFloor);
-    const nextIndex: number = index + 1;
-    let nextSample: number;
-    if (nextIndex >= loopEnd && phase >= loopStart) {
-      nextSample = oneshot
-        ? 0.0
-        : wave[Math.min(waveLength - 1, Math.floor(loopStart))];
-    } else if (nextIndex >= waveLength) {
-      nextSample = oneshot ? 0.0 : wave[0];
-    } else {
-      nextSample = wave[nextIndex];
-    }
-    const ratio: number = phase - phaseFloor;
-    return wave[index] + (nextSample - wave[index]) * ratio;
-  }
-
-  public static advanceChipWavePhase(
-    phase: number,
-    phaseDelta: number,
+    pitch: number,
+    tempo: number,
     loopStart: number,
     loopEnd: number,
     oneshot: boolean,
-  ): number {
-    const loopLength: number = loopEnd - loopStart;
-    if (!(loopLength > 0)) return loopEnd;
-    const nextPhase: number = phase + phaseDelta;
-    if (phaseDelta >= 0 && nextPhase >= loopEnd) {
-      if (oneshot) return loopEnd;
-      return (
-        loopStart +
-        (((nextPhase - loopStart) % loopLength) + loopLength) % loopLength
-      );
+    baseDelta: number,
+    scale: number,
+    runLength: number,
+    modulation: number = 0,
+  ): TimeStretch | null {
+    // In particular, 100%/100% never constructs or runs a stretcher.
+    if (pitch == tempo || baseDelta == 0 || (oneshot && phase >= loopEnd)) {
+      tone.chipWaveStretchers[index]?.reset();
+      return null;
     }
-    if (
-      phaseDelta < 0 &&
-      phase >= loopStart &&
-      nextPhase < loopStart &&
-      !oneshot
-    ) {
-      return (
-        loopStart +
-        (((nextPhase - loopStart) % loopLength) + loopLength) % loopLength
-      );
-    }
-    return nextPhase;
-  }
-
-  public static sampleChipWave(
-    wave: Float32Array,
-    phase: number,
-    pitchPhaseDelta: number,
-    sourcePhaseDelta: number,
-    grainPhase: number,
-    grainLength: number,
-    loopStart: number = 0,
-    loopEnd: number = wave.length,
-    oneshot: boolean = false,
-    referencePhase: number = phase,
-  ): number {
-    if (pitchPhaseDelta == sourcePhaseDelta) {
-      return Synth.interpolateChipWaveSample(
-        wave,
-        phase,
-        loopStart,
-        loopEnd,
-        oneshot,
-        referencePhase,
-      );
-    }
-    const phaseDifference: number = pitchPhaseDelta - sourcePhaseDelta;
-    const secondGrainPhase: number = (grainPhase + 0.5) % 1.0;
-    const firstWeight: number =
-      0.5 - 0.5 * Math.cos(Math.PI * 2.0 * grainPhase);
-    const firstSample: number = Synth.interpolateChipWaveSample(
+    const stretch: TimeStretch = (tone.chipWaveStretchers[index] ??=
+      new TimeStretch());
+    const advance: number =
+      baseDelta *
+      (scale == 1 ? runLength : (Math.pow(scale, runLength) - 1) / (scale - 1));
+    stretch.prepare(
       wave,
-      phase + grainPhase * grainLength * phaseDifference,
+      phase,
+      pitch,
+      tempo,
       loopStart,
       loopEnd,
       oneshot,
-      referencePhase,
+      advance,
+      modulation,
     );
-    const secondSample: number = Synth.interpolateChipWaveSample(
-      wave,
-      phase + secondGrainPhase * grainLength * phaseDifference,
-      loopStart,
-      loopEnd,
-      oneshot,
-      referencePhase,
-    );
-    return firstSample * firstWeight + secondSample * (1.0 - firstWeight);
+    return stretch;
   }
 
   public static getInstrumentSynthFunction(instrument: Instrument): Function {
@@ -10105,7 +10112,7 @@ export class Synth {
                 const stateIndex: number =
                   j + (voice == "B" ? Config.operatorCount : 0);
                 let voiceLine: string = line.replace(
-                  /tone\.(phases|phaseDeltas|phaseDeltaScales|phaseCatchUpCycles|chipWaveGrainPhases|chipWaveStarted|feedbackOutputs)\[#\]/g,
+                  /tone\.(phases|phaseDeltas|phaseDeltaScales|phaseCatchUpCycles|chipWaveStarted|feedbackOutputs)\[#\]/g,
                   (_match, arrayName) =>
                     "tone." + arrayName + "[" + stateIndex + "]",
                 );
@@ -10179,6 +10186,56 @@ export class Synth {
                       "\t\tlet operator#PhaseDelta = operator#BasePhaseDelta * instrument.operatorChipWaveTempoFactors[" +
                       j +
                       "];";
+                  } else if (
+                    line.indexOf("let operator#PhaseDeltaScale =") != -1
+                  ) {
+                    // Reserve the full modulation range before the sample loop.
+                    // Vocoder magnitudes conserve frame energy. 2*sqrt(N) bounds
+                    // the normalized overlapping frames' peak relative to input.
+                    const peak = (index: number): string => {
+                      const wave =
+                        Config.chipWaves[instrument.operators[index].wave - 1];
+                      if (wave?.sampleId == null) return "2";
+                      return (
+                        "(synth.assetData.get(" +
+                        JSON.stringify(wave.sampleId) +
+                        ")?.peak ?? 0) * " +
+                        2 * Math.sqrt(TimeStretch.frameSize)
+                      );
+                    };
+                    const terms: string[] = Config.algorithms[
+                      instrument.algorithm
+                    ].modulatedBy[j].map((number) => {
+                      const index: number = number - 1;
+                      return (
+                        "Math.max(Math.abs(tone.operatorExpressions[" +
+                        index +
+                        "]), Math.abs(tone.operatorExpressions[" +
+                        index +
+                        "] + tone.operatorExpressionDeltas[" +
+                        index +
+                        "] * Math.ceil(synth.tickSampleCountdown))) * " +
+                        peak(index)
+                      );
+                    });
+                    for (const number of Config.feedbacks[
+                      instrument.feedbackType
+                    ].indices[j]) {
+                      terms.push(
+                        "Math.max(Math.abs(tone.feedbackMult), Math.abs(tone.feedbackMult + tone.feedbackDelta * Math.ceil(synth.tickSampleCountdown))) * " +
+                          peak(number - 1),
+                      );
+                    }
+                    voiceLine +=
+                      "\nconst operator#Stretch = operator#SampleData == undefined ? null : Synth.prepareChipWaveStretch(tone, " +
+                      stateIndex +
+                      ", operator#Wave, operator#Phase, instrument.operatorChipWavePitchFactors[" +
+                      j +
+                      "], instrument.operatorChipWaveTempoFactors[" +
+                      j +
+                      "], operator#LoopStart, operator#LoopEnd, operator#Oneshot, operator#BasePhaseDelta, operator#PhaseDeltaScale, runLength, (" +
+                      (terms.join(" + ") || "0") +
+                      ") * operator#PhaseModScale + 2);";
                   } else if (
                     line.indexOf("operator#Phase += operator#PhaseDelta") != -1
                   ) {
@@ -10601,11 +10658,6 @@ export class Synth {
       Math.min(loopEnd, instrumentState.chipWaveOffset * waveLength),
     );
     const oneshot: boolean = instrumentState.chipWaveOneshot;
-    const grainLength: number = Synth.chipWaveGrainLength(
-      synth.samplesPerSecond,
-    );
-    const grainPhaseDelta: number = 1.0 / grainLength;
-    let grainPhase: number = tone.chipWaveGrainPhases[0];
 
     const unisonSign: number = instrumentState.usesUnison
       ? tone.specialIntervalExpressionMult * instrumentState.unison!.sign
@@ -10642,6 +10694,37 @@ export class Synth {
     tone.chipWaveStarted[0] = true;
     tone.chipWaveStarted[1] = true;
 
+    const stretchA: TimeStretch | null = Synth.prepareChipWaveStretch(
+      tone,
+      0,
+      wave,
+      phaseA,
+      pitchFactor,
+      tempoFactor,
+      loopStart,
+      loopEnd,
+      oneshot,
+      basePhaseDeltaA,
+      phaseDeltaScaleA,
+      runLength,
+    );
+    const stretchB: TimeStretch | null = singleVoice
+      ? stretchA
+      : Synth.prepareChipWaveStretch(
+          tone,
+          1,
+          wave,
+          phaseB,
+          pitchFactor,
+          tempoFactor,
+          loopStart,
+          loopEnd,
+          oneshot,
+          basePhaseDeltaB,
+          phaseDeltaScaleB,
+          runLength,
+        );
+
     const filters: DynamicBiquadFilter[] = tone.noteFilters;
     const filterCount: number = tone.noteFilterCount | 0;
     let initialFilterInput1: number = +tone.initialNoteFilterInput1;
@@ -10654,32 +10737,35 @@ export class Synth {
       sampleIndex < stopIndex;
       sampleIndex++
     ) {
-      const pitchPhaseDeltaA: number = basePhaseDeltaA * pitchFactor;
-      const pitchPhaseDeltaB: number = basePhaseDeltaB * pitchFactor;
       const sourcePhaseDeltaA: number = basePhaseDeltaA * tempoFactor;
       const sourcePhaseDeltaB: number = basePhaseDeltaB * tempoFactor;
-      const waveA: number = Synth.sampleChipWave(
-        wave,
-        phaseA,
-        pitchPhaseDeltaA,
-        sourcePhaseDeltaA,
-        grainPhase,
-        grainLength,
-        loopStart,
-        loopEnd,
-        oneshot,
-      );
-      const waveB: number = Synth.sampleChipWave(
-        wave,
-        phaseB,
-        pitchPhaseDeltaB,
-        sourcePhaseDeltaB,
-        grainPhase,
-        grainLength,
-        loopStart,
-        loopEnd,
-        oneshot,
-      );
+      const waveA: number =
+        oneshot && phaseA >= loopEnd
+          ? 0
+          : stretchA == null
+            ? interpolateChipWaveSample(
+                wave,
+                phaseA,
+                loopStart,
+                loopEnd,
+                oneshot,
+              )
+            : stretchA.read();
+      const waveB: number = singleVoice
+        ? waveA
+        : oneshot && phaseB >= loopEnd
+          ? 0
+          : stretchB == null
+            ? interpolateChipWaveSample(
+                wave,
+                phaseB,
+                loopStart,
+                loopEnd,
+                oneshot,
+              )
+            : stretchB.read();
+      stretchA?.advance(basePhaseDeltaA);
+      if (!singleVoice) stretchB?.advance(basePhaseDeltaB);
 
       const inputSample: number = waveA + waveB * unisonSign;
       const filteredSample: number = applyFilters(
@@ -10712,15 +10798,12 @@ export class Synth {
       );
       basePhaseDeltaA *= phaseDeltaScaleA;
       basePhaseDeltaB *= phaseDeltaScaleB;
-      grainPhase += grainPhaseDelta;
-      if (grainPhase >= 1.0) grainPhase -= 1.0;
     }
 
     tone.phases[0] = phaseA / waveLength;
     tone.phases[1] = phaseB / waveLength;
     tone.phaseDeltas[0] = basePhaseDeltaA / samplePhaseScale;
     tone.phaseDeltas[1] = basePhaseDeltaB / samplePhaseScale;
-    tone.chipWaveGrainPhases[0] = grainPhase;
     tone.expression = expression;
 
     synth.sanitizeFilters(filters);
@@ -11825,8 +11908,6 @@ export class Synth {
     `
 		const data = synth.tempMonoInstrumentSampleBuffer;
 		const sineWave = Config.sineWave;
-		const chipWaveGrainLength = Synth.chipWaveGrainLength(synth.samplesPerSecond);
-		const chipWaveGrainPhaseDelta = 1.0 / chipWaveGrainLength;
 		const operator#Wave = Config.getFmWave(/*operatorWave*/);
 
 		// I'm adding 1000 to the phase to ensure that it's never negative even when modulated by other waves because negative numbers don't work with the modulus operator very well.
@@ -11839,7 +11920,6 @@ export class Synth {
     `;
 		let operator#PhaseDelta = operator#BasePhaseDelta * instrument.operatorChipWavePitchFactors[/*operatorIndex*/];
 		let operator#PhaseDeltaScale = +tone.phaseDeltaScales[#];
-		let operator#GrainPhase = +tone.chipWaveGrainPhases[#];
 		let operator#OutputMult = +tone.operatorExpressions[#];
 		const operator#OutputDelta = +tone.operatorExpressionDeltas[#];
 		let operator#Output = +tone.feedbackOutputs[#];
@@ -11882,7 +11962,6 @@ export class Synth {
 		tone.phaseDeltas[#] = operator#BasePhaseDelta / ` +
     Config.sineWaveLength +
     `;
-		tone.chipWaveGrainPhases[#] = operator#GrainPhase;
 		tone.operatorExpressions[#] = operator#OutputMult;
 		tone.feedbackOutputs[#] = operator#Output;
 		tone.feedbackMult = feedbackMult;
@@ -11909,20 +11988,10 @@ export class Synth {
 
   private static sampleOperatorSourceTemplate: string[] = `
 			const operator#PhaseMix = operator#Phase/* + operator@Scaled*/;
-			operator#Output = Synth.sampleChipWave(
-				operator#Wave,
-				operator#PhaseMix,
-				operator#BasePhaseDelta * instrument.operatorChipWavePitchFactors[/*operatorIndex*/],
-				operator#PhaseDelta,
-				operator#GrainPhase,
-				chipWaveGrainLength,
-				operator#LoopStart,
-				operator#LoopEnd,
-				operator#Oneshot,
-				operator#Phase,
-			) * operator#SampleGain;
-			operator#GrainPhase += chipWaveGrainPhaseDelta;
-			if (operator#GrainPhase >= 1.0) operator#GrainPhase -= 1.0;
+			operator#Output = (operator#Oneshot && operator#Phase >= operator#LoopEnd ? 0 : operator#Stretch == null
+				? Synth.interpolateChipWaveSample(operator#Wave, operator#PhaseMix, operator#LoopStart, operator#LoopEnd, operator#Oneshot, operator#Phase)
+				: operator#Stretch.read(operator#PhaseMix - operator#Phase)) * operator#SampleGain;
+			operator#Stretch?.advance(operator#BasePhaseDelta);
 			const operator#Scaled = operator#OutputMult * operator#Output;
 	`.split("\n");
 

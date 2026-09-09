@@ -6,13 +6,15 @@ import test from "node:test";
 import { pathToFileURL } from "node:url";
 import { build } from "esbuild";
 
-async function loadModules() {
+async function loadModules(worklet = false) {
   const directory = await mkdtemp(join(tmpdir(), "goopbox-chip-wave-pitch-tempo-test-"));
   const outfile = join(directory, "module.mjs");
   await build({
     stdin: {
       contents: [
-        'export {Instrument, Note, Pattern, Song, Synth, SynthEngine, makeNotePin} from "./synth/synth.ts";',
+        worklet ? 'import "./synth/audio-worklet.ts";' : "",
+        'export {Event, EventPoint, Instrument, Note, Pattern, Song, Synth, SynthEngine, makeNotePin} from "./synth/synth.ts";',
+        'export {TimeStretch} from "./synth/TimeStretch.ts";',
         'export {Config, EffectType, InstrumentType, parseAssetDefinition} from "./synth/SynthConfig.ts";',
         'export {SongRenderer} from "./src/SongRenderer.ts";',
       ].join("\n"),
@@ -138,29 +140,29 @@ function renderCatchUpState(module, instrumentType, seekToMiddle) {
   if (seekToMiddle) engine.playhead = seekFraction;
   engine.play();
   const renderedSamples = seekToMiddle ? 1 : samplesBeforeSeek + 1;
-  engine.synthesize(
-    new Float32Array(renderedSamples),
-    new Float32Array(renderedSamples),
-    renderedSamples,
-  );
+  const output = new Float32Array(renderedSamples);
+  engine.synthesize(output, new Float32Array(renderedSamples), renderedSamples);
   const tone = engine.channels[0].instruments[0].activeTones.get(0);
   assert.notEqual(tone, undefined);
   return {
+    output: output[output.length - 1],
     phase: tone.phases[0],
-    grainPhase: tone.chipWaveGrainPhases[0],
+    stretchPosition: tone.chipWaveStretchers[0].position,
   };
 }
 
 function assertCatchUpMatchesContinuousPlayback(module, instrumentType) {
   const continuous = renderCatchUpState(module, instrumentType, false);
   const caughtUp = renderCatchUpState(module, instrumentType, true);
+  assert.ok(Math.abs(caughtUp.output - continuous.output) < 1e-6,
+    `seek output ${caughtUp.output} should match ${continuous.output}`);
   assert.ok(
     Math.abs(caughtUp.phase - continuous.phase) < 3e-5,
     `caught-up phase ${caughtUp.phase} should match continuous phase ${continuous.phase}`,
   );
   assert.ok(
-    Math.abs(caughtUp.grainPhase - continuous.grainPhase) < 1e-9,
-    `caught-up grain phase ${caughtUp.grainPhase} should match continuous grain phase ${continuous.grainPhase}`,
+    Math.abs(caughtUp.stretchPosition - continuous.stretchPosition) < 1e-9,
+    `caught-up stretch position ${caughtUp.stretchPosition} should match continuous stretch position ${continuous.stretchPosition}`,
   );
 }
 
@@ -231,29 +233,29 @@ function renderExtendedCatchUpState(module, instrumentType, seekToBar16) {
   const samplesBeforeSeek = engine.getSamplesPerBar() * 16;
   assert.equal(Number.isInteger(samplesBeforeSeek), true);
   const renderedSamples = seekToBar16 ? 1 : samplesBeforeSeek + 1;
-  engine.synthesize(
-    new Float32Array(renderedSamples),
-    new Float32Array(renderedSamples),
-    renderedSamples,
-  );
+  const output = new Float32Array(renderedSamples);
+  engine.synthesize(output, new Float32Array(renderedSamples), renderedSamples);
   const tone = engine.channels[0].instruments[0].activeTones.get(0);
   assert.notEqual(tone, undefined);
   return {
+    output: output[output.length - 1],
     phase: tone.phases[0],
-    grainPhase: tone.chipWaveGrainPhases[0],
+    stretchPosition: tone.chipWaveStretchers[0].position,
   };
 }
 
 function assertExtendedCatchUpMatchesContinuousPlayback(module, instrumentType) {
   const continuous = renderExtendedCatchUpState(module, instrumentType, false);
   const caughtUp = renderExtendedCatchUpState(module, instrumentType, true);
+  assert.ok(Math.abs(caughtUp.output - continuous.output) < 1e-6,
+    `seek output ${caughtUp.output} should match ${continuous.output}`);
   assert.ok(
     Math.abs(caughtUp.phase - continuous.phase) < 2e-4,
     `16-bar caught-up phase ${caughtUp.phase} should match continuous phase ${continuous.phase}`,
   );
   assert.ok(
-    Math.abs(caughtUp.grainPhase - continuous.grainPhase) < 1e-9,
-    `16-bar caught-up grain phase ${caughtUp.grainPhase} should match continuous grain phase ${continuous.grainPhase}`,
+    Math.abs(caughtUp.stretchPosition - continuous.stretchPosition) < 1e-9,
+    `16-bar caught-up stretch position ${caughtUp.stretchPosition} should match continuous stretch position ${continuous.stretchPosition}`,
   );
 }
 
@@ -401,11 +403,11 @@ test("chip-wave sampler wraps at loop points and one-shot stops at loop end", as
   assert.equal(Synth.advanceChipWavePhase(5.5, 1, 2, 6, false), 2.5);
   assert.equal(Synth.advanceChipWavePhase(5.5, 1, 2, 6, true), 6);
   assert.equal(
-    Synth.sampleChipWave(wave, 6.25, 1, 1, 0, 64, 2, 6, false),
+    Synth.interpolateChipWaveSample(wave, 6.25, 2, 6, false),
     2.25,
   );
   assert.equal(
-    Synth.sampleChipWave(wave, 6.25, 1, 1, 0, 64, 2, 6, true),
+    Synth.interpolateChipWaveSample(wave, 6.25, 2, 6, true),
     0,
   );
 });
@@ -441,14 +443,14 @@ test("sample-backed chip and FM tones initialize at their configured offsets", a
 test("sample-backed chip and FM paths share one sampler and decouple source tempo from pitch", async (context) => {
   const module = await loadModules();
   context.after(module.cleanup);
-  const originalSampler = module.Synth.sampleChipWave;
+  const originalSampler = module.TimeStretch.prototype.prepare;
   let calls = 0;
-  module.Synth.sampleChipWave = (...args) => {
+  module.TimeStretch.prototype.prepare = function (...args) {
     calls++;
-    return originalSampler(...args);
+    return originalSampler.apply(this, args);
   };
   context.after(() => {
-    module.Synth.sampleChipWave = originalSampler;
+    module.TimeStretch.prototype.prepare = originalSampler;
     module.Config.configureAssets([]);
   });
 
@@ -524,8 +526,8 @@ test("song rendering includes loaded custom sample PCM", async (context) => {
   const { asset, song } = configureShortSong(
     module,
     module.InstrumentType.chip,
-    100,
-    100,
+    137,
+    83,
   );
   const samples = new Float32Array(4096);
   for (let index = 0; index < samples.length; index++)
@@ -549,4 +551,430 @@ test("song rendering includes loaded custom sample PCM", async (context) => {
 
   assert.equal(assetLoadCount, 1);
   assert.ok(renderer.outputSamplesL.some((sample) => sample != 0));
+  const engine = new module.SynthEngine(song);
+  engine.setSampleRate(8000);
+  engine.setAsset(asset.id, samples, 8000);
+  engine.loopRepeatCount = 0;
+  assertAudioClose(renderer.outputSamplesL,
+    renderSignal(module, engine, renderer.outputSamplesL.length, 37).output);
+});
+
+function makeSignalEngine(
+  module,
+  type,
+  pitch = 100,
+  tempo = 100,
+  oneshot = true,
+) {
+  const { asset, song } = configureShortSong(module, type, pitch, tempo);
+  song.tempo = 120;
+  song.beatsPerBar = 8;
+  const instrument = song.channels[0].instruments[0];
+  instrument.effects = 0;
+  for (let i = 1; i < instrument.operators.length; i++)
+    instrument.operators[i].amplitude = 0;
+  const settings =
+    type == module.InstrumentType.chip
+      ? instrument.chipWaveSettings
+      : instrument.operators[0].chipWaveSettings;
+  settings.oneshot = oneshot;
+  const note = song.channels[0].patterns[0].notes[0];
+  note.end = 8 * module.Config.partsPerBeat;
+  note.pins[1].time = note.end;
+  const samples = Float32Array.from(
+    { length: 4096 },
+    (_, i) => 0.2 * Math.sin((2 * Math.PI * 220 * i) / 8000),
+  );
+  const engine = new module.SynthEngine(song);
+  engine.setSampleRate(8000);
+  engine.setAsset(asset.id, samples, 8000);
+  engine.play();
+  return { engine, samples, settings, instrument, song };
+}
+
+function renderSignal(module, engine, length, chunk = length) {
+  const output = new Float32Array(length);
+  const raw = [];
+  const apply = module.Synth.applyFilters;
+  module.Synth.applyFilters = function (input, ...rest) {
+    raw.push(input);
+    return apply(input, ...rest);
+  };
+  try {
+    for (let offset = 0; offset < length; offset += chunk) {
+      const count = Math.min(chunk, length - offset);
+      engine.synthesize(
+        output.subarray(offset, offset + count),
+        new Float32Array(count),
+        count,
+      );
+    }
+  } finally {
+    module.Synth.applyFilters = apply;
+  }
+  return { output, raw: Float32Array.from(raw) };
+}
+
+function fundamental(samples, sampleRate = 8000) {
+  const crossings = [];
+  for (let i = 1; i < samples.length; i++) {
+    if (samples[i - 1] <= 0 && samples[i] > 0)
+      crossings.push(i - samples[i] / (samples[i] - samples[i - 1]));
+  }
+  assert.ok(crossings.length > 10, "fixture must contain a measurable tone");
+  return (
+    (sampleRate * (crossings.length - 1)) / (crossings.at(-1) - crossings[0])
+  );
+}
+
+function assertAudioClose(actual, expected, tolerance = 2e-6) {
+  assert.equal(actual.length, expected.length);
+  let error = 0;
+  for (let i = 0; i < actual.length; i++)
+    error = Math.max(error, Math.abs(actual[i] - expected[i]));
+  assert.ok(
+    Number.isFinite(error) && error < tolerance,
+    `maximum audio error ${error} exceeds ${tolerance}`,
+  );
+}
+
+test("100% pitch and tempo bypass the stretcher and reproduce direct sample playback", async (context) => {
+  const module = await loadModules();
+  context.after(module.cleanup);
+  context.after(() => module.Config.configureAssets([]));
+  module.TimeStretch.prototype.prepare = () =>
+    assert.fail("identity playback must never run DSP");
+  for (const type of [module.InstrumentType.chip, module.InstrumentType.fm]) {
+    const { engine, samples } = makeSignalEngine(module, type);
+    const { raw } = renderSignal(module, engine, 3000, 37);
+    const gain = raw[1] / samples[1];
+    assert.ok(gain > 0);
+    assertAudioClose(
+      raw,
+      Float32Array.from(
+        samples.subarray(0, raw.length),
+        (sample) => sample * gain,
+      ),
+    );
+    const tone = engine.channels[0].instruments[0].activeTones.get(0);
+    assert.ok(tone.chipWaveStretchers.every((stretcher) => stretcher == null));
+  }
+});
+
+test("chip and FM samples independently stretch duration and shift fundamental pitch", async (context) => {
+  const module = await loadModules();
+  context.after(module.cleanup);
+  context.after(() => module.Config.configureAssets([]));
+  for (const type of [module.InstrumentType.chip, module.InstrumentType.fm]) {
+    for (const [pitch, tempo] of [
+      [100, 100],
+      [100, 200],
+      [100, 50],
+      [200, 100],
+      [50, 100],
+      [137, 83],
+    ]) {
+      const { engine, samples } = makeSignalEngine(module, type, pitch, tempo);
+      const { raw } = renderSignal(module, engine, 12000, 127);
+      assert.equal(raw.length, 12000);
+      const expectedEnd = Math.ceil((samples.length * 100) / tempo);
+      const end = raw.findLastIndex((sample) => Math.abs(sample) > 1e-6) + 1;
+      assert.ok(
+        Math.abs(end - expectedEnd) <= 2,
+        `${type}: ${pitch}/${tempo} ends at ${end}, expected ${expectedEnd}`,
+      );
+      const frequency = fundamental(
+        raw.subarray(512, Math.min(expectedEnd - 256, 3000)),
+      );
+      assert.ok(
+        Math.abs(frequency - (220 * pitch) / 100) < 2,
+        `${type}: ${pitch}/${tempo} fundamental ${frequency}`,
+      );
+    }
+  }
+});
+
+test("stretch output stays continuous across arbitrary synthesize chunk sizes and loop wraps", async (context) => {
+  const module = await loadModules();
+  context.after(module.cleanup);
+  context.after(() => module.Config.configureAssets([]));
+  for (const type of [module.InstrumentType.chip, module.InstrumentType.fm]) {
+    const render = (chunk) => {
+      const { engine, settings, instrument } = makeSignalEngine(
+        module,
+        type,
+        137,
+        83,
+        false,
+      );
+      settings.offset = 0.125;
+      settings.loopStart = 0.25;
+      settings.loopEnd = 0.75;
+      instrument.effects |= 1 << module.EffectType.unison;
+      instrument.unison = 2;
+      if (type == module.InstrumentType.fm) {
+        instrument.operators[1].amplitude = 8;
+        instrument.feedbackAmplitude = 4;
+      }
+      return renderSignal(module, engine, 12000, chunk).output;
+    };
+    const reference = render(12000);
+    assert.ok(
+      reference.subarray(10000).some((sample) => Math.abs(sample) > 0.01),
+      "loop keeps sounding",
+    );
+    for (const chunk of [1, 17, 128, 511, 4096])
+      assertAudioClose(render(chunk), reference);
+  }
+});
+
+test("seeking a running engine clears previous DSP and FM feedback state", async (context) => {
+  const module = await loadModules();
+  context.after(module.cleanup);
+  context.after(() => module.Config.configureAssets([]));
+  for (const type of [module.InstrumentType.chip, module.InstrumentType.fm]) {
+    const { engine, instrument } = makeSignalEngine(
+      module,
+      type,
+      137,
+      83,
+      false,
+    );
+    instrument.effects |= 1 << module.EffectType.unison;
+    instrument.unison = 2;
+    if (type == module.InstrumentType.fm) instrument.feedbackAmplitude = 7;
+    const reference = renderSignal(module, engine, 16000, 127).output;
+    engine.playhead = 0.25;
+    assertAudioClose(
+      renderSignal(module, engine, 2000, 31).output,
+      reference.subarray(8000, 10000),
+    );
+    engine.playhead = 0;
+    assertAudioClose(
+      renderSignal(module, engine, 2000, 53).output,
+      reference.subarray(0, 2000),
+    );
+  }
+});
+
+test("returning to 100% pitch and tempo immediately bypasses existing DSP state", async (context) => {
+  const module = await loadModules();
+  context.after(module.cleanup);
+  context.after(() => module.Config.configureAssets([]));
+  for (const type of [module.InstrumentType.chip, module.InstrumentType.fm]) {
+    const { engine, settings } = makeSignalEngine(module, type, 137, 83, false);
+    renderSignal(module, engine, 4000);
+    settings.pitch = settings.tempo = 100;
+    const prepare = module.TimeStretch.prototype.prepare;
+    module.TimeStretch.prototype.prepare = () =>
+      assert.fail("returning to identity must bypass DSP");
+    try {
+      assert.ok(
+        renderSignal(module, engine, 4000).output.every(Number.isFinite),
+      );
+    } finally {
+      module.TimeStretch.prototype.prepare = prepare;
+    }
+  }
+});
+
+test("zero and reverse rates preserve source transport and produce finite chunk-independent audio", async (context) => {
+  const module = await loadModules();
+  context.after(module.cleanup);
+  context.after(() => module.Config.configureAssets([]));
+  for (const type of [module.InstrumentType.chip, module.InstrumentType.fm]) {
+    for (const [pitch, tempo] of [
+      [100, 0],
+      [0, 100],
+      [-137, -83],
+      [137, -83],
+    ]) {
+      const render = (chunk) => {
+        const { engine, settings } = makeSignalEngine(
+          module,
+          type,
+          pitch,
+          tempo,
+          false,
+        );
+        settings.offset = 0.75;
+        const result = renderSignal(module, engine, 2000, chunk);
+        const tone = engine.channels[0].instruments[0].activeTones.get(0);
+        if (tempo == 0) {
+          assert.equal(tone.phases[0], 0.75);
+          assert.ok(
+            result.raw.some((value) => Math.abs(value) > 0.01),
+            "freezing tempo must keep sounding",
+          );
+        } else if (pitch == 0) {
+          assert.ok(
+            tone.phases[0] != 0.75,
+            "zero pitch must not freeze the source timeline",
+          );
+        }
+        return result.output;
+      };
+      assertAudioClose(render(19), render(2000));
+    }
+  }
+});
+
+test("all FM sample operators retain independent stretch state through bends and feedback", async (context) => {
+  const module = await loadModules();
+  context.after(module.cleanup);
+  context.after(() => module.Config.configureAssets([]));
+  const render = (chunk) => {
+    const { engine, instrument, song } = makeSignalEngine(
+      module,
+      module.InstrumentType.fm,
+      137,
+      83,
+      false,
+    );
+    instrument.effects |= 1 << module.EffectType.unison;
+    instrument.unison = 2;
+    instrument.feedbackAmplitude = 8;
+    for (let i = 0; i < instrument.operators.length; i++) {
+      const operator = instrument.operators[i];
+      operator.wave = instrument.operators[0].wave;
+      operator.amplitude = i == 0 ? 15 : 3;
+      operator.chipWaveSettings.pitch = 120 + i * 13;
+      operator.chipWaveSettings.tempo = 85 + i * 9;
+    }
+    const note = song.channels[0].patterns[0].notes[0];
+    note.pins = [
+      module.makeNotePin(0, 0, 10),
+      module.makeNotePin(12, note.end, 6),
+    ];
+    const output = renderSignal(module, engine, 5000, chunk).output;
+    const tone = engine.channels[0].instruments[0].activeTones.get(0);
+    for (let i = 0; i < module.Config.operatorCount * 2; i++)
+      assert.ok(tone.chipWaveStretchers[i] instanceof module.TimeStretch);
+    return output;
+  };
+  const reference = render(5000);
+  assert.ok(reference.some((sample) => Math.abs(sample) > 0.01));
+  assertAudioClose(render(1), reference);
+  assertAudioClose(render(127), reference);
+});
+
+test("sample seek replay follows tempo automation and fractional tick lengths", async (context) => {
+  const module = await loadModules();
+  context.after(module.cleanup);
+  context.after(() => module.Config.configureAssets([]));
+  for (const type of [module.InstrumentType.chip, module.InstrumentType.fm]) {
+    const { engine, song } = makeSignalEngine(module, type, 137, 83, false);
+    const channel = song.channels.at(-1);
+    channel.muted = false;
+    channel.bars[0] = 1;
+    channel.automationRows[0].setSongTarget("tempo");
+    channel.patterns[0].automationEvents[0] = [
+      new module.Event(0, 192, [
+        new module.EventPoint(0, 121),
+        new module.EventPoint(192, 243),
+      ]),
+    ];
+    engine.automationRuntime.invalidatePosition();
+    const seekTick = 96;
+    for (let tick = 0; tick < seekTick; tick++) {
+      const count = Math.ceil(
+        engine.tickSampleCountdown || engine.getSamplesPerTick(),
+      );
+      engine.synthesize(
+        new Float32Array(count),
+        new Float32Array(count),
+        count,
+      );
+    }
+    const reference = renderSignal(module, engine, 1000, 31).output;
+    engine.playhead = 0.25;
+    assertAudioClose(renderSignal(module, engine, 1000, 127).output, reference);
+  }
+});
+
+test("AudioWorklet sample playback matches SynthEngine offline output", async (context) => {
+  let Processor;
+  const previous = {
+    AudioWorkletProcessor: globalThis.AudioWorkletProcessor,
+    registerProcessor: globalThis.registerProcessor,
+    sampleRate: globalThis.sampleRate,
+  };
+  globalThis.sampleRate = 8000;
+  globalThis.AudioWorkletProcessor = class {
+    port = { onmessage: null, postMessage() {} };
+  };
+  globalThis.registerProcessor = (_name, constructor) => {
+    Processor = constructor;
+  };
+  context.after(() => Object.assign(globalThis, previous));
+  const module = await loadModules(true);
+  context.after(module.cleanup);
+  context.after(() => module.Config.configureAssets([]));
+  for (const type of [module.InstrumentType.chip, module.InstrumentType.fm]) {
+    const { engine, song, samples } = makeSignalEngine(
+      module,
+      type,
+      137,
+      83,
+      false,
+    );
+    const processor = new Processor();
+    const send = (data) => processor.port.onmessage({ data });
+    send({
+      type: "initialize",
+      song: song.toBinary(),
+      mutedChannels: song.channels.map((channel) => channel.muted),
+      playhead: 0,
+      loopRepeatCount: -1,
+      metronomeEnabled: false,
+      countInEnabled: false,
+      playing: true,
+      recording: false,
+      liveInput: {
+        channel: 0,
+        pitches: [],
+        instruments: [],
+        duration: 0,
+        started: false,
+      },
+    });
+    send({
+      type: "setAsset",
+      sampleId: song.assets[0].id,
+      samples: samples.slice().buffer,
+      sampleRate: 8000,
+    });
+    const output = new Float32Array(4096);
+    for (let offset = 0; offset < output.length; offset += 128)
+      assert.equal(
+        processor.process(
+          [],
+          [[output.subarray(offset, offset + 128), new Float32Array(128)]],
+        ),
+        true,
+      );
+    assertAudioClose(
+      output,
+      renderSignal(module, engine, output.length, 37).output,
+    );
+  }
+});
+
+test("extreme stretch ratios preserve pitch and chunk-independent audio", async (context) => {
+  const module = await loadModules();
+  context.after(module.cleanup);
+  context.after(() => module.Config.configureAssets([]));
+  const render = (chunk) => {
+    const { engine } = makeSignalEngine(
+      module,
+      module.InstrumentType.chip,
+      100,
+      0.1,
+      false,
+    );
+    return renderSignal(module, engine, 4000, chunk).raw;
+  };
+  const reference = render(4000);
+  assertAudioClose(render(31), reference);
+  assert.ok(Math.abs(fundamental(reference.subarray(1000)) - 220) < 2);
 });
