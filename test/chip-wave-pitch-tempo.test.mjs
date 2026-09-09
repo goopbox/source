@@ -140,29 +140,27 @@ function renderCatchUpState(module, instrumentType, seekToMiddle) {
   if (seekToMiddle) engine.playhead = seekFraction;
   engine.play();
   const renderedSamples = seekToMiddle ? 1 : samplesBeforeSeek + 1;
-  const output = new Float32Array(renderedSamples);
-  engine.synthesize(output, new Float32Array(renderedSamples), renderedSamples);
+  const { output, raw } = renderSignal(module, engine, renderedSamples);
+  assert.equal(raw.length, renderedSamples, "catchup must not render skipped audio");
+  assert.ok(output.every(Number.isFinite));
   const tone = engine.channels[0].instruments[0].activeTones.get(0);
   assert.notEqual(tone, undefined);
   return {
-    output: output[output.length - 1],
     phase: tone.phases[0],
     stretchPosition: tone.chipWaveStretchers[0].position,
   };
 }
 
-function assertCatchUpMatchesContinuousPlayback(module, instrumentType) {
+function assertCatchUpApproximatesContinuousPlayback(module, instrumentType) {
   const continuous = renderCatchUpState(module, instrumentType, false);
   const caughtUp = renderCatchUpState(module, instrumentType, true);
-  assert.ok(Math.abs(caughtUp.output - continuous.output) < 1e-6,
-    `seek output ${caughtUp.output} should match ${continuous.output}`);
   assert.ok(
     Math.abs(caughtUp.phase - continuous.phase) < 3e-5,
     `caught-up phase ${caughtUp.phase} should match continuous phase ${continuous.phase}`,
   );
   assert.ok(
-    Math.abs(caughtUp.stretchPosition - continuous.stretchPosition) < 1e-9,
-    `caught-up stretch position ${caughtUp.stretchPosition} should match continuous stretch position ${continuous.stretchPosition}`,
+    caughtUp.stretchPosition < module.TimeStretch.frameSize,
+    "catchup starts a fresh stretch window at the estimated source cursor",
   );
 }
 
@@ -233,29 +231,27 @@ function renderExtendedCatchUpState(module, instrumentType, seekToBar16) {
   const samplesBeforeSeek = engine.getSamplesPerBar() * 16;
   assert.equal(Number.isInteger(samplesBeforeSeek), true);
   const renderedSamples = seekToBar16 ? 1 : samplesBeforeSeek + 1;
-  const output = new Float32Array(renderedSamples);
-  engine.synthesize(output, new Float32Array(renderedSamples), renderedSamples);
+  const { output, raw } = renderSignal(module, engine, renderedSamples);
+  assert.equal(raw.length, renderedSamples, "catchup must not render skipped bars");
+  assert.ok(output.every(Number.isFinite));
   const tone = engine.channels[0].instruments[0].activeTones.get(0);
   assert.notEqual(tone, undefined);
   return {
-    output: output[output.length - 1],
     phase: tone.phases[0],
     stretchPosition: tone.chipWaveStretchers[0].position,
   };
 }
 
-function assertExtendedCatchUpMatchesContinuousPlayback(module, instrumentType) {
+function assertExtendedCatchUpApproximatesContinuousPlayback(module, instrumentType) {
   const continuous = renderExtendedCatchUpState(module, instrumentType, false);
   const caughtUp = renderExtendedCatchUpState(module, instrumentType, true);
-  assert.ok(Math.abs(caughtUp.output - continuous.output) < 1e-6,
-    `seek output ${caughtUp.output} should match ${continuous.output}`);
   assert.ok(
     Math.abs(caughtUp.phase - continuous.phase) < 2e-4,
     `16-bar caught-up phase ${caughtUp.phase} should match continuous phase ${continuous.phase}`,
   );
   assert.ok(
-    Math.abs(caughtUp.stretchPosition - continuous.stretchPosition) < 1e-9,
-    `16-bar caught-up stretch position ${caughtUp.stretchPosition} should match continuous stretch position ${continuous.stretchPosition}`,
+    caughtUp.stretchPosition < module.TimeStretch.frameSize,
+    "continued notes start a fresh stretch window at the estimated source cursor",
   );
 }
 
@@ -479,7 +475,7 @@ test("sample-backed chip waves catch up through pitch bends when playback starts
   context.after(module.cleanup);
   context.after(() => module.Config.configureAssets([]));
 
-  assertCatchUpMatchesContinuousPlayback(module, module.InstrumentType.chip);
+  assertCatchUpApproximatesContinuousPlayback(module, module.InstrumentType.chip);
 });
 
 test("sample-backed FM operator waves catch up through pitch bends when playback starts mid-note", async (context) => {
@@ -487,7 +483,7 @@ test("sample-backed FM operator waves catch up through pitch bends when playback
   context.after(module.cleanup);
   context.after(() => module.Config.configureAssets([]));
 
-  assertCatchUpMatchesContinuousPlayback(module, module.InstrumentType.fm);
+  assertCatchUpApproximatesContinuousPlayback(module, module.InstrumentType.fm);
 });
 
 test("extended chip waves catch up across 16 continued bars and their pitch bends", async (context) => {
@@ -495,7 +491,7 @@ test("extended chip waves catch up across 16 continued bars and their pitch bend
   context.after(module.cleanup);
   context.after(() => module.Config.configureAssets([]));
 
-  assertExtendedCatchUpMatchesContinuousPlayback(
+  assertExtendedCatchUpApproximatesContinuousPlayback(
     module,
     module.InstrumentType.chip,
   );
@@ -506,7 +502,7 @@ test("extended FM operator waves catch up across 16 continued bars and their pit
   context.after(module.cleanup);
   context.after(() => module.Config.configureAssets([]));
 
-  assertExtendedCatchUpMatchesContinuousPlayback(
+  assertExtendedCatchUpApproximatesContinuousPlayback(
     module,
     module.InstrumentType.fm,
   );
@@ -733,27 +729,61 @@ test("seeking a running engine clears previous DSP and FM feedback state", async
   context.after(module.cleanup);
   context.after(() => module.Config.configureAssets([]));
   for (const type of [module.InstrumentType.chip, module.InstrumentType.fm]) {
-    const { engine, instrument } = makeSignalEngine(
-      module,
-      type,
-      137,
-      83,
-      false,
-    );
-    instrument.effects |= 1 << module.EffectType.unison;
-    instrument.unison = 2;
-    if (type == module.InstrumentType.fm) instrument.feedbackAmplitude = 7;
+    const makeEngine = () => {
+      const { engine, instrument } = makeSignalEngine(module, type, 137, 83, false);
+      instrument.effects |= 1 << module.EffectType.unison;
+      instrument.unison = 2;
+      if (type == module.InstrumentType.fm) instrument.feedbackAmplitude = 7;
+      return engine;
+    };
+    const engine = makeEngine();
     const reference = renderSignal(module, engine, 16000, 127).output;
+    const fresh = makeEngine();
+    fresh.playhead = 0.25;
     engine.playhead = 0.25;
     assertAudioClose(
       renderSignal(module, engine, 2000, 31).output,
-      reference.subarray(8000, 10000),
+      renderSignal(module, fresh, 2000, 127).output,
     );
     engine.playhead = 0;
     assertAudioClose(
       renderSignal(module, engine, 2000, 53).output,
       reference.subarray(0, 2000),
     );
+  }
+});
+
+test("sample catchup respects one-shot endings, frozen tempo, and reverse loops", async (context) => {
+  const module = await loadModules();
+  context.after(module.cleanup);
+  context.after(() => module.Config.configureAssets([]));
+  for (const type of [module.InstrumentType.chip, module.InstrumentType.fm]) {
+    for (const [tempo, oneshot, expectedPhase] of [
+      [83, true, 0.75],
+      [0, false, 0.5],
+      // A one-second seek advances 6640 source frames through a 2048-frame loop.
+      [83, false, (2544 + 0.83) / 4096],
+      [-83, false, (1552 - 0.83) / 4096],
+    ]) {
+      const { engine, settings } = makeSignalEngine(module, type, 137, tempo, oneshot);
+      settings.offset = 0.5;
+      settings.loopStart = 0.25;
+      settings.loopEnd = 0.75;
+      engine.playhead = 0.25;
+      const { output, raw } = renderSignal(module, engine, 1);
+      assert.equal(raw.length, 1, "catchup must not render skipped audio");
+      assert.ok(output.every(Number.isFinite));
+      const tone = engine.channels[0].instruments[0].activeTones.get(0);
+      assert.ok(Math.abs(tone.phases[0] - expectedPhase) < 1e-9);
+      const resumed = renderSignal(module, engine, 1000, 127).output;
+      assert.ok(resumed.every(Number.isFinite));
+      if (oneshot) {
+        assert.ok(resumed.every((sample) => sample == 0), "finished one-shots stay silent");
+        assert.ok(tone.chipWaveStretchers.every((stretch) => stretch == null));
+      } else {
+        assert.ok(resumed.some((sample) => Math.abs(sample) > 0.01));
+      }
+    }
   }
 });
 
@@ -858,7 +888,7 @@ test("all FM sample operators retain independent stretch state through bends and
   assertAudioClose(render(127), reference);
 });
 
-test("sample seek replay follows tempo automation and fractional tick lengths", async (context) => {
+test("sample catchup uses tempo automation at the seek destination without replay", async (context) => {
   const module = await loadModules();
   context.after(module.cleanup);
   context.after(() => module.Config.configureAssets([]));
@@ -874,21 +904,18 @@ test("sample seek replay follows tempo automation and fractional tick lengths", 
         new module.EventPoint(192, 243),
       ]),
     ];
-    engine.automationRuntime.invalidatePosition();
-    const seekTick = 96;
-    for (let tick = 0; tick < seekTick; tick++) {
-      const count = Math.ceil(
-        engine.tickSampleCountdown || engine.getSamplesPerTick(),
-      );
-      engine.synthesize(
-        new Float32Array(count),
-        new Float32Array(count),
-        count,
-      );
-    }
-    const reference = renderSignal(module, engine, 1000, 31).output;
     engine.playhead = 0.25;
-    assertAudioClose(renderSignal(module, engine, 1000, 127).output, reference);
+    const { output, raw } = renderSignal(module, engine, 1);
+    assert.equal(raw.length, 1, "tempo automation must not replay skipped ticks");
+    assert.ok(output.every(Number.isFinite));
+    assert.equal(engine.automationRuntime.getEffectiveTempo(), 151.5);
+    const tone = engine.channels[0].instruments[0].activeTones.get(0);
+    const sourceFrames = (2 * 60 / 151.5 * 8000 + 1) * 0.83;
+    assert.ok(Math.abs(tone.phases[0] - (sourceFrames % 4096) / 4096) < 1e-9,
+      "estimate uses the current tempo for the elapsed note duration");
+    const resumed = renderSignal(module, engine, 1000, 127).output;
+    assert.ok(resumed.every(Number.isFinite));
+    assert.ok(resumed.some((sample) => Math.abs(sample) > 0.01));
   }
 });
 
@@ -957,6 +984,11 @@ test("AudioWorklet sample playback matches SynthEngine offline output", async (c
       output,
       renderSignal(module, engine, output.length, 37).output,
     );
+    send({ type: "setPlayhead", playhead: 0.25 });
+    engine.playhead = 0.25;
+    const resumed = new Float32Array(128);
+    assert.equal(processor.process([], [[resumed, new Float32Array(128)]]), true);
+    assertAudioClose(resumed, renderSignal(module, engine, resumed.length, 37).output);
   }
 });
 

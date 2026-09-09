@@ -7151,8 +7151,6 @@ export class Synth {
   private isPlayingSong: boolean = false;
   private isRecording: boolean = false;
   private pendingSampleSeek: boolean = false;
-  private readonly seekBufferL: Float32Array = new Float32Array(1024);
-  private readonly seekBufferR: Float32Array = new Float32Array(1024);
 
   public static readonly tempFilterStartCoefficients: FilterCoefficients =
     new FilterCoefficients();
@@ -7421,7 +7419,7 @@ export class Synth {
     this.pendingSampleSeek = true;
   }
 
-  private restoreSampleSeek(): void {
+  private resetSamplePlaybackAfterSeek(): void {
     this.pendingSampleSeek = false;
     const song: Song = this.song!;
     if (
@@ -7440,59 +7438,13 @@ export class Synth {
     )
       return;
 
-    // A source cursor cannot reconstruct vocoder phases, FM feedback, automation,
-    // or a chain of continued notes. Replay the same tick path into scratch buffers.
-    const ticks: number =
-      this.bar * song.beatsPerBar * Config.partsPerBeat * Config.ticksPerPart +
-      this.getTicksIntoBar();
-    const repeats: number = this.loopRepeatCount;
-    const remaining: number | null = this.renderTicksRemaining;
-    const liveDuration: number = this.liveInputDuration;
-    const liveStarted: boolean = this.liveInputStarted;
-    const recording: boolean = this.isRecording;
-    const countIn: boolean = this.countInMetronome;
+    // Restart DSP at the estimated source cursor. computeTonePhaseCatchUp uses
+    // note bends and the current tempo without rendering any skipped audio.
     this.resetEffects();
     this.startedMetronome = false;
     this.metronomeSamplesRemaining = -1;
-    this.playhead = 0;
-    this.pendingSampleSeek = false;
-    this.automationRuntime.reset(song);
-    this.loopRepeatCount = 0;
-    this.renderTicksRemaining = null;
-    this.liveInputDuration = 0;
-    this.liveInputStarted = false;
-    this.isRecording = false;
-    this.countInMetronome = false;
-    try {
-      for (let tick: number = 0; tick < ticks; tick++) {
-        // Tempo automation can change the length of every tick.
-        this.automationRuntime.update(
-          song,
-          this.bar,
-          this.getCurrentPart() + this.tick / Config.ticksPerPart,
-          true,
-        );
-        let samples: number = Math.ceil(
-          this.tickSampleCountdown > 0
-            ? this.tickSampleCountdown
-            : this.getSamplesPerTick(),
-        );
-        while (samples > 0) {
-          const count: number = Math.min(samples, this.seekBufferL.length);
-          this.seekBufferL.fill(0);
-          this.seekBufferR.fill(0);
-          this.synthesize(this.seekBufferL, this.seekBufferR, count);
-          samples -= count;
-        }
-      }
-    } finally {
-      this.loopRepeatCount = repeats;
-      this.renderTicksRemaining = remaining;
-      this.liveInputDuration = liveDuration;
-      this.liveInputStarted = liveStarted;
-      this.isRecording = recording;
-      this.countInMetronome = countIn;
-    }
+    this.tickSampleCountdown = 0;
+    this.isAtStartOfTick = true;
   }
 
   private getNextBar(): number {
@@ -7517,7 +7469,7 @@ export class Synth {
     playSong: boolean = true,
   ): void {
     if (this.pendingSampleSeek && playSong && this.song != null)
-      this.restoreSampleSeek();
+      this.resetSamplePlaybackAfterSeek();
     this.lastSynthesizeSampleCount = 0;
     if (this.songEnded) {
       outputDataL.fill(0, 0, outputBufferLength);
