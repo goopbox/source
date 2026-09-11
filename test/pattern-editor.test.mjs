@@ -264,3 +264,58 @@ test("hit effect fades start immediately and end after 250ms", async (context) =
   assert.equal(module.hitIsActive(250, 0), false);
   assert.equal(module.hitOpacity(250, 0), 0);
 });
+
+test("deleting any channel during playback tolerates cached hit notes until redraw", async (context) => {
+  const { PatternEditor, cleanup } = await loadPatternEditor();
+  context.after(cleanup);
+  window.devicePixelRatio = 1;
+
+  for (const deletedChannel of [0, 1, 2]) {
+    const editor = Object.create(PatternEditor.prototype);
+    const makeCanvas = () => {
+      const drawing = {
+        setTransform() {}, clearRect() {}, fill() {}, stroke() {}, drawImage() {},
+      };
+      return drawing.canvas = { width: 100, height: 100, getContext: () => drawing };
+    };
+    const channels = Array.from({ length: 3 }, () => ({
+      muted: false,
+      pattern: { notes: [{ start: 0, end: 24 }] },
+    }));
+    const cacheNotes = () => channels.map((channel, index) => ({
+      note: channel.pattern.notes[0], channel: index, color: "#88aaff", path: {},
+    }));
+    Object.assign(editor, {
+      _hitCanvas: makeCanvas(), _ghostHitCanvas: makeCanvas(), _expandingCanvas: makeCanvas(),
+      container: { isConnected: true },
+      _svgPlayhead: { getAttribute: () => "" },
+      _editorWidth: 100, _editorHeight: 100, _barOffset: 0,
+      _hitNotes: cacheNotes(), _hitCopies: [], _lastHitPosition: null, _lastHitBar: -1,
+      _doc: {
+        bar: 0, channel: deletedChannel,
+        synth: { playing: true, playhead: 0.125 },
+        song: {
+          beatsPerBar: 4, channels,
+          getChannelIsAutomation: () => false,
+          getPattern: (channel) => channels[channel].pattern,
+        },
+      },
+    });
+
+    editor._animateNoteHits(0);
+    assert.equal(editor._hitCopies.length, 3);
+
+    // Deletion changes channel indexes before the next redraw refreshes the cache.
+    channels.splice(deletedChannel, 1);
+    editor._doc.channel = Math.max(0, deletedChannel - 1);
+    editor._doc.synth.playhead = 0.2;
+    assert.doesNotThrow(() => editor._animateNoteHits(100), `deleting channel ${deletedChannel}`);
+
+    editor._hitNotes = cacheNotes();
+    editor._doc.synth.playhead = 1;
+    editor._animateNoteHits(300);
+    assert.equal(editor._hitCopies.length, 2, "remaining channels still animate after the cache refreshes");
+    editor._animateNoteHits(550);
+    assert.equal(editor._hitCopies.length, 0, "effects continue to expire");
+  }
+});

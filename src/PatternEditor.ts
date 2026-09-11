@@ -766,7 +766,9 @@ export class PatternEditor {
     for (const entry of this._hitNotes) {
       const { note, channel, path, color } = entry;
       const context = channel == this._doc.channel ? mainContext : ghostContext;
-      if (this._doc.song.channels[channel].muted ||
+      // Deletion can change channel indexes before the next redraw refreshes the cache.
+      const songChannel = this._doc.song.channels[channel];
+      if (songChannel == null || songChannel.muted ||
           this._doc.song.getPattern(channel, bar) != this._doc.song.getPattern(channel, this._doc.bar + this._barOffset)) continue;
       if (!this._noteContinuesFromPreviousBar(note, channel, bar) &&
           noteWasHit(note.start, note.end, position, previous)) {
