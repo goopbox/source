@@ -1,0 +1,32 @@
+{
+  "name": "goopbox",
+  "private": true,
+  "license": "(MIT AND Unlicense)",
+  "type": "module",
+  "scripts": {
+    "icons": "node scripts/icons.mjs",
+    "fix": "oxlint --fix --format=agent src synth scripts test playwright.config.mjs",
+    "build": "oxlint --deny-warnings --format=agent src synth scripts test playwright.config.mjs && tsc && node --test ./test/*.test.mjs && npm run dist && playwright test",
+    "dist": "node scripts/build.mjs",
+    "start": "node scripts/start.mjs",
+    "deploy": "bash scripts/deploy.sh"
+  },
+  "dependencies": {
+    "@audio/stretch-transient": "1.2.1",
+    "fflate": "^0.8.3",
+    "imperative-html": "^0.1.2"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.63.0",
+    "esbuild": "^0.28.1",
+    "html-minifier-next": "^8.5.0",
+    "oxlint": "^1.83.0",
+    "typescript": "^7.0.2"
+  },
+  "engines": {
+    "node": "^26.0.0"
+  },
+  "allowScripts": {
+    "esbuild@0.28.2": true
+  }
+}

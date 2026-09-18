@@ -1,0 +1,4937 @@
+// Copyright (c) John Nesky and contributing authors, distributed under the MIT license, see accompanying the LICENSE.md file.
+
+import {
+  type Algorithm,
+  type AssetDefinition,
+  type AutomationValueDomain,
+  Config,
+  type Dictionary,
+  EffectType,
+  FilterType,
+  InstrumentType,
+  type ModulationTarget,
+  type SustainType,
+  effectsIncludeDistortion,
+} from "../synth/synth-config.js";
+import {
+  type AutomationRow,
+  Channel,
+  ChannelKind,
+  Event,
+  EventPoint,
+  FilterControlPoint,
+  type FilterSettings,
+  type HarmonicsWave,
+  Instrument,
+  Note,
+  type NotePin,
+  Pattern,
+  type Song,
+  type SpectrumWave,
+  Synth,
+  makeNotePin,
+  mapAutomationClipboardValue,
+} from "../synth/synth.js";
+import { Change, ChangeGroup, ChangeSequence, UndoableChange } from "./change.js";
+import { EditorConfig, type Preset, type PresetCategory } from "./editor-config.js";
+import { bendEvent, clipEvent, repeatEvents } from "./event-editing.js";
+import { RandomBag } from "./random-bag.js";
+import type { SongDocument } from "./song-document.js";
+import type { SoundFontPresetInfo } from "../synth/synth-controller.js";
+import { selectCurvedValue } from "./random-value.js";
+
+const randomInstrumentTypeBags = new Map<string, RandomBag<InstrumentType>>();
+
+function pickRandomInstrumentType(types: readonly InstrumentType[]): InstrumentType {
+  const key: string = types.join(",");
+  let bag = randomInstrumentTypeBags.get(key);
+  if (bag === undefined) {
+    bag = new RandomBag();
+    randomInstrumentTypeBags.set(key, bag);
+  }
+  return bag.pick(types);
+}
+
+function pitchIsInScale(doc: SongDocument, pitch: number): boolean {
+  const compositionOffset = doc.song.composingKey - doc.song.key,
+    scaleIndex =
+      (((Math.round(pitch) - compositionOffset) % Config.pitchesPerOctave) +
+        Config.pitchesPerOctave) %
+      Config.pitchesPerOctave;
+  return Config.scales[doc.song.scale]!.flags[scaleIndex]!;
+}
+
+/** Snaps a positive integer pitch to the octave scale, assuming it's in range. */
+function snapPitchToScale(doc: SongDocument, pitch: number) {
+  if (doc.song.getChannelIsNoise(doc.channel) || doc.prefs.notesOutsideScale) {
+    return Math.round(pitch); // Skip
+  }
+  if (pitchIsInScale(doc, pitch)) {
+    return Math.round(pitch); // Already on scale
+  }
+
+  let distanceUp = Config.maxPitch,
+    distanceDown = Config.maxPitch;
+
+  for (let i = pitch + 1; i < Config.maxPitch + 0.5; i++) {
+    if (pitchIsInScale(doc, i)) {
+      distanceUp = i - pitch;
+      break;
+    }
+  }
+  for (let i = pitch - 1; i > -0.5; i--) {
+    if (pitchIsInScale(doc, i)) {
+      distanceDown = pitch - i;
+      break;
+    }
+  }
+
+  return distanceUp < distanceDown
+    ? Math.round(pitch + distanceUp)
+    : Math.round(pitch - distanceDown);
+}
+
+function markInvalidAutomationTargetsForCurrentInstrument(doc: SongDocument): void {
+  if (doc.song.getChannelIsAutomation(doc.channel)) {
+    return;
+  }
+  const instrumentIndex: number = doc.getCurrentInstrument(),
+    instrument: Instrument | undefined =
+      doc.song.channels[doc.channel]?.instruments[instrumentIndex];
+  if (instrument === undefined) {
+    return;
+  }
+  doc.song.forEachAutomationRow((row: AutomationRow): void => {
+    if (
+      row.targetChannel !== doc.channel ||
+      row.targetInstrument !== instrumentIndex ||
+      row.targetChannelMissing ||
+      row.targetInstrumentMissing ||
+      row.targetElementMissing
+    ) {
+      return;
+    }
+    const target: ModulationTarget | undefined = Config.modulationTargets.dictionary[row.targetId]!;
+    if (
+      target === undefined ||
+      !Config.automationTargetIsValidForInstrument(target, instrument, row.targetIndex)
+    ) {
+      row.targetElementMissing = true;
+    }
+  });
+}
+
+function removeRedundantPins(pins: NotePin[]): void {
+  for (let i = 1; i < pins.length - 1;) {
+    const prevPin: NotePin = pins[i - 1]!,
+      pin: NotePin = pins[i]!,
+      nextPin: NotePin = pins[i + 1]!,
+      prevTimeSpan: number = pin.time - prevPin.time,
+      nextTimeSpan: number = nextPin.time - pin.time;
+    if (
+      (pin.interval - prevPin.interval) * nextTimeSpan ===
+        (nextPin.interval - pin.interval) * prevTimeSpan &&
+      (pin.size - prevPin.size) * nextTimeSpan === (nextPin.size - pin.size) * prevTimeSpan
+    ) {
+      pins.splice(i, 1);
+    } else {
+      i++;
+    }
+  }
+}
+
+function projectNoteIntoBar(
+  oldNote: Note,
+  timeOffset: number,
+  noteStartPart: number,
+  noteEndPart: number,
+  newNotes: Note[],
+): void {
+  // Create a new note, and interpret the pitch bend and size events
+  // To determine where we need to insert pins to control interval and volume.
+  const newNote: Note = new Note(-1, noteStartPart, noteEndPart, Config.noteSizeMax, false);
+  newNote.pins.length = 0;
+  newNote.pitches.length = 0;
+  const newNoteLength: number = noteEndPart - noteStartPart;
+
+  for (const pitch of oldNote.pitches) {
+    newNote.pitches.push(pitch);
+  }
+
+  for (let pinIndex = 0; pinIndex < oldNote.pins.length; pinIndex++) {
+    const pin: NotePin = oldNote.pins[pinIndex]!,
+      newPinTime: number = pin.time + timeOffset;
+    if (newPinTime < 0) {
+      if (pinIndex + 1 >= oldNote.pins.length) {
+        throw new Error("Error converting pins in note overflow.");
+      }
+      const nextPin: NotePin = oldNote.pins[pinIndex + 1]!,
+        nextPinTime: number = nextPin.time + timeOffset;
+      if (nextPinTime > 0) {
+        // Insert an interpolated pin at the start of the new note.
+        const ratio: number = -newPinTime / (nextPinTime - newPinTime);
+        newNote.pins.push(
+          makeNotePin(
+            Math.round(pin.interval + ratio * (nextPin.interval - pin.interval)),
+            0,
+            Math.round(pin.size + ratio * (nextPin.size - pin.size)),
+          ),
+        );
+      }
+    } else if (newPinTime <= newNoteLength) {
+      newNote.pins.push(makeNotePin(pin.interval, newPinTime, pin.size));
+    } else {
+      if (pinIndex < 1) {
+        throw new Error("Error converting pins in note overflow.");
+      }
+      const prevPin: NotePin = oldNote.pins[pinIndex - 1]!,
+        prevPinTime: number = prevPin.time + timeOffset;
+      if (prevPinTime < newNoteLength) {
+        // Insert an interpolated pin at the end of the new note.
+        const ratio: number = (newNoteLength - prevPinTime) / (newPinTime - prevPinTime);
+        newNote.pins.push(
+          makeNotePin(
+            Math.round(prevPin.interval + ratio * (pin.interval - prevPin.interval)),
+            newNoteLength,
+            Math.round(prevPin.size + ratio * (pin.size - prevPin.size)),
+          ),
+        );
+      }
+    }
+  }
+
+  // Fix from Jummbus: Ensure the first pin's interval is zero, adjust pitches and pins to compensate.
+  const offsetInterval: number = newNote.pins[0]!.interval;
+  for (let pitchIdx = 0; pitchIdx < newNote.pitches.length; pitchIdx++) {
+    newNote.pitches[pitchIdx]! += offsetInterval;
+  }
+  for (let pinIdx = 0; pinIdx < newNote.pins.length; pinIdx++) {
+    newNote.pins[pinIdx]!.interval -= offsetInterval;
+  }
+
+  let joinedWithPrevNote = false;
+  if (newNote.start === 0) {
+    newNote.continuesLastPattern = timeOffset < 0 || oldNote.continuesLastPattern;
+  } else {
+    newNote.continuesLastPattern = false;
+    if (newNotes.length > 0 && oldNote.continuesLastPattern) {
+      const prevNote: Note = newNotes.at(-1)!;
+      if (
+        prevNote.end === newNote.start &&
+        Synth.adjacentNotesHaveMatchingPitches(prevNote, newNote)
+      ) {
+        joinedWithPrevNote = true;
+        const newIntervalOffset: number = prevNote.pins.at(-1)!.interval,
+          newTimeOffset: number = prevNote.end - prevNote.start;
+        for (let pinIndex = 1; pinIndex < newNote.pins.length; pinIndex++) {
+          const tempPin: NotePin = newNote.pins[pinIndex]!,
+            transformedPin: NotePin = makeNotePin(
+              tempPin.interval + newIntervalOffset,
+              tempPin.time + newTimeOffset,
+              tempPin.size,
+            );
+          prevNote.pins.push(transformedPin);
+          prevNote.end = prevNote.start + transformedPin.time;
+        }
+        removeRedundantPins(prevNote.pins);
+      }
+    }
+  }
+  if (!joinedWithPrevNote) {
+    newNotes.push(newNote);
+  }
+}
+
+function getOrCreateProjectedPattern(
+  channel: Channel,
+  bar: number,
+  automationRowCount = 0,
+): Pattern | null {
+  if (bar < 0 || bar >= Config.barCountMax) {
+    return null;
+  }
+  while (channel.bars.length <= bar) {
+    channel.bars.push(0);
+  }
+  const patternNumber: number = channel.bars[bar]!;
+  if (patternNumber !== 0) {
+    return channel.patterns[patternNumber - 1]!;
+  }
+  const pattern: Pattern = new Pattern();
+  if (automationRowCount > 0) {
+    pattern.ensureAutomationRowCount(automationRowCount);
+  }
+  channel.patterns.push(pattern);
+  channel.bars[bar] = channel.patterns.length;
+  return pattern;
+}
+
+function projectEventIntoBar(
+  oldEvent: Event,
+  oldBarStart: number,
+  partsToMove: number,
+  bar: number,
+  partsPerBar: number,
+): Event | null {
+  const shiftedStart: number = oldBarStart + oldEvent.start + partsToMove,
+    shiftedEnd: number = oldBarStart + oldEvent.end + partsToMove,
+    destinationBarStart: number = bar * partsPerBar,
+    absoluteStart: number = Math.max(shiftedStart, destinationBarStart),
+    absoluteEnd: number = Math.min(shiftedEnd, destinationBarStart + partsPerBar);
+  if (!(absoluteStart < absoluteEnd)) {
+    return null;
+  }
+
+  const start: number = absoluteStart - destinationBarStart,
+    end: number = absoluteEnd - destinationBarStart,
+    sourcePartAtStart: number = oldEvent.start + absoluteStart - shiftedStart,
+    sourcePartAtEnd: number = oldEvent.start + absoluteEnd - shiftedStart,
+    points: EventPoint[] = [new EventPoint(0, oldEvent.getValueAt(sourcePartAtStart))];
+  for (const point of oldEvent.points) {
+    const shiftedPoint: number = shiftedStart + point.time;
+    if (shiftedPoint <= absoluteStart || shiftedPoint >= absoluteEnd) {
+      continue;
+    }
+    points.push(new EventPoint(shiftedPoint - absoluteStart, point.value));
+  }
+  points.push(new EventPoint(absoluteEnd - absoluteStart, oldEvent.getValueAt(sourcePartAtEnd)));
+  return new Event(start, end, points);
+}
+
+function truncateEvents(events: readonly Event[], endPart: number): Event[] {
+  const result: Event[] = [];
+  for (const event of events) {
+    if (event.start >= endPart) {
+      break;
+    }
+    if (event.end <= endPart) {
+      result.push(event.clone());
+      continue;
+    }
+    const duration: number = endPart - event.start;
+    if (duration <= 0) {
+      continue;
+    }
+    const points: EventPoint[] = event.points
+      .filter((point): boolean => point.time < duration)
+      .map((point): EventPoint => point.clone());
+    if (points.length === 0 || points[0]!.time !== 0) {
+      points.unshift(new EventPoint(0, event.getValueAt(event.start)));
+    }
+    points.push(new EventPoint(duration, event.getValueAt(endPart)));
+    result.push(new Event(event.start, endPart, points));
+  }
+  return result;
+}
+
+function scaleEvents(events: readonly Event[], ratio: number): Event[] {
+  return events.map(
+    (event): Event =>
+      new Event(
+        event.start * ratio,
+        event.end * ratio,
+        event.points.map((point): EventPoint => new EventPoint(point.time * ratio, point.value)),
+      ),
+  );
+}
+
+export function removeDuplicatePatterns(channels: Channel[]): void {
+  for (const channel of channels) {
+    const kind: ChannelKind =
+        channel.instruments.length === 0 && channel.automationRows.length > 0
+          ? ChannelKind.automation
+          : ChannelKind.pitch,
+      newPatterns: Pattern[] = [];
+    for (let bar = 0; bar < channel.bars.length; bar++) {
+      if (channel.bars[bar] === 0) {
+        continue;
+      }
+
+      const oldPattern: Pattern = channel.patterns[channel.bars[bar]! - 1]!;
+
+      let foundMatchingPattern = false;
+      for (let newPatternIndex = 0; newPatternIndex < newPatterns.length; newPatternIndex++) {
+        const newPattern: Pattern = newPatterns[newPatternIndex]!;
+
+        if (oldPattern.contentEquals(newPattern, kind)) {
+          foundMatchingPattern = true;
+          channel.bars[bar] = newPatternIndex + 1;
+          break;
+        }
+      }
+
+      if (!foundMatchingPattern) {
+        newPatterns.push(oldPattern);
+        channel.bars[bar] = newPatterns.length;
+      }
+    }
+
+    for (let patternIndex = 0; patternIndex < newPatterns.length; patternIndex++) {
+      channel.patterns[patternIndex] = newPatterns[patternIndex]!;
+    }
+    channel.patterns.length = newPatterns.length;
+  }
+}
+
+export class ChangeValidateTrackSelection extends Change {
+  public constructor(doc: SongDocument) {
+    super();
+    const channelIndex: number = Math.min(doc.channel, doc.song.getChannelCount() - 1),
+      bar: number = Math.max(0, Math.min(doc.song.barCount - 1, doc.bar));
+    if (doc.channel !== channelIndex || doc.bar !== bar) {
+      doc.bar = bar;
+      doc.channel = channelIndex;
+      this._didSomething();
+    }
+    doc.selection.scrollToSelectedPattern();
+    doc.notifier.changed();
+  }
+}
+
+export class ChangeReplacePatterns extends ChangeGroup {
+  public constructor(
+    doc: SongDocument,
+    pitchChannels: Channel[],
+    noiseChannels: Channel[],
+    automationChannels: Channel[] = [],
+  ) {
+    super();
+
+    const song: Song = doc.song;
+
+    function removeExtraSparseChannels(channels: Channel[], maxLength: number): void {
+      while (channels.length > maxLength) {
+        let sparsestIndex: number = channels.length - 1,
+          mostZeroes = 0;
+        for (let channelIndex = 0; channelIndex < channels.length - 1; channelIndex++) {
+          let zeroes = 0;
+          for (const bar of channels[channelIndex]!.bars) {
+            if (bar === 0) {
+              zeroes++;
+            }
+          }
+          if (zeroes >= mostZeroes) {
+            sparsestIndex = channelIndex;
+            mostZeroes = zeroes;
+          }
+        }
+        channels.splice(sparsestIndex, 1);
+      }
+    }
+
+    removeExtraSparseChannels(pitchChannels, Config.pitchChannelCountMax);
+    removeExtraSparseChannels(noiseChannels, Config.noiseChannelCountMax);
+    removeExtraSparseChannels(automationChannels, Config.automationChannelCountMax);
+
+    while (pitchChannels.length < Config.pitchChannelCountMin) {
+      pitchChannels.push(new Channel());
+    }
+    while (noiseChannels.length < Config.noiseChannelCountMin) {
+      noiseChannels.push(new Channel());
+    }
+
+    // Set minimum counts.
+    song.barCount = 1;
+    song.patternsPerChannel = 8;
+    const combinedChannels: Channel[] = pitchChannels.concat(noiseChannels, automationChannels);
+    for (let channelIndex = 0; channelIndex < combinedChannels.length; channelIndex++) {
+      const channel: Channel = combinedChannels[channelIndex]!;
+      song.barCount = Math.max(song.barCount, channel.bars.length);
+      song.patternsPerChannel = Math.max(song.patternsPerChannel, channel.patterns.length);
+      song.channels[channelIndex] = channel;
+    }
+    song.channels.length = combinedChannels.length;
+    song.pitchChannelCount = pitchChannels.length;
+    song.noiseChannelCount = noiseChannels.length;
+    song.automationChannelCount = automationChannels.length;
+
+    song.barCount = Math.min(Config.barCountMax, song.barCount);
+    song.patternsPerChannel = Math.min(Config.barCountMax, song.patternsPerChannel);
+    for (let channelIndex = 0; channelIndex < song.channels.length; channelIndex++) {
+      const channel: Channel = song.channels[channelIndex]!;
+
+      for (let barIndex = 0; barIndex < channel.bars.length; barIndex++) {
+        if (channel.bars[barIndex]! > song.patternsPerChannel || channel.bars[barIndex]! < 0) {
+          channel.bars[barIndex] = 0;
+        }
+      }
+      while (channel.bars.length < song.barCount) {
+        channel.bars.push(0);
+      }
+      channel.bars.length = song.barCount;
+
+      if (channel.instruments.length > song.getMaxInstrumentsPerChannel()) {
+        channel.instruments.length = song.getMaxInstrumentsPerChannel();
+      }
+
+      while (channel.patterns.length < song.patternsPerChannel) {
+        const pattern: Pattern = new Pattern();
+        if (song.getChannelIsAutomation(channelIndex)) {
+          pattern.ensureAutomationRowCount(channel.automationRows.length);
+        }
+        channel.patterns.push(pattern);
+      }
+      channel.patterns.length = song.patternsPerChannel;
+      if (song.getChannelIsAutomation(channelIndex)) {
+        channel.instruments.length = 0;
+        for (const pattern of channel.patterns) {
+          pattern.ensureAutomationRowCount(channel.automationRows.length);
+          pattern.automationEvents.length = channel.automationRows.length;
+        }
+      }
+    }
+
+    song.loopStart = Math.max(0, Math.min(song.barCount - 1, song.loopStart));
+    song.loopLength = Math.min(song.barCount - song.loopStart, song.loopLength);
+
+    this.append(new ChangeValidateTrackSelection(doc));
+    doc.notifier.changed();
+    this._didSomething();
+  }
+}
+
+export class ChangeMoveAndOverflowNotes extends ChangeGroup {
+  public constructor(doc: SongDocument, newBeatsPerBar: number, partsToMove: number) {
+    super();
+
+    const pitchChannels: Channel[] = [],
+      noiseChannels: Channel[] = [],
+      automationChannels: Channel[] = [];
+
+    for (let channelIndex = 0; channelIndex < doc.song.getChannelCount(); channelIndex++) {
+      const oldChannel: Channel = doc.song.channels[channelIndex]!,
+        newChannel: Channel = new Channel(),
+        kind: ChannelKind = doc.song.getChannelKind(channelIndex);
+      if (kind === ChannelKind.pitch) {
+        pitchChannels.push(newChannel);
+      } else if (kind === ChannelKind.noise) {
+        noiseChannels.push(newChannel);
+      } else {
+        automationChannels.push(newChannel);
+      }
+
+      newChannel.muted = oldChannel.muted;
+      newChannel.octave = oldChannel.octave;
+      newChannel.instruments.push(...oldChannel.instruments);
+      newChannel.automationRows.push(
+        ...oldChannel.automationRows.map((row): AutomationRow => row.clone()),
+      );
+
+      const oldPartsPerBar: number = Config.partsPerBeat * doc.song.beatsPerBar,
+        newPartsPerBar: number = Config.partsPerBeat * newBeatsPerBar;
+
+      for (let oldBar = 0; oldBar < doc.song.barCount; oldBar++) {
+        const oldPattern: Pattern | null = doc.song.getPattern(channelIndex, oldBar);
+        if (oldPattern != null) {
+          const oldBarStart: number = oldBar * oldPartsPerBar;
+          if (kind === ChannelKind.automation) {
+            for (let rowIndex = 0; rowIndex < oldChannel.automationRows.length; rowIndex++) {
+              const events: readonly Event[] = oldPattern.automationEvents[rowIndex] ?? [];
+              for (const oldEvent of events) {
+                const shiftedStart: number = oldBarStart + oldEvent.start + partsToMove,
+                  shiftedEnd: number = oldBarStart + oldEvent.end + partsToMove,
+                  startBar: number = Math.floor(shiftedStart / newPartsPerBar),
+                  endBar: number = Math.ceil(shiftedEnd / newPartsPerBar);
+                for (let bar: number = startBar; bar < endBar; bar++) {
+                  const projected: Event | null = projectEventIntoBar(
+                    oldEvent,
+                    oldBarStart,
+                    partsToMove,
+                    bar,
+                    newPartsPerBar,
+                  );
+                  if (projected == null) {
+                    continue;
+                  }
+                  const pattern: Pattern | null = getOrCreateProjectedPattern(
+                    newChannel,
+                    bar,
+                    oldChannel.automationRows.length,
+                  );
+                  pattern?.automationEvents[rowIndex]?.push(projected);
+                }
+              }
+            }
+            continue;
+          }
+          for (const oldNote of oldPattern.notes) {
+            const absoluteNoteStart: number = oldNote.start + oldBarStart + partsToMove,
+              absoluteNoteEnd: number = oldNote.end + oldBarStart + partsToMove,
+              startBar: number = Math.floor(absoluteNoteStart / newPartsPerBar),
+              endBar: number = Math.ceil(absoluteNoteEnd / newPartsPerBar);
+            for (let bar: number = startBar; bar < endBar; bar++) {
+              const barStartPart: number = bar * newPartsPerBar,
+                noteStartPart: number = Math.max(0, absoluteNoteStart - barStartPart),
+                noteEndPart: number = Math.min(newPartsPerBar, absoluteNoteEnd - barStartPart);
+
+              if (noteStartPart < noteEndPart) {
+                const pattern: Pattern | null = getOrCreateProjectedPattern(newChannel, bar);
+                if (pattern == null) {
+                  continue;
+                }
+
+                projectNoteIntoBar(
+                  oldNote,
+                  absoluteNoteStart - barStartPart - noteStartPart,
+                  noteStartPart,
+                  noteEndPart,
+                  pattern.notes,
+                );
+              }
+            }
+          }
+        }
+      }
+    }
+
+    removeDuplicatePatterns(pitchChannels);
+    removeDuplicatePatterns(noiseChannels);
+    removeDuplicatePatterns(automationChannels);
+    this.append(new ChangeReplacePatterns(doc, pitchChannels, noiseChannels, automationChannels));
+  }
+}
+
+class ChangePins extends UndoableChange {
+  protected _oldStart: number;
+  protected _newStart: number;
+  protected _oldEnd: number;
+  protected _newEnd: number;
+  protected _oldPins: NotePin[];
+  protected _newPins: NotePin[];
+  protected _oldPitches: number[];
+  protected _newPitches: number[];
+  protected _oldContinuesLastPattern: boolean;
+  protected _newContinuesLastPattern: boolean;
+  public constructor(
+    protected _doc: SongDocument | null,
+    protected _note: Note,
+  ) {
+    super(false);
+    this._oldStart = this._note.start;
+    this._oldEnd = this._note.end;
+    this._newStart = this._note.start;
+    this._newEnd = this._note.end;
+    this._oldPins = this._note.pins;
+    this._newPins = [];
+    this._oldPitches = this._note.pitches;
+    this._newPitches = [];
+    this._oldContinuesLastPattern = this._note.continuesLastPattern;
+    this._newContinuesLastPattern = this._note.continuesLastPattern;
+  }
+
+  protected _finishSetup(continuesLastPattern?: boolean): void {
+    for (let i = 0; i < this._newPins.length - 1;) {
+      if (this._newPins[i]!.time >= this._newPins[i + 1]!.time) {
+        this._newPins.splice(i, 1);
+      } else {
+        i++;
+      }
+    }
+
+    removeRedundantPins(this._newPins);
+
+    const firstInterval: number = this._newPins[0]!.interval,
+      firstTime: number = this._newPins[0]!.time;
+    for (let i = 0; i < this._oldPitches.length; i++) {
+      this._newPitches[i] = this._oldPitches[i]! + firstInterval;
+    }
+    for (let i = 0; i < this._newPins.length; i++) {
+      this._newPins[i]!.interval -= firstInterval;
+      this._newPins[i]!.time -= firstTime;
+    }
+    this._newStart = this._oldStart + firstTime;
+    this._newEnd = this._newStart + this._newPins.at(-1)!.time;
+
+    if (continuesLastPattern !== undefined) {
+      this._newContinuesLastPattern = continuesLastPattern;
+    }
+    if (this._newStart !== 0) {
+      this._newContinuesLastPattern = false;
+    }
+
+    this._doForwards();
+    this._didSomething();
+  }
+
+  protected override _doForwards(): void {
+    this._note.pins = this._newPins;
+    this._note.pitches = this._newPitches;
+    this._note.start = this._newStart;
+    this._note.end = this._newEnd;
+    this._note.continuesLastPattern = this._newContinuesLastPattern;
+    if (this._doc != null) {
+      this._doc.notifier.changed();
+    }
+  }
+
+  protected override _doBackwards(): void {
+    this._note.pins = this._oldPins;
+    this._note.pitches = this._oldPitches;
+    this._note.start = this._oldStart;
+    this._note.end = this._oldEnd;
+    this._note.continuesLastPattern = this._oldContinuesLastPattern;
+    if (this._doc != null) {
+      this._doc.notifier.changed();
+    }
+  }
+}
+
+export class ChangeCustomizeInstrument extends Change {
+  public constructor(doc: SongDocument) {
+    super();
+    const instrument: Instrument =
+      doc.song.channels[doc.channel]!.instruments[doc.getCurrentInstrument()]!;
+    if (instrument.preset !== instrument.type) {
+      instrument.preset = instrument.type;
+      doc.notifier.changed();
+      this._didSomething();
+    }
+  }
+}
+
+export class ChangeAssets extends Change {
+  public constructor(doc: SongDocument, assets: readonly AssetDefinition[]) {
+    super();
+    if (
+      doc.song.assets.length === assets.length &&
+      doc.song.assets.every((asset, index) => asset.source === assets[index]!.source)
+    ) {
+      return;
+    }
+    const sampleIds: {
+      instrument: Instrument;
+      chipWave: string | null;
+      operatorWaves: (string | null)[];
+    }[] = [];
+    for (const channel of doc.song.channels) {
+      for (const instrument of channel.instruments) {
+        sampleIds.push({
+          instrument,
+          chipWave: Config.chipWaves[instrument.chipWave]?.sampleId ?? null,
+          operatorWaves: instrument.operators.map((operator): string | null =>
+            operator.wave === 0 ? null : (Config.chipWaves[operator.wave - 1]?.sampleId ?? null),
+          ),
+        });
+      }
+    }
+    doc.song.assets.splice(0, doc.song.assets.length, ...assets);
+    Config.configureAssets(doc.song.assets);
+    for (const references of sampleIds) {
+      if (references.chipWave != null) {
+        const chipWave = Config.chipWaves.find(
+          (wave): boolean => wave.sampleId === references.chipWave,
+        );
+        references.instrument.chipWave = chipWave?.index ?? 1;
+      }
+      for (let index = 0; index < references.operatorWaves.length; index++) {
+        const sampleId: string | null = references.operatorWaves[index]!;
+        if (sampleId == null) {
+          continue;
+        }
+        const chipWave = Config.chipWaves.find((wave): boolean => wave.sampleId === sampleId);
+        references.instrument.operators[index]!.wave =
+          chipWave === undefined ? 0 : chipWave.index + 1;
+      }
+    }
+    doc.notifier.changed();
+    this._didSomething();
+  }
+}
+
+export class ChangePreset extends Change {
+  public constructor(doc: SongDocument, newValue: number) {
+    super();
+    const instrument: Instrument =
+        doc.song.channels[doc.channel]!.instruments[doc.getCurrentInstrument()]!,
+      oldValue: number = instrument.preset;
+    if (oldValue !== newValue) {
+      const preset: Preset | null = EditorConfig.valueToPreset(newValue);
+      if (preset != null) {
+        if (preset.customType !== undefined) {
+          instrument.type = preset.customType;
+          if (
+            !Config.instrumentTypeHasSpecialInterval[instrument.type]! &&
+            Config.chords[instrument.chord]!.customInterval
+          ) {
+            instrument.chord = 0;
+          }
+          instrument.clearInvalidEnvelopeTargets();
+        } else if (preset.settings !== undefined) {
+          const tempVolume: number = instrument.volume,
+            tempPan: number = instrument.pan;
+          instrument.fromSettingsObject(preset.settings, doc.song.getChannelIsNoise(doc.channel));
+          // Presets shouldn't override volume or panning.
+          instrument.volume = tempVolume;
+          instrument.pan = tempPan;
+        }
+      }
+      instrument.preset = newValue;
+      markInvalidAutomationTargetsForCurrentInstrument(doc);
+      doc.notifier.changed();
+      this._didSomething();
+    }
+  }
+}
+
+export class ChangeRandomGeneratedInstrument extends Change {
+  public constructor(doc: SongDocument) {
+    super();
+
+    interface ItemWeight<T> {
+      readonly item: T;
+      readonly weight: number;
+    }
+    function selectWeightedRandom<T>(entries: readonly ItemWeight<T>[]): T {
+      let total = 0;
+      for (const entry of entries) {
+        total += entry.weight;
+      }
+      let random: number = Math.random() * total;
+      for (const entry of entries) {
+        random -= entry.weight;
+        if (random <= 0.0) {
+          return entry.item;
+        }
+      }
+      return entries[(Math.random() * entries.length) | 0]!.item;
+    }
+    function selectCurvedDistribution(
+      min: number,
+      max: number,
+      peak: number,
+      width: number,
+    ): number {
+      return selectCurvedValue(min, max, peak, width);
+    }
+    function percentToSetting(percent: number, settingMax: number): number {
+      return (percent * settingMax) / 100;
+    }
+    function selectCurvedPercentage(
+      min: number,
+      peak: number,
+      width: number,
+      settingMax: number,
+    ): number {
+      return percentToSetting(selectCurvedValue(min, 100, peak, width), settingMax);
+    }
+    function echoDelayFromBeats(beats: number): number {
+      return (beats * Config.ticksPerPart * Config.partsPerBeat) / Config.echoDelayStepTicks - 1;
+    }
+
+    class PotentialFilterPoint {
+      public constructor(
+        public readonly chance: number,
+        public readonly type: FilterType,
+        public readonly minFreq: number,
+        public readonly maxFreq: number,
+        public readonly centerHz: number,
+        public readonly centerGain: number,
+      ) {}
+    }
+    function applyFilterPoints(
+      filter: FilterSettings,
+      potentialPoints: readonly PotentialFilterPoint[],
+    ): void {
+      filter.reset();
+      const usedFreqs: number[] = [];
+      for (const potentialPoint of potentialPoints) {
+        if (Math.random() > potentialPoint.chance) {
+          continue;
+        }
+        const point: FilterControlPoint = new FilterControlPoint();
+        point.type = potentialPoint.type;
+        point.freq = selectCurvedDistribution(
+          potentialPoint.minFreq,
+          potentialPoint.maxFreq,
+          FilterControlPoint.getRoundedSettingValueFromHz(potentialPoint.centerHz),
+          1.0 / Config.filterFreqStep,
+        );
+        point.gain = selectCurvedDistribution(
+          0,
+          Config.filterGainRange - 1,
+          Config.filterGainCenter + potentialPoint.centerGain,
+          2.0 / Config.filterGainStep,
+        );
+        if (point.type === FilterType.peak && point.gain === Config.filterGainCenter) {
+          continue;
+        } // Skip pointless points. :P
+        if (usedFreqs.includes(point.freq)) {
+          continue;
+        }
+        usedFreqs.push(point.freq);
+        filter.controlPoints[filter.controlPointCount] = point;
+        filter.controlPointCount++;
+      }
+    }
+
+    const isNoise: boolean = doc.song.getChannelIsNoise(doc.channel),
+      instrument: Instrument =
+        doc.song.channels[doc.channel]!.instruments[doc.getCurrentInstrument()]!;
+    instrument.effects = 0;
+    instrument.envelopeCount = 0;
+
+    const midFreq: number = FilterControlPoint.getRoundedSettingValueFromHz(700.0),
+      maxFreq: number = Config.filterFreqRange - 1;
+    applyFilterPoints(instrument.eqFilter, [
+      new PotentialFilterPoint(0.8, FilterType.lowPass, midFreq, maxFreq, 4000.0, -1),
+      new PotentialFilterPoint(0.4, FilterType.highPass, 0, midFreq - 1, 250.0, -1),
+      new PotentialFilterPoint(0.5, FilterType.peak, 0, maxFreq, 2000.0, 0),
+      new PotentialFilterPoint(0.4, FilterType.peak, 0, maxFreq, 1400.0, 0),
+      new PotentialFilterPoint(0.3, FilterType.peak, 0, maxFreq, 1000.0, 0),
+      new PotentialFilterPoint(0.2, FilterType.peak, 0, maxFreq, 500.0, 0),
+    ]);
+    if (instrument.eqFilter.controlPointCount > 0) {
+      instrument.effects |= 1 << EffectType.eqFilter;
+    }
+
+    if (isNoise) {
+      const type: InstrumentType = pickRandomInstrumentType([
+        InstrumentType.noise,
+        InstrumentType.spectrum,
+        InstrumentType.drumset,
+      ]);
+      instrument.preset = instrument.type = type;
+
+      instrument.fadeIn =
+        Math.random() < 0.8 ? 0 : selectCurvedDistribution(0, Config.fadeInRange - 1, 0, 2);
+      instrument.fadeOut = selectCurvedDistribution(
+        0,
+        Config.fadeOutTicks.length - 1,
+        Config.fadeOutNeutral,
+        2,
+      );
+
+      if (Math.random() < 0.1) {
+        instrument.effects |= 1 << EffectType.transition;
+        instrument.transition =
+          Config.transitions.dictionary[
+            selectWeightedRandom([
+              { item: "normal", weight: 30 },
+              { item: "interrupt", weight: 1 },
+              { item: "slide", weight: 2 },
+            ])
+          ]!.index;
+      }
+      if (Math.random() < 0.2) {
+        instrument.effects |= 1 << EffectType.chord;
+        instrument.chord =
+          Config.chords.dictionary[
+            selectWeightedRandom([
+              { item: "strum", weight: 2 },
+              { item: "arpeggio", weight: 1 },
+            ])
+          ]!.index;
+      }
+      if (Math.random() < 0.1) {
+        instrument.pitchShift = Config.pitchShiftCenter + selectCurvedValue(-12, 12, 0, 2);
+        if (instrument.pitchShift !== Config.pitchShiftCenter) {
+          instrument.effects |= 1 << EffectType.pitchShift;
+          instrument.addEnvelope(
+            Config.modulationTargets.dictionary["pitchShift"]!.index,
+            0,
+            Config.envelopes.dictionary[
+              selectWeightedRandom([
+                { item: "flare", weight: 4 },
+                { item: "twang", weight: 28 },
+                { item: "tremolo", weight: 3 },
+                { item: "decay", weight: 7 },
+              ])
+            ]!.index,
+          );
+        }
+      }
+      if (Math.random() < 0.1) {
+        instrument.effects |= 1 << EffectType.vibrato;
+        instrument.vibrato = selectCurvedDistribution(
+          0,
+          Config.echoSustainRange - 1,
+          Config.echoSustainRange >> 1,
+          2,
+        );
+        instrument.vibrato =
+          Config.vibratos.dictionary[
+            selectWeightedRandom([
+              { item: "light", weight: 2 },
+              { item: "delayed", weight: 2 },
+              { item: "heavy", weight: 1 },
+              { item: "shaky", weight: 2 },
+            ])
+          ]!.index;
+      }
+      if (Math.random() < 0.8) {
+        instrument.effects |= 1 << EffectType.noteFilter;
+        applyFilterPoints(instrument.noteFilter, [
+          new PotentialFilterPoint(1.0, FilterType.lowPass, midFreq, maxFreq, 8000.0, -1),
+        ]);
+        instrument.addEnvelope(
+          Config.modulationTargets.dictionary["noteFilterAllFreqs"]!.index,
+          0,
+          Config.envelopes.dictionary[
+            selectWeightedRandom([
+              { item: "punch", weight: 4 },
+              { item: "flare", weight: 6 },
+              { item: "twang", weight: 24 },
+              { item: "swell", weight: 5 },
+              { item: "tremolo", weight: 6 },
+              { item: "decay", weight: 12 },
+            ])
+          ]!.index,
+        );
+      }
+      if (Math.random() < 0.1) {
+        instrument.effects |= 1 << EffectType.distortion;
+        instrument.distortion = selectCurvedPercentage(
+          1,
+          100,
+          200 / (Config.distortionRange - 1),
+          Config.distortionRange - 1,
+        );
+      }
+      if (Math.random() < 0.1) {
+        instrument.effects |= 1 << EffectType.bitcrusher;
+        instrument.bitcrusherFreq = selectCurvedPercentage(
+          0,
+          (100 * (Config.bitcrusherFreqRange >> 1)) / (Config.bitcrusherFreqRange - 1),
+          200 / (Config.bitcrusherFreqRange - 1),
+          Config.bitcrusherFreqRange - 1,
+        );
+        instrument.bitcrusherQuantization = selectCurvedPercentage(
+          0,
+          (100 * (Config.bitcrusherQuantizationRange >> 1)) /
+            (Config.bitcrusherQuantizationRange - 1),
+          200 / (Config.bitcrusherQuantizationRange - 1),
+          Config.bitcrusherQuantizationRange - 1,
+        );
+      }
+      if (Math.random() < 0.1) {
+        instrument.effects |= 1 << EffectType.chorus;
+        instrument.chorus = selectCurvedPercentage(
+          1,
+          100,
+          100 / (Config.chorusRange - 1),
+          Config.chorusRange - 1,
+        );
+      }
+      if (Math.random() < 0.1) {
+        instrument.echoSustain = percentToSetting(
+          selectCurvedValue(
+            0,
+            200,
+            (100 * (Config.echoSustainRange >> 1)) / (Config.echoSustainRange - 1),
+            200 / (Config.echoSustainRange - 1),
+          ),
+          Config.echoSustainRange - 1,
+        );
+        instrument.echoDelay = echoDelayFromBeats(selectCurvedValue(0.25, 2, 1, 0.25, 0.25));
+        if (instrument.echoSustain !== 0 || instrument.echoDelay !== 0) {
+          instrument.effects |= 1 << EffectType.echo;
+        }
+      }
+      if (Math.random() < 0.5) {
+        instrument.effects |= 1 << EffectType.reverb;
+        instrument.reverb = selectCurvedPercentage(
+          1,
+          100 / (Config.reverbRange - 1),
+          100 / (Config.reverbRange - 1),
+          Config.reverbRange - 1,
+        );
+      }
+
+      const normalize = (harmonics: number[]): void => {
+          let max = 0;
+          for (const value of harmonics) {
+            if (value > max) {
+              max = value;
+            }
+          }
+          if (max === 0) {
+            harmonics[0] = Config.harmonicsMax;
+            return;
+          }
+          for (let i = 0; i < harmonics.length; i++) {
+            harmonics[i] = (Config.harmonicsMax * harmonics[i]!) / max;
+          }
+        },
+        generateNoiseSpectrum = (): number[] => {
+          const spectrumGenerators: (() => number[])[] = [
+              (): number[] => {
+                const spectrum: number[] = [];
+                for (let i = 0; i < Config.spectrumControlPoints; i++) {
+                  spectrum[i] = Math.random() < 0.5 ? Math.random() : 0.0;
+                }
+                return spectrum;
+              },
+              (): number[] => {
+                let current = 1.0;
+                const spectrum: number[] = [current];
+                for (let i = 1; i < Config.spectrumControlPoints; i++) {
+                  current *= 2 ** (Math.random() - 0.52);
+                  spectrum[i] = current;
+                }
+                return spectrum;
+              },
+              (): number[] => {
+                let current = 1.0;
+                const spectrum: number[] = [current];
+                for (let i = 1; i < Config.spectrumControlPoints; i++) {
+                  current *= 2 ** (Math.random() - 0.52);
+                  spectrum[i] = current * Math.random();
+                }
+                return spectrum;
+              },
+            ],
+            spectrum: number[] =
+              spectrumGenerators[(Math.random() * spectrumGenerators.length) | 0]!();
+          normalize(spectrum);
+          return spectrum;
+        };
+      switch (type) {
+        case InstrumentType.noise: {
+          {
+            instrument.chipNoise = (Math.random() * Config.chipNoises.length) | 0;
+          }
+          break;
+        }
+        case InstrumentType.spectrum: {
+          {
+            const spectrum: number[] = generateNoiseSpectrum();
+            for (let i = 0; i < Config.spectrumControlPoints; i++) {
+              instrument.spectrumWave.spectrum[i] = Math.round(spectrum[i]!);
+            }
+            instrument.spectrumWave.markCustomWaveDirty();
+          }
+          break;
+        }
+        case InstrumentType.drumset: {
+          {
+            for (let i = 0; i < Config.drumCount; i++) {
+              const envelope = Config.envelopes[(Math.random() * Config.envelopes.length) | 0]!,
+                spectrum: number[] = generateNoiseSpectrum();
+              instrument.drumsetEnvelopes[i] = envelope.index;
+              instrument.drumsetEnvelopeSpeeds[i] = Math.round(Math.random() * 500) / 100;
+              instrument.drumsetEnvelopeAs[i] = Math.round(Math.random() * 200) / 100;
+              instrument.drumsetEnvelopeBs[i] = Math.round(Math.random() * 200) / 100;
+              for (let j = 0; j < Config.spectrumControlPoints; j++) {
+                instrument.drumsetSpectrumWaves[i]!.spectrum[j] = Math.round(spectrum[j]!);
+              }
+              instrument.drumsetSpectrumWaves[i]!.markCustomWaveDirty();
+            }
+          }
+          break;
+        }
+        default: {
+          throw new Error("Unhandled noise instrument type in random generator.");
+        }
+      }
+    } else {
+      const soundFontPresets = doc.song.assets.flatMap((asset) =>
+          asset.type === "soundFont"
+            ? (doc.synth.getSoundFontPresets(asset.id) ?? []).map((preset) => ({
+                soundFontId: asset.id,
+                presetIndex: preset.index,
+              }))
+            : [],
+        ),
+        types: InstrumentType[] = [
+          InstrumentType.chip,
+          InstrumentType.pwm,
+          InstrumentType.supersaw,
+          InstrumentType.harmonics,
+          InstrumentType.pickedString,
+          InstrumentType.spectrum,
+          InstrumentType.fm,
+        ];
+      if (soundFontPresets.length > 0) {
+        types.push(InstrumentType.soundFont);
+      }
+      const type: InstrumentType = pickRandomInstrumentType(types);
+      instrument.preset = instrument.type = type;
+      if (type === InstrumentType.soundFont) {
+        const preset = soundFontPresets[(Math.random() * soundFontPresets.length) | 0]!;
+        instrument.soundFontId = preset.soundFontId;
+        instrument.soundFontPreset = preset.presetIndex;
+      }
+
+      instrument.fadeIn =
+        Math.random() < 0.5 ? 0 : selectCurvedDistribution(0, Config.fadeInRange - 1, 0, 2);
+      instrument.fadeOut = selectCurvedDistribution(
+        0,
+        Config.fadeOutTicks.length - 1,
+        Config.fadeOutNeutral,
+        2,
+      );
+      if (Math.random() < 0.35) {
+        instrument.effects |= 1 << EffectType.unison;
+        instrument.unison =
+          Config.unisons.dictionary[
+            selectWeightedRandom([
+              { item: "shimmer", weight: 5 },
+              { item: "hum", weight: 4 },
+              { item: "honky tonk", weight: 3 },
+              { item: "dissonant", weight: 1 },
+              { item: "fifth", weight: 1 },
+              { item: "octave", weight: 2 },
+              { item: "bowed", weight: 2 },
+              { item: "piano", weight: 5 },
+            ])
+          ]!.index;
+      }
+
+      if (Math.random() < 0.1) {
+        instrument.effects |= 1 << EffectType.transition;
+        instrument.transition =
+          Config.transitions.dictionary[
+            selectWeightedRandom([
+              { item: "interrupt", weight: 1 },
+              { item: "slide", weight: 2 },
+            ])
+          ]!.index;
+      }
+      if (Math.random() < 0.2) {
+        instrument.effects |= 1 << EffectType.chord;
+        instrument.chord =
+          Config.chords.dictionary[
+            selectWeightedRandom([
+              { item: "strum", weight: 2 },
+              { item: "arpeggio", weight: 1 },
+            ])
+          ]!.index;
+      }
+      if (Math.random() < 0.05) {
+        instrument.pitchShift = Config.pitchShiftCenter + selectCurvedValue(-12, 12, 0, 1);
+        if (instrument.pitchShift !== Config.pitchShiftCenter) {
+          instrument.effects |= 1 << EffectType.pitchShift;
+          instrument.addEnvelope(
+            Config.modulationTargets.dictionary["pitchShift"]!.index,
+            0,
+            Config.envelopes.dictionary[
+              selectWeightedRandom([
+                { item: "flare", weight: 2 },
+                { item: "flare", weight: 1 },
+                { item: "flare", weight: 1 },
+                { item: "twang", weight: 16 },
+                { item: "twang", weight: 8 },
+                { item: "twang", weight: 4 },
+                { item: "decay", weight: 4 },
+                { item: "decay", weight: 2 },
+                { item: "decay", weight: 1 },
+              ])
+            ]!.index,
+          );
+        }
+      }
+      if (Math.random() < 0.25) {
+        instrument.effects |= 1 << EffectType.vibrato;
+        instrument.vibrato = selectCurvedDistribution(
+          0,
+          Config.echoSustainRange - 1,
+          Config.echoSustainRange >> 1,
+          2,
+        );
+        instrument.vibrato =
+          Config.vibratos.dictionary[
+            selectWeightedRandom([
+              { item: "light", weight: 2 },
+              { item: "delayed", weight: 2 },
+              { item: "heavy", weight: 1 },
+              { item: "shaky", weight: 2 },
+            ])
+          ]!.index;
+      }
+      if (Math.random() < 0.1) {
+        instrument.effects |= 1 << EffectType.distortion;
+        instrument.distortion = selectCurvedPercentage(
+          1,
+          100,
+          200 / (Config.distortionRange - 1),
+          Config.distortionRange - 1,
+        );
+      }
+      if (effectsIncludeDistortion(instrument.effects) && Math.random() < 0.8) {
+        instrument.effects |= 1 << EffectType.noteFilter;
+        applyFilterPoints(instrument.noteFilter, [
+          new PotentialFilterPoint(1.0, FilterType.lowPass, midFreq, maxFreq, 2000.0, -1),
+          new PotentialFilterPoint(0.9, FilterType.highPass, 0, midFreq - 1, 500.0, -1),
+          new PotentialFilterPoint(0.4, FilterType.peak, 0, maxFreq, 1400.0, 0),
+        ]);
+      } else if (Math.random() < 0.5) {
+        instrument.effects |= 1 << EffectType.noteFilter;
+        applyFilterPoints(instrument.noteFilter, [
+          new PotentialFilterPoint(1.0, FilterType.lowPass, midFreq, maxFreq, 8000.0, -1),
+        ]);
+        instrument.addEnvelope(
+          Config.modulationTargets.dictionary["noteFilterAllFreqs"]!.index,
+          0,
+          Config.envelopes.dictionary[
+            selectWeightedRandom([
+              { item: "punch", weight: 6 },
+              { item: "flare", weight: 2 },
+              { item: "flare", weight: 4 },
+              { item: "flare", weight: 2 },
+              { item: "twang", weight: 2 },
+              { item: "twang", weight: 4 },
+              { item: "twang", weight: 4 },
+              { item: "swell", weight: 4 },
+              { item: "swell", weight: 2 },
+              { item: "swell", weight: 1 },
+              { item: "tremolo", weight: 1 },
+              { item: "tremolo", weight: 1 },
+              { item: "tremolo", weight: 1 },
+              { item: "tremolo", weight: 1 },
+              { item: "tremolo", weight: 1 },
+              { item: "tremolo", weight: 1 },
+              { item: "decay", weight: 1 },
+              { item: "decay", weight: 2 },
+              { item: "decay", weight: 2 },
+            ])
+          ]!.index,
+        );
+      }
+      if (Math.random() < 0.1) {
+        instrument.effects |= 1 << EffectType.bitcrusher;
+        instrument.bitcrusherFreq = selectCurvedPercentage(
+          0,
+          0,
+          200 / (Config.bitcrusherFreqRange - 1),
+          Config.bitcrusherFreqRange - 1,
+        );
+        instrument.bitcrusherQuantization = selectCurvedPercentage(
+          0,
+          (100 * (Config.bitcrusherQuantizationRange >> 1)) /
+            (Config.bitcrusherQuantizationRange - 1),
+          200 / (Config.bitcrusherQuantizationRange - 1),
+          Config.bitcrusherQuantizationRange - 1,
+        );
+      }
+      if (Math.random() < 0.1) {
+        instrument.effects |= 1 << EffectType.chorus;
+        instrument.chorus = selectCurvedPercentage(
+          1,
+          100,
+          100 / (Config.chorusRange - 1),
+          Config.chorusRange - 1,
+        );
+      }
+      if (Math.random() < 0.1) {
+        instrument.echoSustain = percentToSetting(
+          selectCurvedValue(
+            0,
+            200,
+            (100 * (Config.echoSustainRange >> 1)) / (Config.echoSustainRange - 1),
+            200 / (Config.echoSustainRange - 1),
+          ),
+          Config.echoSustainRange - 1,
+        );
+        instrument.echoDelay = echoDelayFromBeats(selectCurvedValue(0.25, 2, 1, 0.25, 0.25));
+        if (instrument.echoSustain !== 0 || instrument.echoDelay !== 0) {
+          instrument.effects |= 1 << EffectType.echo;
+        }
+      }
+      if (Math.random() < 0.5) {
+        instrument.effects |= 1 << EffectType.reverb;
+        instrument.reverb = selectCurvedPercentage(
+          1,
+          100 / (Config.reverbRange - 1),
+          100 / (Config.reverbRange - 1),
+          Config.reverbRange - 1,
+        );
+      }
+
+      const normalize = (harmonics: number[]): void => {
+        let max = 0;
+        for (const value of harmonics) {
+          if (value > max) {
+            max = value;
+          }
+        }
+        for (let i = 0; i < harmonics.length; i++) {
+          harmonics[i] = (Config.harmonicsMax * harmonics[i]!) / max;
+        }
+      };
+      switch (type) {
+        case InstrumentType.chip: {
+          {
+            instrument.chipWave = (Math.random() * Config.chipWaves.length) | 0;
+          }
+          break;
+        }
+        case InstrumentType.pwm:
+        case InstrumentType.supersaw: {
+          {
+            if (type === InstrumentType.supersaw) {
+              instrument.supersawDynamism = selectCurvedDistribution(
+                0,
+                Config.supersawDynamismMax,
+                Config.supersawDynamismMax,
+                2,
+              );
+              instrument.supersawSpread = selectCurvedDistribution(
+                0,
+                Config.supersawSpreadMax,
+                Math.ceil(Config.supersawSpreadMax / 3),
+                4,
+              );
+              instrument.supersawShape = selectCurvedDistribution(0, Config.supersawShapeMax, 0, 4);
+            }
+
+            instrument.pulseWidth = selectCurvedDistribution(
+              0,
+              Config.pulseWidthRange - 1,
+              Config.pulseWidthRange - 1,
+              2,
+            );
+
+            if (Math.random() < 0.6) {
+              instrument.addEnvelope(
+                Config.modulationTargets.dictionary["pulseWidth"]!.index,
+                0,
+                Config.envelopes.dictionary[
+                  selectWeightedRandom([
+                    { item: "punch", weight: 6 },
+                    { item: "flare", weight: 2 },
+                    { item: "flare", weight: 4 },
+                    { item: "flare", weight: 2 },
+                    { item: "twang", weight: 2 },
+                    { item: "twang", weight: 4 },
+                    { item: "twang", weight: 4 },
+                    { item: "swell", weight: 4 },
+                    { item: "swell", weight: 2 },
+                    { item: "swell", weight: 1 },
+                    { item: "tremolo", weight: 1 },
+                    { item: "tremolo", weight: 1 },
+                    { item: "tremolo", weight: 1 },
+                    { item: "tremolo", weight: 1 },
+                    { item: "tremolo", weight: 1 },
+                    { item: "tremolo", weight: 1 },
+                    { item: "decay", weight: 1 },
+                    { item: "decay", weight: 2 },
+                    { item: "decay", weight: 2 },
+                  ])
+                ]!.index,
+              );
+            }
+          }
+          break;
+        }
+        case InstrumentType.pickedString:
+        case InstrumentType.harmonics: {
+          {
+            if (type === InstrumentType.pickedString) {
+              instrument.stringSustain = (Math.random() * Config.stringSustainRange) | 0;
+            }
+
+            const harmonicGenerators: Function[] = [
+                (): number[] => {
+                  const harmonics: number[] = [];
+                  for (let i = 0; i < Config.harmonicsControlPoints; i++) {
+                    harmonics[i] = Math.random() < 0.4 ? Math.random() : 0.0;
+                  }
+                  harmonics[(Math.random() * 8) | 0] = Math.random() ** 0.25;
+                  return harmonics;
+                },
+                (): number[] => {
+                  let current = 1.0;
+                  const harmonics: number[] = [current];
+                  for (let i = 1; i < Config.harmonicsControlPoints; i++) {
+                    current *= 2 ** (Math.random() - 0.55);
+                    harmonics[i] = current;
+                  }
+                  return harmonics;
+                },
+                (): number[] => {
+                  let current = 1.0;
+                  const harmonics: number[] = [current];
+                  for (let i = 1; i < Config.harmonicsControlPoints; i++) {
+                    current *= 2 ** (Math.random() - 0.55);
+                    harmonics[i] = current * Math.random();
+                  }
+                  return harmonics;
+                },
+              ],
+              generator = harmonicGenerators[(Math.random() * harmonicGenerators.length) | 0]!,
+              harmonics: number[] = generator();
+            normalize(harmonics);
+            for (let i = 0; i < Config.harmonicsControlPoints; i++) {
+              instrument.harmonicsWave.harmonics[i] = Math.round(harmonics[i]!);
+            }
+            instrument.harmonicsWave.markCustomWaveDirty();
+          }
+          break;
+        }
+        case InstrumentType.spectrum: {
+          {
+            const spectrum: number[] = [];
+            for (let i = 0; i < Config.spectrumControlPoints; i++) {
+              const isHarmonic: boolean =
+                i === 0 || i === 7 || i === 11 || i === 14 || i === 16 || i === 18 || i === 21;
+              if (isHarmonic) {
+                spectrum[i] = Math.random() ** 0.25;
+              } else {
+                spectrum[i] = Math.random() ** 3 * 0.5;
+              }
+            }
+            normalize(spectrum);
+            for (let i = 0; i < Config.spectrumControlPoints; i++) {
+              instrument.spectrumWave.spectrum[i] = Math.round(spectrum[i]!);
+            }
+            instrument.spectrumWave.markCustomWaveDirty();
+          }
+          break;
+        }
+        case InstrumentType.fm: {
+          {
+            instrument.algorithm = (Math.random() * Config.algorithms.length) | 0;
+            instrument.feedbackType = (Math.random() * Config.feedbacks.length) | 0;
+            const algorithm: Algorithm = Config.algorithms[instrument.algorithm]!;
+            for (let i = 0; i < Config.operatorCount; i++) {
+              instrument.operators[i]!.wave = (Math.random() * (Config.chipWaves.length + 1)) | 0;
+            }
+            for (let i = 0; i < algorithm.carrierCount; i++) {
+              instrument.operators[i]!.frequency = selectCurvedDistribution(1, 20, 1, 3);
+              instrument.operators[i]!.amplitude = selectCurvedDistribution(
+                0,
+                Config.operatorAmplitudeMax,
+                Config.operatorAmplitudeMax - 1,
+                2,
+              );
+            }
+            for (let i: number = algorithm.carrierCount; i < Config.operatorCount; i++) {
+              instrument.operators[i]!.frequency = selectCurvedDistribution(2, 20, 2, 3);
+              instrument.operators[i]!.amplitude =
+                (Math.random() ** 2 * Config.operatorAmplitudeMax) | 0;
+              if (instrument.envelopeCount < Config.maxEnvelopeCount && Math.random() < 0.4) {
+                instrument.addEnvelope(
+                  Config.modulationTargets.dictionary["operatorAmplitude"]!.index,
+                  i,
+                  Config.envelopes.dictionary[
+                    selectWeightedRandom([
+                      { item: "punch", weight: 2 },
+                      { item: "flare", weight: 2 },
+                      { item: "flare", weight: 2 },
+                      { item: "flare", weight: 2 },
+                      { item: "twang", weight: 2 },
+                      { item: "twang", weight: 2 },
+                      { item: "twang", weight: 2 },
+                      { item: "swell", weight: 2 },
+                      { item: "swell", weight: 2 },
+                      { item: "swell", weight: 2 },
+                      { item: "tremolo", weight: 1 },
+                      { item: "tremolo", weight: 1 },
+                      { item: "tremolo", weight: 1 },
+                      { item: "tremolo", weight: 1 },
+                      { item: "tremolo", weight: 1 },
+                      { item: "tremolo", weight: 1 },
+                      { item: "decay", weight: 1 },
+                      { item: "decay", weight: 1 },
+                      { item: "decay", weight: 1 },
+                    ])
+                  ]!.index,
+                );
+              }
+              if (instrument.envelopeCount < Config.maxEnvelopeCount && Math.random() < 0.05) {
+                instrument.addEnvelope(
+                  Config.modulationTargets.dictionary["operatorFrequency"]!.index,
+                  i,
+                  Config.envelopes.dictionary[
+                    selectWeightedRandom([
+                      { item: "punch", weight: 4 },
+                      { item: "flare", weight: 4 },
+                      { item: "flare", weight: 2 },
+                      { item: "flare", weight: 1 },
+                      { item: "twang", weight: 16 },
+                      { item: "twang", weight: 2 },
+                      { item: "twang", weight: 1 },
+                      { item: "swell", weight: 4 },
+                      { item: "swell", weight: 2 },
+                      { item: "swell", weight: 1 },
+                      { item: "decay", weight: 2 },
+                      { item: "decay", weight: 1 },
+                      { item: "decay", weight: 1 },
+                    ])
+                  ]!.index,
+                );
+              }
+            }
+            instrument.feedbackAmplitude = (Math.random() ** 3 * Config.operatorAmplitudeMax) | 0;
+            if (instrument.envelopeCount < Config.maxEnvelopeCount && Math.random() < 0.4) {
+              instrument.addEnvelope(
+                Config.modulationTargets.dictionary["feedbackAmplitude"]!.index,
+                0,
+                Config.envelopes.dictionary[
+                  selectWeightedRandom([
+                    { item: "punch", weight: 2 },
+                    { item: "flare", weight: 2 },
+                    { item: "flare", weight: 2 },
+                    { item: "flare", weight: 2 },
+                    { item: "twang", weight: 2 },
+                    { item: "twang", weight: 2 },
+                    { item: "twang", weight: 2 },
+                    { item: "swell", weight: 2 },
+                    { item: "swell", weight: 2 },
+                    { item: "swell", weight: 2 },
+                    { item: "tremolo", weight: 1 },
+                    { item: "tremolo", weight: 1 },
+                    { item: "tremolo", weight: 1 },
+                    { item: "tremolo", weight: 1 },
+                    { item: "tremolo", weight: 1 },
+                    { item: "tremolo", weight: 1 },
+                    { item: "decay", weight: 1 },
+                    { item: "decay", weight: 1 },
+                    { item: "decay", weight: 1 },
+                  ])
+                ]!.index,
+              );
+            }
+          }
+          break;
+        }
+        case InstrumentType.soundFont: {
+          break;
+        }
+        default: {
+          throw new Error("Unhandled pitched instrument type in random generator.");
+        }
+      }
+    }
+
+    // Envelope parameters are continuous in the restructured model, so generated
+    // Instruments choose them directly instead of selecting numbered variants.
+    for (let i = 0; i < instrument.envelopeCount; i++) {
+      const settings = instrument.envelopes[i]!;
+      settings.speed = Math.round(Math.random() * 500) / 100;
+      settings.a = Math.round(Math.random() * 200) / 100;
+      settings.b = Math.round(Math.random() * 200) / 100;
+    }
+
+    markInvalidAutomationTargetsForCurrentInstrument(doc);
+    doc.notifier.changed();
+    this._didSomething();
+  }
+}
+
+export class ChangeTransition extends Change {
+  public constructor(doc: SongDocument, newValue: number) {
+    super();
+    const instrument: Instrument =
+        doc.song.channels[doc.channel]!.instruments[doc.getCurrentInstrument()]!,
+      oldValue: number = instrument.transition;
+    if (oldValue !== newValue) {
+      this._didSomething();
+      instrument.transition = newValue;
+      instrument.preset = instrument.type;
+      doc.notifier.changed();
+    }
+  }
+}
+
+export class ChangeToggleEffects extends Change {
+  public constructor(doc: SongDocument, toggleFlag: number) {
+    super();
+    const instrument: Instrument =
+        doc.song.channels[doc.channel]!.instruments[doc.getCurrentInstrument()]!,
+      oldValue: number = instrument.effects,
+      wasSelected: boolean = (oldValue & (1 << toggleFlag)) !== 0,
+      newValue: number = wasSelected ? oldValue & ~(1 << toggleFlag) : oldValue | (1 << toggleFlag);
+    instrument.effects = newValue;
+    instrument.preset = instrument.type;
+    if (wasSelected) {
+      instrument.clearInvalidEnvelopeTargets();
+      const instrumentIndex: number = doc.getCurrentInstrument();
+      doc.song.forEachAutomationRow((row): void => {
+        const target = Config.modulationTargets.dictionary[row.targetId]!;
+        if (
+          row.targetChannel === doc.channel &&
+          row.targetInstrument === instrumentIndex &&
+          target?.effect === toggleFlag
+        ) {
+          row.targetElementMissing = true;
+        }
+      });
+    }
+    this._didSomething();
+    doc.notifier.changed();
+  }
+}
+
+export class ChangePatternNumbers extends Change {
+  public constructor(
+    doc: SongDocument,
+    value: number,
+    startBar: number,
+    startChannel: number,
+    width: number,
+    height: number,
+  ) {
+    super();
+    if (value > doc.song.patternsPerChannel) {
+      throw new Error("invalid pattern");
+    }
+
+    for (let bar: number = startBar; bar < startBar + width; bar++) {
+      for (
+        let channelIndex: number = startChannel;
+        channelIndex < startChannel + height;
+        channelIndex++
+      ) {
+        if (doc.song.channels[channelIndex]!.bars[bar]! !== value) {
+          doc.song.channels[channelIndex]!.bars[bar] = value;
+          this._didSomething();
+        }
+      }
+    }
+
+    doc.notifier.changed();
+  }
+}
+
+export class ChangeBarCount extends Change {
+  public constructor(doc: SongDocument, newValue: number, atBeginning: boolean) {
+    super();
+    if (doc.song.barCount !== newValue) {
+      for (const channel of doc.song.channels) {
+        if (atBeginning) {
+          while (channel.bars.length < newValue) {
+            channel.bars.unshift(0);
+          }
+          if (doc.song.barCount > newValue) {
+            channel.bars.splice(0, doc.song.barCount - newValue);
+          }
+        } else {
+          while (channel.bars.length < newValue) {
+            channel.bars.push(0);
+          }
+          channel.bars.length = newValue;
+        }
+      }
+
+      if (atBeginning) {
+        const diff: number = newValue - doc.song.barCount;
+        doc.bar = Math.max(0, doc.bar + diff);
+        if (diff < 0 || doc.barScrollPos > 0) {
+          doc.barScrollPos = Math.max(0, doc.barScrollPos + diff);
+        }
+        doc.song.loopStart = Math.max(0, doc.song.loopStart + diff);
+      }
+      doc.bar = Math.min(doc.bar, newValue - 1);
+      doc.song.loopLength = Math.min(newValue, doc.song.loopLength);
+      doc.song.loopStart = Math.min(newValue - doc.song.loopLength, doc.song.loopStart);
+      doc.song.barCount = newValue;
+      doc.notifier.changed();
+
+      this._didSomething();
+    }
+  }
+}
+
+export class ChangeInsertBars extends Change {
+  public constructor(doc: SongDocument, start: number, count: number) {
+    super();
+
+    const newLength: number = Math.min(Config.barCountMax, doc.song.barCount + count);
+    count = newLength - doc.song.barCount;
+    if (count === 0) {
+      return;
+    }
+
+    for (const channel of doc.song.channels) {
+      while (channel.bars.length < newLength) {
+        channel.bars.splice(start, 0, 0);
+      }
+    }
+    doc.song.barCount = newLength;
+
+    doc.bar += count;
+    if (doc.song.loopStart >= start) {
+      doc.song.loopStart += count;
+    } else if (doc.song.loopStart + doc.song.loopLength >= start) {
+      doc.song.loopLength += count;
+    }
+
+    doc.notifier.changed();
+    this._didSomething();
+  }
+}
+
+export class ChangeDeleteBars extends Change {
+  public constructor(doc: SongDocument, start: number, count: number) {
+    super();
+
+    for (const channel of doc.song.channels) {
+      channel.bars.splice(start, count);
+      if (channel.bars.length === 0) {
+        channel.bars.push(0);
+      }
+    }
+    doc.song.barCount = Math.max(1, doc.song.barCount - count);
+
+    doc.bar = Math.max(0, doc.bar - count);
+    doc.barScrollPos = Math.max(0, doc.barScrollPos - count);
+    if (doc.song.loopStart >= start) {
+      doc.song.loopStart = Math.max(0, doc.song.loopStart - count);
+    } else if (doc.song.loopStart + doc.song.loopLength > start) {
+      doc.song.loopLength -= count;
+    }
+    doc.song.loopLength = Math.max(
+      1,
+      Math.min(doc.song.barCount - doc.song.loopStart, doc.song.loopLength),
+    );
+
+    doc.notifier.changed();
+    this._didSomething();
+  }
+}
+
+export class ChangeBarOrder extends Change {
+  public constructor(doc: SongDocument, source: number, target: number) {
+    super();
+    if (source === target) {
+      return;
+    }
+    if (source < 0 || source >= doc.song.barCount || target < 0 || target >= doc.song.barCount) {
+      throw new Error("Bar reorder index out of range.");
+    }
+
+    for (const channel of doc.song.channels) {
+      const movedBars: number[] = channel.bars.splice(source, 1);
+      channel.bars.splice(target, 0, ...movedBars);
+    }
+    doc.notifier.changed();
+    this._didSomething();
+  }
+}
+
+export class ChangeChannelOrder extends Change {
+  public constructor(
+    doc: SongDocument,
+    selectionMin: number,
+    selectionMax: number,
+    offset: number,
+  ) {
+    super();
+    if (offset === 0) {
+      return;
+    }
+    const selectionLength: number = selectionMax - selectionMin + 1,
+      target: number = selectionMin + offset;
+    if (
+      selectionLength <= 0 ||
+      selectionMin < 0 ||
+      selectionMax >= doc.song.getChannelCount() ||
+      target < 0 ||
+      target + selectionLength > doc.song.getChannelCount()
+    ) {
+      throw new Error("Channel reorder index out of range.");
+    }
+    const kind: ChannelKind = doc.song.getChannelKind(selectionMin);
+    if (
+      doc.song.getChannelKind(selectionMax) !== kind ||
+      doc.song.getChannelKind(target) !== kind ||
+      doc.song.getChannelKind(target + selectionLength - 1) !== kind
+    ) {
+      throw new Error("Channels can only be reordered within their group.");
+    }
+
+    const oldChannels: Channel[] = doc.song.channels.concat();
+
+    doc.song.channels.splice(target, 0, ...doc.song.channels.splice(selectionMin, selectionLength));
+    if (doc.viewedInstrument.length === doc.song.getChannelCount()) {
+      doc.viewedInstrument.splice(
+        target,
+        0,
+        ...doc.viewedInstrument.splice(selectionMin, selectionLength),
+      );
+    }
+    doc.song.remapAutomationChannelReferences(
+      oldChannels.map((channel: Channel): number => doc.song.channels.indexOf(channel)),
+    );
+    doc.notifier.changed();
+    this._didSomething();
+  }
+}
+
+export function getRandomPresetValues(): number[] {
+  const eligiblePresetValues: number[] = [];
+  for (
+    let categoryIndex = 0;
+    categoryIndex < EditorConfig.presetCategories.length;
+    categoryIndex++
+  ) {
+    const category: PresetCategory = EditorConfig.presetCategories[categoryIndex]!;
+    if (category.name === "Novelty Presets") {
+      continue;
+    }
+    for (let presetIndex = 0; presetIndex < category.presets.length; presetIndex++) {
+      const preset: Preset = category.presets[presetIndex]!;
+      if (preset.settings !== undefined) {
+        eligiblePresetValues.push((categoryIndex << 6) + presetIndex);
+      }
+    }
+  }
+  return eligiblePresetValues;
+}
+
+export function pickRandomPresetValue(): number {
+  const eligiblePresetValues: number[] = getRandomPresetValues();
+  return eligiblePresetValues[(Math.random() * eligiblePresetValues.length) | 0]!;
+}
+
+export class ChangeChannelCount extends Change {
+  public constructor(
+    doc: SongDocument,
+    newPitchChannelCount: number,
+    newNoiseChannelCount: number,
+    newAutomationChannelCount: number = doc.song.automationChannelCount,
+  ) {
+    super();
+    if (
+      doc.song.pitchChannelCount !== newPitchChannelCount ||
+      doc.song.noiseChannelCount !== newNoiseChannelCount ||
+      doc.song.automationChannelCount !== newAutomationChannelCount
+    ) {
+      if (
+        newPitchChannelCount < Config.pitchChannelCountMin ||
+        newPitchChannelCount > Config.pitchChannelCountMax ||
+        newNoiseChannelCount < Config.noiseChannelCountMin ||
+        newNoiseChannelCount > Config.noiseChannelCountMax ||
+        newAutomationChannelCount < Config.automationChannelCountMin ||
+        newAutomationChannelCount > Config.automationChannelCountMax
+      ) {
+        throw new RangeError("Channel count out of range.");
+      }
+      const oldPitchChannelCount: number = doc.song.pitchChannelCount,
+        oldNoiseChannelCount: number = doc.song.noiseChannelCount,
+        oldAutomationChannelCount: number = doc.song.automationChannelCount,
+        newChannels: Channel[] = [],
+        changeGroup = (
+          newCount: number,
+          oldCount: number,
+          newStart: number,
+          oldStart: number,
+          octave: number,
+          kind: ChannelKind,
+        ): void => {
+          for (let i = 0; i < newCount; i++) {
+            const channelIndex = i + newStart,
+              oldChannel = i + oldStart;
+            if (i < oldCount) {
+              newChannels[channelIndex] = doc.song.channels[oldChannel]!;
+            } else {
+              newChannels[channelIndex] = doc.song.createChannel(kind);
+              newChannels[channelIndex].octave = octave;
+              if (kind !== ChannelKind.automation) {
+                const isNoise: boolean = kind === ChannelKind.noise;
+                for (const instrument of newChannels[channelIndex].instruments) {
+                  const presetValue: number = pickRandomPresetValue(),
+                    preset: Preset = EditorConfig.valueToPreset(presetValue)!;
+                  instrument.fromSettingsObject(preset.settings, isNoise);
+                  instrument.preset = presetValue;
+                  instrument.volume = Config.volumeDefault;
+                }
+              }
+            }
+          }
+        };
+
+      changeGroup(newPitchChannelCount, doc.song.pitchChannelCount, 0, 0, 3, ChannelKind.pitch);
+      changeGroup(
+        newNoiseChannelCount,
+        doc.song.noiseChannelCount,
+        newPitchChannelCount,
+        doc.song.pitchChannelCount,
+        0,
+        ChannelKind.noise,
+      );
+      changeGroup(
+        newAutomationChannelCount,
+        oldAutomationChannelCount,
+        newPitchChannelCount + newNoiseChannelCount,
+        oldPitchChannelCount + oldNoiseChannelCount,
+        0,
+        ChannelKind.automation,
+      );
+
+      const oldToNew: (number | null)[] = [];
+      for (let index = 0; index < oldPitchChannelCount; index++) {
+        oldToNew.push(index < newPitchChannelCount ? index : null);
+      }
+      for (let index = 0; index < oldNoiseChannelCount; index++) {
+        oldToNew.push(index < newNoiseChannelCount ? newPitchChannelCount + index : null);
+      }
+      for (let index = 0; index < oldAutomationChannelCount; index++) {
+        oldToNew.push(
+          index < newAutomationChannelCount
+            ? newPitchChannelCount + newNoiseChannelCount + index
+            : null,
+        );
+      }
+      doc.song.pitchChannelCount = newPitchChannelCount;
+      doc.song.noiseChannelCount = newNoiseChannelCount;
+      doc.song.automationChannelCount = newAutomationChannelCount;
+      for (let channelIndex = 0; channelIndex < doc.song.getChannelCount(); channelIndex++) {
+        doc.song.channels[channelIndex] = newChannels[channelIndex]!;
+      }
+      doc.song.channels.length = doc.song.getChannelCount();
+      doc.song.remapAutomationChannelReferences(oldToNew);
+
+      doc.channel = Math.min(doc.channel, doc.song.getChannelCount() - 1);
+      doc.notifier.changed();
+
+      this._didSomething();
+    }
+  }
+}
+
+function getAutomationRow(doc: SongDocument, rowIndex: number): AutomationRow {
+  if (!doc.song.getChannelIsAutomation(doc.channel)) {
+    throw new Error("The selected channel is not an Automation channel.");
+  }
+  const row: AutomationRow | undefined = doc.song.channels[doc.channel]!.automationRows[rowIndex]!;
+  if (row === undefined) {
+    throw new RangeError("Automation row index out of range.");
+  }
+  return row;
+}
+
+function remapAutomationRowValues(
+  doc: SongDocument,
+  rowIndex: number,
+  sourceDomain: AutomationValueDomain | null,
+  destinationDomain: AutomationValueDomain | null,
+): void {
+  const channel: Channel = doc.song.channels[doc.channel]!;
+  for (const pattern of channel.patterns) {
+    for (const event of pattern.automationEvents[rowIndex] ?? []) {
+      for (const point of event.points) {
+        point.value = mapAutomationClipboardValue(
+          point.value,
+          false,
+          sourceDomain,
+          destinationDomain,
+        );
+      }
+    }
+  }
+}
+
+export class ChangeAutomationRowCount extends Change {
+  public constructor(doc: SongDocument, rowCount: number) {
+    super();
+    if (!doc.song.getChannelIsAutomation(doc.channel)) {
+      return;
+    }
+    const oldCount: number = doc.song.channels[doc.channel]!.automationRows.length;
+    if (oldCount === rowCount) {
+      return;
+    }
+    doc.song.setAutomationRowCount(doc.channel, rowCount);
+    doc.notifier.changed();
+    this._didSomething();
+  }
+}
+
+export class ChangeAutomationTargetChannel extends Change {
+  public constructor(doc: SongDocument, rowIndex: number, targetChannel: number) {
+    super();
+    const row: AutomationRow = getAutomationRow(doc, rowIndex);
+    if (targetChannel === -1) {
+      if (row.targetChannel === -1 && row.targetId === "tempo" && !row.targetChannelMissing) {
+        return;
+      }
+      const sourceDomain: AutomationValueDomain | null = row.getValueDomain(),
+        compatibleTarget: boolean = row.targetId === "tempo" && row.targetIndex === 0;
+      row.setSongTarget();
+      if (!compatibleTarget) {
+        remapAutomationRowValues(doc, rowIndex, sourceDomain, row.getValueDomain());
+      }
+    } else {
+      if (
+        targetChannel < 0 ||
+        targetChannel >= doc.song.getChannelCount() ||
+        doc.song.getChannelIsAutomation(targetChannel)
+      ) {
+        throw new RangeError("Invalid automation target channel.");
+      }
+      const instrument = doc.song.channels[targetChannel]!.instruments[0]!;
+      row.targetChannel = targetChannel;
+      row.targetChannelKind = doc.song.getChannelKind(targetChannel);
+      row.targetInstrument = 0;
+      row.targetChannelMissing = false;
+      row.targetInstrumentMissing = instrument === undefined;
+      const target = Config.modulationTargets.dictionary[row.targetId]!;
+      row.targetElementMissing =
+        instrument === undefined ||
+        target === undefined ||
+        !Config.automationTargetIsValidForInstrument(target, instrument, row.targetIndex);
+    }
+    doc.notifier.changed();
+    this._didSomething();
+  }
+}
+
+export class ChangeAutomationTargetInstrument extends Change {
+  public constructor(doc: SongDocument, rowIndex: number, instrumentIndex: number) {
+    super();
+    const row: AutomationRow = getAutomationRow(doc, rowIndex);
+    if (
+      row.targetChannel < 0 ||
+      row.targetChannel >= doc.song.getChannelCount() ||
+      doc.song.getChannelIsAutomation(row.targetChannel) ||
+      instrumentIndex < 0 ||
+      instrumentIndex >= doc.song.channels[row.targetChannel]!.instruments.length
+    ) {
+      throw new RangeError("Invalid automation target instrument.");
+    }
+    if (row.targetInstrument === instrumentIndex && !row.targetInstrumentMissing) {
+      return;
+    }
+    row.targetInstrument = instrumentIndex;
+    row.targetInstrumentMissing = false;
+    const instrument = doc.song.channels[row.targetChannel]!.instruments[instrumentIndex]!,
+      currentTarget = Config.modulationTargets.dictionary[row.targetId]!;
+    row.targetElementMissing =
+      currentTarget === undefined ||
+      !Config.automationTargetIsValidForInstrument(currentTarget, instrument, row.targetIndex);
+    doc.notifier.changed();
+    this._didSomething();
+  }
+}
+
+export class ChangeAutomationTargetElement extends Change {
+  public constructor(doc: SongDocument, rowIndex: number, targetId: string, targetIndex: number) {
+    super();
+    const row: AutomationRow = getAutomationRow(doc, rowIndex),
+      sourceDomain: AutomationValueDomain | null = row.getValueDomain(),
+      compatibleTarget: boolean = row.targetId === targetId && row.targetIndex === targetIndex,
+      target = Config.modulationTargets.dictionary[targetId]!;
+    if (target === undefined || target.supportsAutomation !== true) {
+      throw new Error("Invalid automation target element.");
+    }
+    if (row.targetChannel === -1) {
+      if (target.scope !== "song") {
+        throw new Error("Invalid song automation target.");
+      }
+    } else {
+      const instrument = doc.song.channels[row.targetChannel]?.instruments[row.targetInstrument];
+      if (
+        instrument === undefined ||
+        !Config.automationTargetIsValidForInstrument(target, instrument, targetIndex)
+      ) {
+        throw new Error("Invalid instrument automation target.");
+      }
+    }
+    if (row.targetId === targetId && row.targetIndex === targetIndex && !row.targetElementMissing) {
+      return;
+    }
+    row.targetId = targetId;
+    row.targetIndex = targetIndex;
+    row.targetElementMissing = false;
+    if (!compatibleTarget) {
+      remapAutomationRowValues(doc, rowIndex, sourceDomain, row.getValueDomain());
+    }
+    doc.notifier.changed();
+    this._didSomething();
+  }
+}
+
+export class ChangeEvents<T extends Event = Event> extends UndoableChange {
+  readonly #doc: SongDocument;
+  readonly #events: T[];
+  readonly #oldEvents: T[];
+  readonly #newEvents: T[];
+
+  public constructor(_doc: SongDocument, _events: T[], newEvents: readonly T[], reversed = false) {
+    super(reversed);
+    this.#doc = _doc;
+    this.#events = _events;
+    this.#oldEvents = this.#events.map((event: T): T => event.clone());
+    this.#newEvents = newEvents.map((event: T): T => event.clone());
+    if (reversed) {
+      this._doBackwards();
+    } else {
+      this._doForwards();
+    }
+    this._didSomething();
+  }
+
+  #replace(events: readonly T[]): void {
+    this.#events.splice(0, this.#events.length, ...events.map((event: T): T => event.clone()));
+    this.#doc.notifier.changed();
+  }
+
+  protected override _doForwards(): void {
+    this.#replace(this.#newEvents);
+  }
+
+  protected override _doBackwards(): void {
+    this.#replace(this.#oldEvents);
+  }
+}
+
+export class ChangeAddChannel extends ChangeGroup {
+  public constructor(doc: SongDocument, index: number, kindOrIsNoise: ChannelKind | boolean) {
+    super();
+    const kind: ChannelKind =
+        typeof kindOrIsNoise === "boolean"
+          ? kindOrIsNoise
+            ? ChannelKind.noise
+            : ChannelKind.pitch
+          : kindOrIsNoise,
+      newPitchChannelCount: number =
+        doc.song.pitchChannelCount + (kind === ChannelKind.pitch ? 1 : 0),
+      newNoiseChannelCount: number =
+        doc.song.noiseChannelCount + (kind === ChannelKind.noise ? 1 : 0),
+      newAutomationChannelCount: number =
+        doc.song.automationChannelCount + (kind === ChannelKind.automation ? 1 : 0);
+    if (
+      newPitchChannelCount <= Config.pitchChannelCountMax &&
+      newNoiseChannelCount <= Config.noiseChannelCountMax &&
+      newAutomationChannelCount <= Config.automationChannelCountMax
+    ) {
+      const addedChannelIndex: number =
+        kind === ChannelKind.pitch
+          ? doc.song.pitchChannelCount
+          : kind === ChannelKind.noise
+            ? doc.song.pitchChannelCount + doc.song.noiseChannelCount
+            : doc.song.getChannelCount();
+      this.append(
+        new ChangeChannelCount(
+          doc,
+          newPitchChannelCount,
+          newNoiseChannelCount,
+          newAutomationChannelCount,
+        ),
+      );
+      if (index < addedChannelIndex) {
+        this.append(new ChangeChannelOrder(doc, index, addedChannelIndex - 1, 1));
+      }
+    }
+  }
+}
+
+export class ChangeChannelBar extends Change {
+  public constructor(
+    doc: SongDocument,
+    newChannel: number,
+    newBar: number,
+    silently = false,
+    horizontalOnly = false,
+  ) {
+    super();
+    const oldChannel: number = doc.channel,
+      oldBar: number = doc.bar;
+    doc.channel = newChannel;
+    doc.bar = newBar;
+    if (!silently) {
+      if (horizontalOnly) {
+        doc.barScrollPos = Math.min(
+          doc.bar,
+          Math.max(doc.bar - (doc.trackVisibleBars - 1), doc.barScrollPos),
+        );
+      } else {
+        doc.selection.scrollToSelectedPattern();
+      }
+    }
+    doc.notifier.changed();
+    if (oldChannel !== newChannel || oldBar !== newBar) {
+      this._didSomething();
+    }
+  }
+}
+
+export class ChangeRemoveChannel extends ChangeGroup {
+  public constructor(doc: SongDocument, minIndex: number, maxIndex: number) {
+    super();
+
+    const oldChannels: Channel[] = doc.song.channels.concat();
+
+    while (maxIndex >= minIndex) {
+      const kind: ChannelKind = doc.song.getChannelKind(maxIndex);
+      doc.song.channels.splice(maxIndex, 1);
+      if (kind === ChannelKind.noise) {
+        doc.song.noiseChannelCount--;
+      } else if (kind === ChannelKind.pitch) {
+        doc.song.pitchChannelCount--;
+      } else {
+        doc.song.automationChannelCount--;
+      }
+      maxIndex--;
+    }
+    doc.song.remapAutomationChannelReferences(
+      oldChannels.map((channel: Channel): number | null => {
+        const index: number = doc.song.channels.indexOf(channel);
+        return index === -1 ? null : index;
+      }),
+    );
+
+    if (doc.song.pitchChannelCount < Config.pitchChannelCountMin) {
+      this.append(
+        new ChangeChannelCount(doc, Config.pitchChannelCountMin, doc.song.noiseChannelCount),
+      );
+    }
+
+    this.append(new ChangeChannelBar(doc, Math.max(0, minIndex - 1), doc.bar));
+
+    this._didSomething();
+    doc.notifier.changed();
+  }
+}
+
+export class ChangeUnison extends Change {
+  public constructor(doc: SongDocument, newValue: number) {
+    super();
+    const instrument: Instrument =
+        doc.song.channels[doc.channel]!.instruments[doc.getCurrentInstrument()]!,
+      oldValue: number = instrument.unison;
+    if (oldValue !== newValue) {
+      this._didSomething();
+      instrument.unison = newValue;
+      instrument.preset = instrument.type;
+      doc.notifier.changed();
+    }
+  }
+}
+
+export class ChangeChord extends Change {
+  public constructor(doc: SongDocument, newValue: number) {
+    super();
+    const instrument: Instrument =
+        doc.song.channels[doc.channel]!.instruments[doc.getCurrentInstrument()]!,
+      oldValue: number = instrument.chord;
+    if (oldValue !== newValue) {
+      this._didSomething();
+      instrument.chord = newValue;
+      instrument.preset = instrument.type;
+      doc.notifier.changed();
+    }
+  }
+}
+
+export class ChangeVibrato extends Change {
+  public constructor(doc: SongDocument, newValue: number) {
+    super();
+    const instrument: Instrument =
+        doc.song.channels[doc.channel]!.instruments[doc.getCurrentInstrument()]!,
+      oldValue: number = instrument.vibrato;
+    if (oldValue !== newValue) {
+      instrument.vibrato = newValue;
+      instrument.preset = instrument.type;
+      doc.notifier.changed();
+      this._didSomething();
+    }
+  }
+}
+
+export class ChangeSpectrum extends Change {
+  public constructor(doc: SongDocument, instrument: Instrument, spectrumWave: SpectrumWave) {
+    super();
+    spectrumWave.markCustomWaveDirty();
+    instrument.preset = instrument.type;
+    doc.notifier.changed();
+    this._didSomething();
+  }
+}
+
+export class ChangeHarmonics extends Change {
+  public constructor(doc: SongDocument, instrument: Instrument, harmonicsWave: HarmonicsWave) {
+    super();
+    harmonicsWave.markCustomWaveDirty();
+    instrument.preset = instrument.type;
+    doc.notifier.changed();
+    this._didSomething();
+  }
+}
+
+export class ChangeDrumsetEnvelope extends Change {
+  public constructor(doc: SongDocument, drumIndex: number, newValue: number) {
+    super();
+    const instrument: Instrument =
+        doc.song.channels[doc.channel]!.instruments[doc.getCurrentInstrument()]!,
+      oldValue: number = instrument.drumsetEnvelopes[drumIndex]!;
+    if (oldValue !== newValue) {
+      instrument.drumsetEnvelopes[drumIndex] = newValue;
+      instrument.drumsetEnvelopeSpeeds[drumIndex] = Config.envelopes[newValue]!.speed;
+      instrument.drumsetEnvelopeAs[drumIndex] = Config.envelopes[newValue]!.a;
+      instrument.drumsetEnvelopeBs[drumIndex] = Config.envelopes[newValue]!.b;
+      instrument.preset = instrument.type;
+      doc.notifier.changed();
+      this._didSomething();
+    }
+  }
+}
+
+export class ChangeDrumsetEnvelopeParameter extends Change {
+  public constructor(
+    doc: SongDocument,
+    drumIndex: number,
+    parameter: "speed" | "a" | "b",
+    oldValue: number,
+    newValue: number,
+  ) {
+    super();
+    const instrument: Instrument =
+        doc.song.channels[doc.channel]!.instruments[doc.getCurrentInstrument()]!,
+      values = {
+        speed: instrument.drumsetEnvelopeSpeeds,
+        a: instrument.drumsetEnvelopeAs,
+        b: instrument.drumsetEnvelopeBs,
+      };
+    values[parameter][drumIndex] = newValue;
+    instrument.preset = instrument.type;
+    doc.notifier.changed();
+    if (oldValue !== newValue) {
+      this._didSomething();
+    }
+  }
+}
+
+class ChangeInstrumentSlider extends Change {
+  #doc: SongDocument;
+  protected _instrument: Instrument;
+  public constructor(_doc: SongDocument) {
+    super();
+    this.#doc = _doc;
+    this._instrument =
+      this.#doc.song.channels[this.#doc.channel]!.instruments[this.#doc.getCurrentInstrument()]!;
+  }
+
+  public override commit(): void {
+    if (!this.isNoop()) {
+      this._instrument.preset = this._instrument.type;
+      this.#doc.notifier.changed();
+    }
+  }
+}
+
+export class ChangePulseWidth extends ChangeInstrumentSlider {
+  public constructor(doc: SongDocument, oldValue: number, newValue: number) {
+    super(doc);
+    this._instrument.pulseWidth = newValue;
+    doc.notifier.changed();
+    if (oldValue !== newValue) {
+      this._didSomething();
+    }
+  }
+}
+
+export class ChangeSupersawDynamism extends ChangeInstrumentSlider {
+  public constructor(doc: SongDocument, oldValue: number, newValue: number) {
+    super(doc);
+    this._instrument.supersawDynamism = newValue;
+    doc.notifier.changed();
+    if (oldValue !== newValue) {
+      this._didSomething();
+    }
+  }
+}
+export class ChangeSupersawSpread extends ChangeInstrumentSlider {
+  public constructor(doc: SongDocument, oldValue: number, newValue: number) {
+    super(doc);
+    this._instrument.supersawSpread = newValue;
+    doc.notifier.changed();
+    if (oldValue !== newValue) {
+      this._didSomething();
+    }
+  }
+}
+export class ChangeSupersawShape extends ChangeInstrumentSlider {
+  public constructor(doc: SongDocument, oldValue: number, newValue: number) {
+    super(doc);
+    this._instrument.supersawShape = newValue;
+    doc.notifier.changed();
+    if (oldValue !== newValue) {
+      this._didSomething();
+    }
+  }
+}
+
+export class ChangePitchShift extends ChangeInstrumentSlider {
+  public constructor(doc: SongDocument, oldValue: number, newValue: number) {
+    super(doc);
+    this._instrument.pitchShift = newValue;
+    doc.notifier.changed();
+    if (oldValue !== newValue) {
+      this._didSomething();
+    }
+  }
+}
+
+export class ChangeDetune extends ChangeInstrumentSlider {
+  public constructor(doc: SongDocument, oldValue: number, newValue: number) {
+    super(doc);
+    this._instrument.detune = newValue;
+    doc.notifier.changed();
+    if (oldValue !== newValue) {
+      this._didSomething();
+    }
+  }
+}
+
+export class ChangeDistortion extends ChangeInstrumentSlider {
+  public constructor(doc: SongDocument, oldValue: number, newValue: number) {
+    super(doc);
+    this._instrument.distortion = newValue;
+    doc.notifier.changed();
+    if (oldValue !== newValue) {
+      this._didSomething();
+    }
+  }
+}
+
+export class ChangeBitcrusherFreq extends ChangeInstrumentSlider {
+  public constructor(doc: SongDocument, oldValue: number, newValue: number) {
+    super(doc);
+    this._instrument.bitcrusherFreq = newValue;
+    doc.notifier.changed();
+    if (oldValue !== newValue) {
+      this._didSomething();
+    }
+  }
+}
+
+export class ChangeBitcrusherQuantization extends ChangeInstrumentSlider {
+  public constructor(doc: SongDocument, oldValue: number, newValue: number) {
+    super(doc);
+    this._instrument.bitcrusherQuantization = newValue;
+    doc.notifier.changed();
+    if (oldValue !== newValue) {
+      this._didSomething();
+    }
+  }
+}
+
+export class ChangeStringSustain extends ChangeInstrumentSlider {
+  public constructor(doc: SongDocument, oldValue: number, newValue: number) {
+    super(doc);
+    this._instrument.stringSustain = newValue;
+    doc.notifier.changed();
+    if (oldValue !== newValue) {
+      this._didSomething();
+    }
+  }
+}
+
+export class ChangeStringSustainType extends Change {
+  public constructor(doc: SongDocument, newValue: SustainType) {
+    super();
+    const instrument: Instrument =
+        doc.song.channels[doc.channel]!.instruments[doc.getCurrentInstrument()]!,
+      oldValue: SustainType = instrument.stringSustainType;
+    if (oldValue !== newValue) {
+      instrument.stringSustainType = newValue;
+      instrument.preset = instrument.type;
+      doc.notifier.changed();
+      this._didSomething();
+    }
+  }
+}
+
+export class ChangeFilterAddPoint extends UndoableChange {
+  #doc: SongDocument;
+  #instrument: Instrument;
+  #instrumentPrevPreset: number;
+  #instrumentNextPreset: number;
+  #filterSettings: FilterSettings;
+  #point: FilterControlPoint;
+  #index: number;
+  #envelopeTargetsAdd: number[] = [];
+  #envelopeIndicesAdd: number[] = [];
+  #envelopeTargetsRemove: number[] = [];
+  #envelopeIndicesRemove: number[] = [];
+  readonly #automationRows: AutomationRow[] = [];
+  readonly #automationTargetsAdd: AutomationRow[] = [];
+  readonly #automationTargetsRemove: AutomationRow[] = [];
+  public constructor(
+    doc: SongDocument,
+    filterSettings: FilterSettings,
+    point: FilterControlPoint,
+    index: number,
+    isNoteFilter: boolean,
+    deletion = false,
+  ) {
+    super(deletion);
+    this.#doc = doc;
+    this.#instrument =
+      this.#doc.song.channels[this.#doc.channel]!.instruments[this.#doc.getCurrentInstrument()]!;
+    this.#instrumentNextPreset = deletion ? this.#instrument.preset : this.#instrument.type;
+    this.#instrumentPrevPreset = deletion ? this.#instrument.type : this.#instrument.preset;
+    this.#filterSettings = filterSettings;
+    this.#point = point;
+    this.#index = index;
+
+    for (let envelopeIndex = 0; envelopeIndex < this.#instrument.envelopeCount; envelopeIndex++) {
+      let target: number = this.#instrument.envelopes[envelopeIndex]!.target,
+        targetIndex: number = this.#instrument.envelopes[envelopeIndex]!.index;
+      this.#envelopeTargetsAdd.push(target);
+      this.#envelopeIndicesAdd.push(targetIndex);
+      if (deletion) {
+        // When deleting a filter control point, find all envelopes that targeted that
+        // Point and clear them, and all envelopes that targeted later points and
+        // Decrement those to keep them in sync with the new list of points.
+        const modulationTarget: ModulationTarget = Config.modulationTargets[target]!;
+        if (
+          modulationTarget.isFilter &&
+          (modulationTarget.effect === EffectType.noteFilter) === isNoteFilter
+        ) {
+          if (modulationTarget.maxCount === Config.filterMaxPoints) {
+            if (targetIndex === index) {
+              target = Config.modulationTargets.dictionary["none"]!.index;
+              targetIndex = 0;
+            } else if (targetIndex > index) {
+              targetIndex--;
+            }
+          } else if (filterSettings.controlPointCount <= 1) {
+            target = Config.modulationTargets.dictionary["none"]!.index;
+            targetIndex = 0;
+          }
+        }
+      }
+      this.#envelopeTargetsRemove.push(target);
+      this.#envelopeIndicesRemove.push(targetIndex);
+    }
+
+    const instrumentIndex: number = this.#doc.getCurrentInstrument();
+    this.#doc.song.forEachAutomationRow((row: AutomationRow): void => {
+      if (
+        row.targetChannel !== this.#doc.channel ||
+        row.targetInstrument !== instrumentIndex ||
+        row.targetChannelMissing ||
+        row.targetInstrumentMissing
+      ) {
+        return;
+      }
+      const target = Config.modulationTargets.dictionary[row.targetId]!,
+        targetsThisFilter: boolean = isNoteFilter
+          ? target?.property === "noteFilterFrequency" || target?.property === "noteFilterGain"
+          : target?.property === "eqFilterFrequency" || target?.property === "eqFilterGain";
+      if (!targetsThisFilter) {
+        return;
+      }
+      const present: AutomationRow = row.clone(),
+        absent: AutomationRow = row.clone();
+      if (!row.targetElementMissing) {
+        if (deletion) {
+          if (absent.targetIndex === index) {
+            absent.targetElementMissing = true;
+          } else if (absent.targetIndex > index) {
+            absent.targetIndex--;
+          }
+        } else if (present.targetIndex >= index) {
+          present.targetIndex++;
+        }
+      }
+      this.#automationRows.push(row);
+      this.#automationTargetsAdd.push(present);
+      this.#automationTargetsRemove.push(absent);
+    });
+
+    this._didSomething();
+    this.redo();
+  }
+
+  protected override _doForwards(): void {
+    this.#filterSettings.controlPoints.splice(this.#index, 0, this.#point);
+    this.#filterSettings.controlPointCount++;
+    this.#filterSettings.controlPoints.length = this.#filterSettings.controlPointCount;
+    this.#instrument.preset = this.#instrumentNextPreset;
+    for (let envelopeIndex = 0; envelopeIndex < this.#instrument.envelopeCount; envelopeIndex++) {
+      this.#instrument.envelopes[envelopeIndex]!.target = this.#envelopeTargetsAdd[envelopeIndex]!;
+      this.#instrument.envelopes[envelopeIndex]!.index = this.#envelopeIndicesAdd[envelopeIndex]!;
+    }
+    this.#applyAutomationReferences(this.#automationTargetsAdd);
+    this.#doc.notifier.changed();
+  }
+
+  protected override _doBackwards(): void {
+    this.#filterSettings.controlPoints.splice(this.#index, 1);
+    this.#filterSettings.controlPointCount--;
+    this.#filterSettings.controlPoints.length = this.#filterSettings.controlPointCount;
+    this.#instrument.preset = this.#instrumentPrevPreset;
+    for (let envelopeIndex = 0; envelopeIndex < this.#instrument.envelopeCount; envelopeIndex++) {
+      this.#instrument.envelopes[envelopeIndex]!.target =
+        this.#envelopeTargetsRemove[envelopeIndex]!;
+      this.#instrument.envelopes[envelopeIndex]!.index =
+        this.#envelopeIndicesRemove[envelopeIndex]!;
+    }
+    this.#applyAutomationReferences(this.#automationTargetsRemove);
+    this.#doc.notifier.changed();
+  }
+
+  #applyAutomationReferences(states: readonly AutomationRow[]): void {
+    for (let index = 0; index < this.#automationRows.length; index++) {
+      const row: AutomationRow = this.#automationRows[index]!,
+        state: AutomationRow = states[index]!;
+      row.targetIndex = state.targetIndex;
+      row.targetElementMissing = state.targetElementMissing;
+    }
+  }
+}
+
+export class ChangeFilterMovePoint extends UndoableChange {
+  #doc: SongDocument;
+  #instrument: Instrument;
+  #instrumentPrevPreset: number;
+  #instrumentNextPreset: number;
+  #point: FilterControlPoint;
+  #oldFreq: number;
+  #newFreq: number;
+  #oldGain: number;
+  #newGain: number;
+  public constructor(
+    doc: SongDocument,
+    point: FilterControlPoint,
+    oldFreq: number,
+    newFreq: number,
+    oldGain: number,
+    newGain: number,
+  ) {
+    super(false);
+    this.#doc = doc;
+    this.#instrument =
+      this.#doc.song.channels[this.#doc.channel]!.instruments[this.#doc.getCurrentInstrument()]!;
+    this.#instrumentNextPreset = this.#instrument.type;
+    this.#instrumentPrevPreset = this.#instrument.preset;
+    this.#point = point;
+    this.#oldFreq = oldFreq;
+    this.#newFreq = newFreq;
+    this.#oldGain = oldGain;
+    this.#newGain = newGain;
+    this._didSomething();
+    this.redo();
+  }
+
+  protected override _doForwards(): void {
+    this.#point.freq = this.#newFreq;
+    this.#point.gain = this.#newGain;
+    this.#instrument.preset = this.#instrumentNextPreset;
+    this.#doc.notifier.changed();
+  }
+
+  protected override _doBackwards(): void {
+    this.#point.freq = this.#oldFreq;
+    this.#point.gain = this.#oldGain;
+    this.#instrument.preset = this.#instrumentPrevPreset;
+    this.#doc.notifier.changed();
+  }
+}
+
+export class ChangeFadeInOut extends UndoableChange {
+  #doc: SongDocument;
+  #instrument: Instrument;
+  #instrumentPrevPreset: number;
+  #instrumentNextPreset: number;
+  #oldFadeIn: number;
+  #oldFadeOut: number;
+  #newFadeIn: number;
+  #newFadeOut: number;
+  public constructor(doc: SongDocument, fadeIn: number, fadeOut: number) {
+    super(false);
+    this.#doc = doc;
+    this.#instrument =
+      this.#doc.song.channels[this.#doc.channel]!.instruments[this.#doc.getCurrentInstrument()]!;
+    this.#instrumentNextPreset = this.#instrument.type;
+    this.#instrumentPrevPreset = this.#instrument.preset;
+    this.#oldFadeIn = this.#instrument.fadeIn;
+    this.#oldFadeOut = this.#instrument.fadeOut;
+    this.#newFadeIn = fadeIn;
+    this.#newFadeOut = fadeOut;
+    this._didSomething();
+    this.redo();
+  }
+
+  protected override _doForwards(): void {
+    this.#instrument.fadeIn = this.#newFadeIn;
+    this.#instrument.fadeOut = this.#newFadeOut;
+    this.#instrument.preset = this.#instrumentNextPreset;
+    this.#doc.notifier.changed();
+  }
+
+  protected override _doBackwards(): void {
+    this.#instrument.fadeIn = this.#oldFadeIn;
+    this.#instrument.fadeOut = this.#oldFadeOut;
+    this.#instrument.preset = this.#instrumentPrevPreset;
+    this.#doc.notifier.changed();
+  }
+}
+
+export class ChangeAlgorithm extends Change {
+  public constructor(doc: SongDocument, newValue: number) {
+    super();
+    const instrument: Instrument =
+        doc.song.channels[doc.channel]!.instruments[doc.getCurrentInstrument()]!,
+      oldValue: number = instrument.algorithm;
+    if (oldValue !== newValue) {
+      instrument.algorithm = newValue;
+      instrument.preset = instrument.type;
+      doc.notifier.changed();
+      this._didSomething();
+    }
+  }
+}
+
+export class ChangeFeedbackType extends Change {
+  public constructor(doc: SongDocument, newValue: number) {
+    super();
+    const instrument: Instrument =
+        doc.song.channels[doc.channel]!.instruments[doc.getCurrentInstrument()]!,
+      oldValue: number = instrument.feedbackType;
+    if (oldValue !== newValue) {
+      instrument.feedbackType = newValue;
+      instrument.preset = instrument.type;
+      doc.notifier.changed();
+      this._didSomething();
+    }
+  }
+}
+
+export class ChangeOperatorFrequency extends Change {
+  public constructor(doc: SongDocument, operatorIndex: number, newValue: number) {
+    super();
+    const instrument: Instrument =
+      doc.song.channels[doc.channel]!.instruments[doc.getCurrentInstrument()]!;
+    newValue = Math.max(0, Math.min(Config.operatorFrequencyMax, newValue));
+    const oldValue: number = instrument.operators[operatorIndex]!.frequency;
+    if (oldValue !== newValue) {
+      instrument.operators[operatorIndex]!.frequency = newValue;
+      instrument.preset = instrument.type;
+      doc.notifier.changed();
+      this._didSomething();
+    }
+  }
+}
+
+export class ChangeOperatorWave extends Change {
+  public constructor(doc: SongDocument, operatorIndex: number, newValue: number) {
+    super();
+    const instrument: Instrument =
+        doc.song.channels[doc.channel]!.instruments[doc.getCurrentInstrument()]!,
+      oldValue: number = instrument.operators[operatorIndex]!.wave;
+    if (oldValue !== newValue) {
+      instrument.operators[operatorIndex]!.wave = newValue;
+      instrument.preset = instrument.type;
+      doc.notifier.changed();
+      this._didSomething();
+    }
+  }
+}
+
+export class ChangeChipWavePitch extends ChangeInstrumentSlider {
+  public constructor(
+    doc: SongDocument,
+    operatorIndex: number | null,
+    oldValue: number,
+    newValue: number,
+  ) {
+    super(doc);
+    const settings =
+      operatorIndex == null
+        ? this._instrument.chipWaveSettings
+        : this._instrument.operators[operatorIndex]!.chipWaveSettings;
+    settings.pitch = newValue;
+    doc.notifier.changed();
+    if (oldValue !== newValue) {
+      this._didSomething();
+    }
+  }
+}
+
+export class ChangeChipWaveTempo extends ChangeInstrumentSlider {
+  public constructor(
+    doc: SongDocument,
+    operatorIndex: number | null,
+    oldValue: number,
+    newValue: number,
+  ) {
+    super(doc);
+    const settings =
+      operatorIndex == null
+        ? this._instrument.chipWaveSettings
+        : this._instrument.operators[operatorIndex]!.chipWaveSettings;
+    settings.tempo = newValue;
+    doc.notifier.changed();
+    if (oldValue !== newValue) {
+      this._didSomething();
+    }
+  }
+}
+
+export interface ChipWaveLoopValues {
+  readonly offset: number;
+  readonly loopStart: number;
+  readonly loopEnd: number;
+  readonly oneshot: boolean;
+}
+
+export class ChangeChipWaveLoop extends ChangeInstrumentSlider {
+  public constructor(doc: SongDocument, operatorIndex: number | null, values: ChipWaveLoopValues) {
+    super(doc);
+    const settings =
+        operatorIndex == null
+          ? this._instrument.chipWaveSettings
+          : this._instrument.operators[operatorIndex]!.chipWaveSettings,
+      offset: number = Math.max(0, Math.min(1, values.offset)),
+      loopStart: number = Math.max(0, Math.min(1, values.loopStart)),
+      loopEnd: number = Math.max(loopStart, Math.min(1, values.loopEnd));
+    if (
+      settings.offset === offset &&
+      settings.loopStart === loopStart &&
+      settings.loopEnd === loopEnd &&
+      settings.oneshot === values.oneshot
+    ) {
+      return;
+    }
+    settings.offset = offset;
+    settings.loopStart = loopStart;
+    settings.loopEnd = loopEnd;
+    settings.oneshot = values.oneshot;
+    this._instrument.preset = this._instrument.type;
+    doc.notifier.changed();
+    this._didSomething();
+  }
+}
+
+export class ChangeOperatorAmplitude extends ChangeInstrumentSlider {
+  public constructor(doc: SongDocument, operatorIndex: number, oldValue: number, newValue: number) {
+    super(doc);
+    this._instrument.operators[operatorIndex]!.amplitude = newValue;
+    doc.notifier.changed();
+    if (oldValue !== newValue) {
+      this._didSomething();
+    }
+  }
+}
+
+export class ChangeFeedbackAmplitude extends ChangeInstrumentSlider {
+  public constructor(doc: SongDocument, oldValue: number, newValue: number) {
+    super(doc);
+    this._instrument.feedbackAmplitude = newValue;
+    doc.notifier.changed();
+    if (oldValue !== newValue) {
+      this._didSomething();
+    }
+  }
+}
+
+export class ChangeAddChannelInstrument extends Change {
+  public constructor(doc: SongDocument) {
+    super();
+    if (doc.song.getChannelIsAutomation(doc.channel)) {
+      return;
+    }
+    const channel: Channel = doc.song.channels[doc.channel]!,
+      isNoise: boolean = doc.song.getChannelIsNoise(doc.channel),
+      maxInstruments: number = doc.song.getMaxInstrumentsPerChannel();
+    if (channel.instruments.length >= maxInstruments) {
+      return;
+    }
+    const presetValue: number = pickRandomPresetValue(),
+      preset: Preset = EditorConfig.valueToPreset(presetValue)!,
+      instrument: Instrument = new Instrument(isNoise);
+    instrument.fromSettingsObject(preset.settings, isNoise);
+    instrument.preset = presetValue;
+    instrument.volume = Config.volumeDefault;
+    channel.instruments.push(instrument);
+    doc.viewedInstrument[doc.channel] = channel.instruments.length - 1;
+    doc.notifier.changed();
+    this._didSomething();
+  }
+}
+
+export class ChangeRemoveChannelInstrument extends Change {
+  public constructor(doc: SongDocument) {
+    super();
+    if (doc.song.getChannelIsAutomation(doc.channel)) {
+      return;
+    }
+    const channel: Channel = doc.song.channels[doc.channel]!;
+    if (channel.instruments.length <= Config.instrumentCountMin) {
+      return;
+    }
+    const removedIndex: number = doc.viewedInstrument[doc.channel]!,
+      oldInstrumentCount: number = channel.instruments.length;
+    channel.instruments.splice(removedIndex, 1);
+    doc.song.remapAutomationInstrumentReferences(
+      doc.channel,
+      Array.from(
+        { length: oldInstrumentCount },
+        (_unused: unknown, index: number): number | null =>
+          index === removedIndex ? null : index < removedIndex ? index : index - 1,
+      ),
+    );
+    doc.viewedInstrument[doc.channel] = Math.min(
+      doc.viewedInstrument[doc.channel]!,
+      channel.instruments.length - 1,
+    );
+    doc.notifier.changed();
+    this._didSomething();
+  }
+}
+
+export class ChangeViewInstrument extends Change {
+  public constructor(doc: SongDocument, index: number) {
+    super();
+    if (doc.viewedInstrument[doc.channel]! !== index) {
+      doc.viewedInstrument[doc.channel] = index;
+      doc.notifier.changed();
+      this._didSomething();
+    }
+  }
+}
+
+export class ChangeKey extends Change {
+  public constructor(doc: SongDocument, newValue: number) {
+    super();
+    if (doc.song.key !== newValue) {
+      doc.song.key = newValue;
+      doc.notifier.changed();
+      this._didSomething();
+    }
+  }
+}
+
+export class ChangeComposingKey extends Change {
+  public constructor(doc: SongDocument, newValue: number) {
+    super();
+    if (doc.song.composingKey !== newValue) {
+      doc.song.composingKey = newValue;
+      doc.notifier.changed();
+      this._didSomething();
+    }
+  }
+}
+
+export class ChangeLoop extends Change {
+  #doc: SongDocument;
+  public constructor(
+    _doc: SongDocument,
+    public oldStart: number,
+    public oldLength: number,
+    public newStart: number,
+    public newLength: number,
+  ) {
+    super();
+    this.#doc = _doc;
+    this.#doc.song.loopStart = this.newStart;
+    this.#doc.song.loopLength = this.newLength;
+    this.#doc.notifier.changed();
+    if (this.oldStart !== this.newStart || this.oldLength !== this.newLength) {
+      this._didSomething();
+    }
+  }
+}
+
+export class ChangePitchAdded extends UndoableChange {
+  #doc: SongDocument;
+  #note: Note;
+  #pitch: number;
+  #index: number;
+  public constructor(
+    doc: SongDocument,
+    note: Note,
+    pitch: number,
+    index: number,
+    deletion = false,
+  ) {
+    super(deletion);
+    this.#doc = doc;
+    this.#note = note;
+    this.#pitch = pitch;
+    this.#index = index;
+    this._didSomething();
+    this.redo();
+  }
+
+  protected override _doForwards(): void {
+    this.#note.pitches.splice(this.#index, 0, this.#pitch);
+    this.#doc.notifier.changed();
+  }
+
+  protected override _doBackwards(): void {
+    this.#note.pitches.splice(this.#index, 1);
+    this.#doc.notifier.changed();
+  }
+}
+
+export class ChangeOctave extends Change {
+  public constructor(
+    doc: SongDocument,
+    public oldValue: number,
+    newValue: number,
+  ) {
+    super();
+    doc.song.channels[doc.channel]!.octave = newValue;
+    doc.notifier.changed();
+    if (oldValue !== newValue) {
+      this._didSomething();
+    }
+  }
+}
+
+export class ChangeNoteAdded extends UndoableChange {
+  #doc: SongDocument;
+  #pattern: Pattern;
+  #note: Note;
+  #index: number;
+  public constructor(
+    doc: SongDocument,
+    pattern: Pattern,
+    note: Note,
+    index: number,
+    deletion = false,
+  ) {
+    super(deletion);
+    this.#doc = doc;
+    this.#pattern = pattern;
+    this.#note = note;
+    this.#index = index;
+    this._didSomething();
+    this.redo();
+  }
+
+  protected override _doForwards(): void {
+    this.#pattern.notes.splice(this.#index, 0, this.#note);
+    this.#doc.notifier.changed();
+  }
+
+  protected override _doBackwards(): void {
+    this.#pattern.notes.splice(this.#index, 1);
+    this.#doc.notifier.changed();
+  }
+}
+
+export class ChangeNoteLength extends ChangePins {
+  public constructor(doc: SongDocument | null, note: Note, truncStart: number, truncEnd: number) {
+    super(doc, note);
+    const clipped: Note | null = clipEvent(note, truncStart, truncEnd);
+    if (clipped == null) {
+      return;
+    }
+    this._newStart = clipped.start;
+    this._newEnd = clipped.end;
+    this._newPins = clipped.pins;
+    this._newPitches = clipped.pitches;
+    this._newContinuesLastPattern =
+      (this._oldStart < 0 || note.continuesLastPattern) && truncStart === 0;
+    this._doForwards();
+    this._didSomething();
+  }
+}
+
+export class ChangeNoteTruncate extends ChangeSequence {
+  public constructor(
+    doc: SongDocument,
+    pattern: Pattern,
+    start: number,
+    end: number,
+    skipNote?: Note,
+  ) {
+    super();
+    let i = 0;
+    while (i < pattern.notes.length) {
+      const note: Note = pattern.notes[i]!;
+      if (note === skipNote && skipNote !== undefined) {
+        i++;
+      } else if (note.end <= start) {
+        i++;
+      } else if (note.start >= end) {
+        break;
+      } else if (note.start < start && note.end > end) {
+        const copy: Note = note.clone();
+        this.append(new ChangeNoteLength(doc, note, note.start, start));
+        i++;
+        this.append(new ChangeNoteAdded(doc, pattern, copy, i, false));
+        this.append(new ChangeNoteLength(doc, copy, end, copy.end));
+        i++;
+      } else if (note.start < start) {
+        this.append(new ChangeNoteLength(doc, note, note.start, start));
+        i++;
+      } else if (note.end > end) {
+        this.append(new ChangeNoteLength(doc, note, end, note.end));
+        i++;
+      } else {
+        this.append(new ChangeNoteAdded(doc, pattern, note, i, true));
+      }
+    }
+  }
+}
+
+export class ChangeRhythm extends ChangeGroup {
+  public constructor(doc: SongDocument, newValue: number) {
+    super();
+
+    if (doc.song.rhythm !== newValue) {
+      doc.song.rhythm = newValue;
+      doc.notifier.changed();
+      this._didSomething();
+    }
+  }
+}
+
+export class ChangePaste extends ChangeGroup {
+  public constructor(
+    doc: SongDocument,
+    pattern: Pattern,
+    notes: Note[],
+    selectionStart: number,
+    selectionEnd: number,
+    oldPartDuration: number,
+  ) {
+    super();
+
+    // Erase the current contents of the selection:
+    this.append(new ChangeNoteTruncate(doc, pattern, selectionStart, selectionEnd));
+
+    let noteInsertionIndex = 0;
+    for (let i = 0; i < pattern.notes.length; i++) {
+      if (pattern.notes[i]!.start < selectionStart) {
+        if (pattern.notes[i]!.end > selectionStart) {
+          throw new Error("Selected notes overlap.");
+        }
+
+        noteInsertionIndex = i + 1;
+      } else if (pattern.notes[i]!.start < selectionEnd) {
+        throw new Error("Selected notes overlap.");
+      }
+    }
+
+    const sourceNotes: Note[] = notes.map((noteObject: Note): Note => {
+      const note: Note = new Note(
+        noteObject["pitches"][0]!,
+        noteObject["start"],
+        noteObject["end"],
+        noteObject["pins"][0]!.size,
+      );
+      note.pitches = noteObject["pitches"].concat();
+      note.pins = noteObject["pins"].map((pin: NotePin): NotePin =>
+        makeNotePin(pin.interval, pin.time, pin.size),
+      );
+      note.continuesLastPattern = noteObject["continuesLastPattern"] === true;
+      return note;
+    });
+    for (const note of repeatEvents(sourceNotes, oldPartDuration, {
+      start: selectionStart,
+      end: selectionEnd,
+    })) {
+      if (note.start !== 0) {
+        note.continuesLastPattern = false;
+      }
+      pattern.notes.splice(noteInsertionIndex++, 0, note);
+    }
+
+    doc.notifier.changed();
+    this._didSomething();
+  }
+}
+
+export class ChangePasteInstrument extends ChangeGroup {
+  public constructor(
+    doc: SongDocument,
+    instrument: Instrument,
+    instrumentCopy: Record<string, unknown>,
+  ) {
+    super();
+    instrument.fromSettingsObject(instrumentCopy, doc.song.getChannelIsNoise(doc.channel));
+    markInvalidAutomationTargetsForCurrentInstrument(doc);
+    doc.notifier.changed();
+    this._didSomething();
+  }
+}
+
+export class ChangePatternsPerChannel extends Change {
+  public constructor(doc: SongDocument, newValue: number) {
+    super();
+    if (doc.song.patternsPerChannel !== newValue) {
+      for (let i = 0; i < doc.song.getChannelCount(); i++) {
+        const channelBars: number[] = doc.song.channels[i]!.bars,
+          channelPatterns: Pattern[] = doc.song.channels[i]!.patterns;
+        for (let j = 0; j < channelBars.length; j++) {
+          if (channelBars[j]! > newValue) {
+            channelBars[j] = 0;
+          }
+        }
+        for (let j: number = channelPatterns.length; j < newValue; j++) {
+          channelPatterns[j] = new Pattern();
+          if (doc.song.getChannelIsAutomation(i)) {
+            channelPatterns[j]!.ensureAutomationRowCount(
+              doc.song.channels[i]!.automationRows.length,
+            );
+          }
+        }
+        channelPatterns.length = newValue;
+      }
+      doc.song.patternsPerChannel = newValue;
+      doc.notifier.changed();
+      this._didSomething();
+    }
+  }
+}
+
+export class ChangeRectifyPatterns extends Change {
+  public constructor(doc: SongDocument) {
+    super();
+    const rectifiedPatterns: Pattern[][] = [];
+    let patternsPerChannel = 0;
+
+    for (let channelIndex = 0; channelIndex < doc.song.channels.length; channelIndex++) {
+      const channel: Channel = doc.song.channels[channelIndex]!,
+        kind: ChannelKind = doc.song.getChannelKind(channelIndex);
+      // Empty patterns are equivalent to empty cells.
+      for (let bar = 0; bar < channel.bars.length; bar++) {
+        const patternNumber: number = channel.bars[bar]!;
+        if (patternNumber !== 0 && !channel.patterns[patternNumber - 1]!.hasContent(kind)) {
+          channel.bars[bar] = 0;
+          this._didSomething();
+        }
+      }
+
+      // Discard notes that cannot be reached from the sequence.
+      const referencedPatterns = new Set<number>(channel.bars);
+      for (let patternIndex = 0; patternIndex < channel.patterns.length; patternIndex++) {
+        if (
+          !referencedPatterns.has(patternIndex + 1) &&
+          channel.patterns[patternIndex]!.hasContent(kind)
+        ) {
+          channel.patterns[patternIndex]!.reset();
+          if (kind === ChannelKind.automation) {
+            channel.patterns[patternIndex]!.ensureAutomationRowCount(channel.automationRows.length);
+          }
+          this._didSomething();
+        }
+      }
+
+      // Visiting bars in order both deduplicates patterns and assigns dense pattern
+      // Numbers in the exact order of their first appearance.
+      const newPatterns: Pattern[] = [];
+      for (let bar = 0; bar < channel.bars.length; bar++) {
+        const oldPatternNumber: number = channel.bars[bar]!;
+        if (oldPatternNumber === 0) {
+          continue;
+        }
+
+        const oldPattern: Pattern = channel.patterns[oldPatternNumber - 1]!;
+        let newPatternNumber = 0;
+        for (let patternIndex = 0; patternIndex < newPatterns.length; patternIndex++) {
+          if (oldPattern.contentEquals(newPatterns[patternIndex]!, kind)) {
+            newPatternNumber = patternIndex + 1;
+            break;
+          }
+        }
+
+        if (newPatternNumber === 0) {
+          newPatterns.push(oldPattern);
+          newPatternNumber = newPatterns.length;
+        }
+        if (channel.bars[bar]! !== newPatternNumber) {
+          channel.bars[bar] = newPatternNumber;
+          this._didSomething();
+        }
+      }
+
+      rectifiedPatterns.push(newPatterns);
+      patternsPerChannel = Math.max(patternsPerChannel, newPatterns.length);
+    }
+
+    // The serialized song format requires at least one pattern slot.
+    patternsPerChannel = Math.max(1, patternsPerChannel);
+    for (let channelIndex = 0; channelIndex < doc.song.channels.length; channelIndex++) {
+      const patterns: Pattern[] = doc.song.channels[channelIndex]!.patterns,
+        newPatterns: Pattern[] = rectifiedPatterns[channelIndex]!,
+        kind: ChannelKind = doc.song.getChannelKind(channelIndex);
+      for (let patternIndex = 0; patternIndex < patternsPerChannel; patternIndex++) {
+        const pattern: Pattern =
+          newPatterns[patternIndex]! ||
+          (patterns[patternIndex]?.hasContent(kind) ? new Pattern() : patterns[patternIndex]!);
+        if (kind === ChannelKind.automation) {
+          pattern.ensureAutomationRowCount(doc.song.channels[channelIndex]!.automationRows.length);
+        }
+        if (patterns[patternIndex]! !== pattern) {
+          patterns[patternIndex] = pattern;
+          this._didSomething();
+        }
+      }
+      if (patterns.length !== patternsPerChannel) {
+        patterns.length = patternsPerChannel;
+        this._didSomething();
+      }
+    }
+    if (doc.song.patternsPerChannel !== patternsPerChannel) {
+      doc.song.patternsPerChannel = patternsPerChannel;
+      this._didSomething();
+    }
+
+    if (!this.isNoop()) {
+      doc.notifier.changed();
+    }
+  }
+}
+
+export class ChangeEnsurePatternExists extends UndoableChange {
+  #doc!: SongDocument;
+  #bar!: number;
+  #channelIndex!: number;
+  #patternIndex!: number;
+  #oldPattern: Pattern | null = null;
+  #oldPatternCount!: number;
+  #newPatternCount!: number;
+
+  public constructor(doc: SongDocument, channelIndex: number, bar: number) {
+    super(false);
+    const song: Song = doc.song;
+    if (song.channels[channelIndex]!.bars[bar]! !== 0) {
+      return;
+    }
+
+    this.#doc = doc;
+    this.#bar = bar;
+    this.#channelIndex = channelIndex;
+    this.#oldPatternCount = song.patternsPerChannel;
+    this.#newPatternCount = song.patternsPerChannel;
+    const kind: ChannelKind = song.getChannelKind(channelIndex);
+
+    let firstEmptyUnusedIndex: number | null = null,
+      firstUnusedIndex: number | null = null;
+    for (let patternIndex = 1; patternIndex <= song.patternsPerChannel; patternIndex++) {
+      let used = false;
+      for (let barIndex = 0; barIndex < song.barCount; barIndex++) {
+        if (song.channels[channelIndex]!.bars[barIndex] === patternIndex) {
+          used = true;
+          break;
+        }
+      }
+      if (used) {
+        continue;
+      }
+      if (firstUnusedIndex == null) {
+        firstUnusedIndex = patternIndex;
+      }
+      const pattern: Pattern = song.channels[channelIndex]!.patterns[patternIndex - 1]!;
+      if (!pattern.hasContent(kind)) {
+        firstEmptyUnusedIndex = patternIndex;
+        break;
+      }
+    }
+
+    if (firstEmptyUnusedIndex != null) {
+      this.#patternIndex = firstEmptyUnusedIndex;
+    } else if (song.patternsPerChannel < song.barCount) {
+      this.#newPatternCount = song.patternsPerChannel + 1;
+      this.#patternIndex = song.patternsPerChannel + 1;
+    } else if (firstUnusedIndex == null) {
+      throw new Error("No unused pattern index is available.");
+    } else {
+      this.#patternIndex = firstUnusedIndex;
+      this.#oldPattern = song.channels[channelIndex]!.patterns[firstUnusedIndex - 1]!.clone();
+    }
+
+    this._didSomething();
+    this._doForwards();
+  }
+
+  protected override _doForwards(): void {
+    const song: Song = this.#doc.song;
+    for (let j: number = song.patternsPerChannel; j < this.#newPatternCount; j++) {
+      for (let i = 0; i < song.getChannelCount(); i++) {
+        song.channels[i]!.patterns[j] = new Pattern();
+        if (song.getChannelIsAutomation(i)) {
+          song.channels[i]!.patterns[j]!.ensureAutomationRowCount(
+            song.channels[i]!.automationRows.length,
+          );
+        }
+      }
+    }
+    song.patternsPerChannel = this.#newPatternCount;
+    const pattern: Pattern = song.channels[this.#channelIndex]!.patterns[this.#patternIndex - 1]!;
+    pattern.reset();
+    if (song.getChannelIsAutomation(this.#channelIndex)) {
+      pattern.ensureAutomationRowCount(song.channels[this.#channelIndex]!.automationRows.length);
+    }
+    song.channels[this.#channelIndex]!.bars[this.#bar] = this.#patternIndex;
+    this.#doc.notifier.changed();
+  }
+
+  protected override _doBackwards(): void {
+    const song: Song = this.#doc.song,
+      pattern: Pattern = song.channels[this.#channelIndex]!.patterns[this.#patternIndex - 1]!;
+    if (this.#oldPattern != null) {
+      pattern.copyContentsFrom(this.#oldPattern);
+    }
+    song.channels[this.#channelIndex]!.bars[this.#bar] = 0;
+    for (let i = 0; i < song.getChannelCount(); i++) {
+      song.channels[i]!.patterns.length = this.#oldPatternCount;
+    }
+    song.patternsPerChannel = this.#oldPatternCount;
+    this.#doc.notifier.changed();
+  }
+}
+
+export class ChangePinTime extends ChangePins {
+  public constructor(
+    doc: SongDocument | null,
+    note: Note,
+    pinIndex: number,
+    shiftedTime: number,
+    continuesLastPattern: boolean,
+  ) {
+    super(doc, note);
+
+    shiftedTime -= this._oldStart;
+    const originalTime: number = this._oldPins[pinIndex]!.time,
+      skipStart: number = Math.min(originalTime, shiftedTime),
+      skipEnd: number = Math.max(originalTime, shiftedTime);
+    let setPin = false;
+    for (let i = 0; i < this._oldPins.length; i++) {
+      const oldPin: NotePin = note.pins[i]!,
+        time: number = oldPin.time;
+      if (time < skipStart) {
+        this._newPins.push(makeNotePin(oldPin.interval, time, oldPin.size));
+      } else if (time > skipEnd) {
+        if (!setPin) {
+          if (this._newPins.length > 0) {
+            continuesLastPattern = note.continuesLastPattern;
+          }
+          this._newPins.push(
+            makeNotePin(
+              this._oldPins[pinIndex]!.interval,
+              shiftedTime,
+              this._oldPins[pinIndex]!.size,
+            ),
+          );
+          setPin = true;
+        }
+        this._newPins.push(makeNotePin(oldPin.interval, time, oldPin.size));
+      }
+    }
+    if (!setPin) {
+      continuesLastPattern = note.continuesLastPattern;
+      this._newPins.push(
+        makeNotePin(this._oldPins[pinIndex]!.interval, shiftedTime, this._oldPins[pinIndex]!.size),
+      );
+    }
+
+    this._finishSetup(continuesLastPattern);
+  }
+}
+
+export class ChangePitchBend extends ChangePins {
+  public constructor(
+    doc: SongDocument | null,
+    note: Note,
+    bendStart: number,
+    bendEnd: number,
+    bendTo: number,
+    pitchIndex: number,
+  ) {
+    super(doc, note);
+
+    bendStart -= this._oldStart;
+    bendEnd -= this._oldStart;
+    bendTo -= note.pitches[pitchIndex]!;
+
+    let setStart = false,
+      setEnd = false,
+      prevInterval = 0,
+      prevSize: number = Config.noteSizeMax,
+      persist = true,
+      i: number,
+      direction: number,
+      stop: number,
+      push: (item: NotePin) => void;
+    if (bendEnd > bendStart) {
+      i = 0;
+      direction = 1;
+      stop = note.pins.length;
+      push = (item: NotePin) => {
+        this._newPins.push(item);
+      };
+    } else {
+      i = note.pins.length - 1;
+      direction = -1;
+      stop = -1;
+      push = (item: NotePin) => {
+        this._newPins.unshift(item);
+      };
+    }
+    for (; i !== stop; i += direction) {
+      const oldPin: NotePin = note.pins[i]!,
+        time: number = oldPin.time;
+      for (;;) {
+        if (!setStart) {
+          if (time * direction <= bendStart * direction) {
+            prevInterval = oldPin.interval;
+            prevSize = oldPin.size;
+          }
+          if (time * direction < bendStart * direction) {
+            push(makeNotePin(oldPin.interval, time, oldPin.size));
+            break;
+          } else {
+            push(makeNotePin(prevInterval, bendStart, prevSize));
+            setStart = true;
+          }
+        } else if (setEnd) {
+          if (time * direction !== bendEnd * direction) {
+            if (oldPin.interval !== prevInterval) {
+              persist = false;
+            }
+            push(makeNotePin(persist ? bendTo : oldPin.interval, time, oldPin.size));
+          }
+          break;
+        } else {
+          if (time * direction <= bendEnd * direction) {
+            prevInterval = oldPin.interval;
+            prevSize = oldPin.size;
+          }
+          if (time * direction < bendEnd * direction) {
+            break;
+          } else {
+            push(makeNotePin(bendTo, bendEnd, prevSize));
+            setEnd = true;
+          }
+        }
+      }
+    }
+    if (!setEnd) {
+      push(makeNotePin(bendTo, bendEnd, prevSize));
+    }
+
+    this._finishSetup();
+  }
+}
+
+class ChangeRhythmNote extends ChangePins {
+  public constructor(
+    doc: SongDocument | null,
+    note: Note,
+    changeRhythm: (oldTime: number) => number,
+  ) {
+    super(doc, note);
+
+    for (const oldPin of this._oldPins) {
+      this._newPins.push(
+        makeNotePin(
+          oldPin.interval,
+          changeRhythm(oldPin.time + this._oldStart) - this._oldStart,
+          oldPin.size,
+        ),
+      );
+    }
+
+    this._finishSetup();
+  }
+}
+
+export class ChangePatternRhythm extends ChangeSequence {
+  public constructor(doc: SongDocument, pattern: Pattern) {
+    super();
+    const minDivision: number = Config.partsPerBeat / Config.rhythms[doc.song.rhythm]!.stepsPerBeat,
+      changeRhythm: (oldTime: number) => number = function changeRhythm(oldTime: number): number {
+        const thresholds: number[] | null = Config.rhythms[doc.song.rhythm]!.roundUpThresholds;
+        if (thresholds == null) {
+          return Math.round(oldTime / minDivision) * minDivision;
+        }
+        const beatStart: number = Math.floor(oldTime / Config.partsPerBeat) * Config.partsPerBeat,
+          remainder: number = oldTime - beatStart;
+        let newTime: number = beatStart;
+        for (const threshold of thresholds) {
+          if (remainder >= threshold) {
+            newTime += minDivision;
+          } else {
+            break;
+          }
+        }
+        return newTime;
+      };
+
+    let i = 0;
+    while (i < pattern.notes.length) {
+      const note: Note = pattern.notes[i]!;
+      if (changeRhythm(note.start) >= changeRhythm(note.end)) {
+        this.append(new ChangeNoteAdded(doc, pattern, note, i, true));
+      } else {
+        this.append(new ChangeRhythmNote(doc, note, changeRhythm));
+        i++;
+      }
+    }
+  }
+}
+
+export class ChangeMoveNotesSideways extends ChangeGroup {
+  public constructor(doc: SongDocument, beatsToMove: number, strategy: string) {
+    super();
+    let partsToMove: number = Math.round(
+      (beatsToMove % doc.song.beatsPerBar) * Config.partsPerBeat,
+    );
+    if (partsToMove < 0) {
+      partsToMove += doc.song.beatsPerBar * Config.partsPerBeat;
+    }
+    if (partsToMove === 0.0) {
+      return;
+    }
+
+    switch (strategy) {
+      case "wrapAround": {
+        {
+          const partsPerBar: number = Config.partsPerBeat * doc.song.beatsPerBar;
+          for (let channelIndex = 0; channelIndex < doc.song.getChannelCount(); channelIndex++) {
+            const channel: Channel = doc.song.channels[channelIndex]!;
+            for (const pattern of channel.patterns) {
+              if (doc.song.getChannelIsAutomation(channelIndex)) {
+                const newRows: Event[][] = channel.automationRows.map((): Event[] => []);
+                for (let rowIndex = 0; rowIndex < channel.automationRows.length; rowIndex++) {
+                  for (const oldEvent of pattern.automationEvents[rowIndex] ?? []) {
+                    for (let bar = 1; bar >= 0; bar--) {
+                      const projected: Event | null = projectEventIntoBar(
+                        oldEvent,
+                        0,
+                        partsToMove,
+                        bar,
+                        partsPerBar,
+                      );
+                      if (projected != null) {
+                        newRows[rowIndex]!.push(projected);
+                      }
+                    }
+                  }
+                  newRows[rowIndex]!.sort((left, right): number => left.start - right.start);
+                }
+                pattern.automationEvents = newRows;
+                continue;
+              }
+              const newNotes: Note[] = [];
+
+              for (let bar = 1; bar >= 0; bar--) {
+                const barStartPart: number = bar * partsPerBar;
+
+                for (const oldNote of pattern.notes) {
+                  const absoluteNoteStart: number = oldNote.start + partsToMove,
+                    absoluteNoteEnd: number = oldNote.end + partsToMove,
+                    noteStartPart: number = Math.max(0, absoluteNoteStart - barStartPart),
+                    noteEndPart: number = Math.min(partsPerBar, absoluteNoteEnd - barStartPart);
+
+                  if (noteStartPart < noteEndPart) {
+                    projectNoteIntoBar(
+                      oldNote,
+                      absoluteNoteStart - barStartPart - noteStartPart,
+                      noteStartPart,
+                      noteEndPart,
+                      newNotes,
+                    );
+                  }
+                }
+              }
+
+              pattern.notes = newNotes;
+            }
+          }
+        }
+        break;
+      }
+      case "overflow": {
+        {
+          let originalBarCount: number = doc.song.barCount,
+            originalLoopStart: number = doc.song.loopStart;
+          const originalLoopLength: number = doc.song.loopLength;
+
+          this.append(new ChangeMoveAndOverflowNotes(doc, doc.song.beatsPerBar, partsToMove));
+
+          if (beatsToMove < 0) {
+            let firstBarIsEmpty = true;
+            for (const channel of doc.song.channels) {
+              if (channel.bars[0]! !== 0) {
+                firstBarIsEmpty = false;
+              }
+            }
+            if (firstBarIsEmpty) {
+              for (const channel of doc.song.channels) {
+                channel.bars.shift();
+              }
+              doc.song.barCount--;
+            } else {
+              originalBarCount++;
+              originalLoopStart++;
+              doc.bar++;
+            }
+          }
+          while (doc.song.barCount < originalBarCount) {
+            for (const channel of doc.song.channels) {
+              channel.bars.push(0);
+            }
+            doc.song.barCount++;
+          }
+          doc.song.loopStart = originalLoopStart;
+          doc.song.loopLength = originalLoopLength;
+        }
+        break;
+      }
+      default: {
+        throw new Error("Unrecognized beats-per-bar conversion strategy.");
+      }
+    }
+
+    doc.notifier.changed();
+    this._didSomething();
+  }
+}
+
+export class ChangeTempo extends Change {
+  public constructor(doc: SongDocument, oldValue: number, newValue: number) {
+    super();
+    doc.song.tempo = Math.max(Config.tempoMin, Math.min(Config.tempoMax, Math.round(newValue)));
+    doc.notifier.changed();
+    if (oldValue !== newValue) {
+      this._didSomething();
+    }
+  }
+}
+
+export class ChangeBeatsPerBar extends ChangeGroup {
+  public constructor(doc: SongDocument, newValue: number, strategy: string) {
+    super();
+    if (doc.song.beatsPerBar !== newValue) {
+      switch (strategy) {
+        case "splice": {
+          {
+            if (doc.song.beatsPerBar > newValue) {
+              for (let i = 0; i < doc.song.getChannelCount(); i++) {
+                for (let j = 0; j < doc.song.channels[i]!.patterns.length; j++) {
+                  const pattern: Pattern = doc.song.channels[i]!.patterns[j]!;
+                  if (doc.song.getChannelIsAutomation(i)) {
+                    for (let rowIndex = 0; rowIndex < pattern.automationEvents.length; rowIndex++) {
+                      const oldEvents: readonly Event[] = pattern.automationEvents[rowIndex]!,
+                        newEvents: Event[] = truncateEvents(
+                          oldEvents,
+                          newValue * Config.partsPerBeat,
+                        );
+                      if (
+                        oldEvents.length !== newEvents.length ||
+                        oldEvents.some(
+                          (event, index): boolean => event.end !== newEvents[index]?.end,
+                        )
+                      ) {
+                        this.append(
+                          new ChangeEvents(doc, pattern.automationEvents[rowIndex]!, newEvents),
+                        );
+                      }
+                    }
+                  } else {
+                    this.append(
+                      new ChangeNoteTruncate(
+                        doc,
+                        pattern,
+                        newValue * Config.partsPerBeat,
+                        doc.song.beatsPerBar * Config.partsPerBeat,
+                      ),
+                    );
+                  }
+                }
+              }
+            }
+          }
+          break;
+        }
+        case "stretch": {
+          {
+            const changeRhythm = function (oldTime: number): number {
+              return Math.round((oldTime * newValue) / doc.song.beatsPerBar);
+            };
+            for (let channelIndex = 0; channelIndex < doc.song.getChannelCount(); channelIndex++) {
+              for (
+                let patternIndex = 0;
+                patternIndex < doc.song.channels[channelIndex]!.patterns.length;
+                patternIndex++
+              ) {
+                const pattern: Pattern = doc.song.channels[channelIndex]!.patterns[patternIndex]!;
+                if (doc.song.getChannelIsAutomation(channelIndex)) {
+                  const ratio: number = newValue / doc.song.beatsPerBar;
+                  for (let rowIndex = 0; rowIndex < pattern.automationEvents.length; rowIndex++) {
+                    const oldEvents: readonly Event[] = pattern.automationEvents[rowIndex]!;
+                    if (oldEvents.length === 0) {
+                      continue;
+                    }
+                    this.append(
+                      new ChangeEvents(
+                        doc,
+                        pattern.automationEvents[rowIndex]!,
+                        scaleEvents(oldEvents, ratio),
+                      ),
+                    );
+                  }
+                  continue;
+                }
+                let noteIndex = 0;
+                while (noteIndex < pattern.notes.length) {
+                  const note: Note = pattern.notes[noteIndex]!;
+                  if (changeRhythm(note.start) >= changeRhythm(note.end)) {
+                    this.append(new ChangeNoteAdded(doc, pattern, note, noteIndex, true));
+                  } else {
+                    this.append(new ChangeRhythmNote(doc, note, changeRhythm));
+                    noteIndex++;
+                  }
+                }
+              }
+            }
+            this.append(
+              new ChangeTempo(
+                doc,
+                doc.song.tempo,
+                (doc.song.tempo * newValue) / doc.song.beatsPerBar,
+              ),
+            );
+          }
+          break;
+        }
+        case "overflow": {
+          {
+            this.append(new ChangeMoveAndOverflowNotes(doc, newValue, 0));
+            doc.song.loopStart = 0;
+            doc.song.loopLength = doc.song.barCount;
+          }
+          break;
+        }
+        default: {
+          throw new Error("Unrecognized beats-per-bar conversion strategy.");
+        }
+      }
+
+      doc.song.beatsPerBar = newValue;
+      doc.notifier.changed();
+      this._didSomething();
+    }
+  }
+}
+
+export class ChangeScale extends ChangeGroup {
+  public constructor(doc: SongDocument, newValue: number) {
+    super();
+    if (doc.song.scale !== newValue) {
+      doc.song.scale = newValue;
+      doc.notifier.changed();
+      this._didSomething();
+    }
+  }
+}
+
+export class ChangeDetectComposingKey extends ChangeGroup {
+  public constructor(doc: SongDocument) {
+    super();
+    const song: Song = doc.song,
+      basePitch: number = Config.keys[song.key]!.basePitch,
+      keyWeights: number[] = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+    for (let channelIndex = 0; channelIndex < song.pitchChannelCount; channelIndex++) {
+      for (let barIndex = 0; barIndex < song.barCount; barIndex++) {
+        const pattern: Pattern | null = song.getPattern(channelIndex, barIndex);
+        if (pattern != null) {
+          for (const note of pattern.notes) {
+            const prevPin: NotePin = note.pins[0]!;
+            for (let pinIndex = 1; pinIndex < note.pins.length; pinIndex++) {
+              const nextPin: NotePin = note.pins[pinIndex]!;
+              if (prevPin.interval === nextPin.interval) {
+                let weight: number = nextPin.time - prevPin.time;
+                weight += Math.max(
+                  0,
+                  Math.min(Config.partsPerBeat, nextPin.time + note.start) -
+                    (prevPin.time + note.start),
+                );
+                weight *= nextPin.size + prevPin.size;
+                for (const pitch of note.pitches) {
+                  const key = (basePitch + prevPin.interval + pitch) % 12;
+                  keyWeights[key]! += weight;
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+
+    let bestKey = 0,
+      bestKeyWeight = 0;
+    for (let key = 0; key < 12; key++) {
+      // Look for the root of the most prominent major or minor chord.
+      const keyWeight: number =
+        keyWeights[key]! *
+        (3 * keyWeights[(key + 7) % 12]! +
+          keyWeights[(key + 4) % 12]! +
+          keyWeights[(key + 3) % 12]!);
+      if (bestKeyWeight < keyWeight) {
+        bestKeyWeight = keyWeight;
+        bestKey = key;
+      }
+    }
+
+    if (bestKey !== song.composingKey) {
+      song.composingKey = bestKey;
+      doc.notifier.changed();
+      this._didSomething();
+    }
+  }
+}
+
+export function setDefaultInstruments(song: Song): void {
+  for (let channelIndex = 0; channelIndex < song.channels.length; channelIndex++) {
+    for (const instrument of song.channels[channelIndex]!.instruments) {
+      const isNoise: boolean = song.getChannelIsNoise(channelIndex),
+        presetValue: number =
+          channelIndex === song.pitchChannelCount
+            ? EditorConfig.nameToPresetValue(
+                Math.random() > 0.5 ? "chip noise" : "standard drumset",
+              )!
+            : pickRandomPresetValue(),
+        preset: Preset = EditorConfig.valueToPreset(presetValue)!;
+      instrument.fromSettingsObject(preset.settings, isNoise);
+      instrument.preset = presetValue;
+      instrument.volume = Config.volumeDefault;
+    }
+  }
+}
+
+export class ChangePatternSelection extends UndoableChange {
+  #doc: SongDocument;
+  #oldStart: number;
+  #oldEnd: number;
+  #oldActive: boolean;
+  #newStart: number;
+  #newEnd: number;
+  #newActive: boolean;
+
+  public constructor(doc: SongDocument, newStart: number, newEnd: number) {
+    super(false);
+    this.#doc = doc;
+    this.#oldStart = doc.selection.patternSelectionStart;
+    this.#oldEnd = doc.selection.patternSelectionEnd;
+    this.#oldActive = doc.selection.patternSelectionActive;
+    this.#newStart = newStart;
+    this.#newEnd = newEnd;
+    this.#newActive = newStart < newEnd;
+    this._doForwards();
+    this._didSomething();
+  }
+
+  protected override _doForwards(): void {
+    this.#doc.selection.patternSelectionStart = this.#newStart;
+    this.#doc.selection.patternSelectionEnd = this.#newEnd;
+    this.#doc.selection.patternSelectionActive = this.#newActive;
+    this.#doc.notifier.changed();
+  }
+
+  protected override _doBackwards(): void {
+    this.#doc.selection.patternSelectionStart = this.#oldStart;
+    this.#doc.selection.patternSelectionEnd = this.#oldEnd;
+    this.#doc.selection.patternSelectionActive = this.#oldActive;
+    this.#doc.notifier.changed();
+  }
+}
+
+export class ChangeSong extends ChangeGroup {
+  public constructor(doc: SongDocument, songData: Uint8Array | null) {
+    super();
+    if (songData == null) {
+      doc.song.initToDefault(true);
+      this.append(new ChangePatternSelection(doc, 0, 0));
+      doc.selection.resetBoxSelection();
+      setDefaultInstruments(doc.song);
+      doc.song.scale = doc.prefs.rememberScaleChoice ? doc.prefs.defaultScale : 0;
+
+      for (let i = 0; i <= doc.song.channels.length; i++) {
+        doc.viewedInstrument[i] = 0;
+      }
+      doc.viewedInstrument.length = doc.song.channels.length;
+    } else {
+      doc.song.fromBinary(songData);
+      this.append(new ChangeValidateTrackSelection(doc));
+    }
+    doc.notifier.changed();
+    this._didSomething();
+  }
+}
+
+export function comparePatternNotes(a: Note[], b: Note[]): boolean {
+  if (a.length !== b.length) {
+    return false;
+  }
+
+  for (let noteIndex = 0; noteIndex < a.length; noteIndex++) {
+    const oldNote: Note = a[noteIndex]!,
+      newNote: Note = b[noteIndex]!;
+    if (
+      newNote.start !== oldNote.start ||
+      newNote.end !== oldNote.end ||
+      newNote.continuesLastPattern !== oldNote.continuesLastPattern ||
+      newNote.pitches.length !== oldNote.pitches.length ||
+      newNote.pins.length !== oldNote.pins.length
+    ) {
+      return false;
+    }
+
+    for (let pitchIndex = 0; pitchIndex < oldNote.pitches.length; pitchIndex++) {
+      if (newNote.pitches[pitchIndex]! !== oldNote.pitches[pitchIndex]!) {
+        return false;
+      }
+    }
+
+    for (let pinIndex = 0; pinIndex < oldNote.pins.length; pinIndex++) {
+      if (
+        newNote.pins[pinIndex]!.interval !== oldNote.pins[pinIndex]!.interval ||
+        newNote.pins[pinIndex]!.time !== oldNote.pins[pinIndex]!.time ||
+        newNote.pins[pinIndex]!.size !== oldNote.pins[pinIndex]!.size
+      ) {
+        return false;
+      }
+    }
+  }
+
+  return true;
+}
+
+export class ChangeEchoDelay extends ChangeInstrumentSlider {
+  public constructor(doc: SongDocument, oldValue: number, newValue: number) {
+    super(doc);
+    this._instrument.echoDelay = newValue;
+    doc.notifier.changed();
+    if (oldValue !== newValue) {
+      this._didSomething();
+    }
+  }
+}
+
+export class ChangeEchoSustain extends ChangeInstrumentSlider {
+  public constructor(doc: SongDocument, oldValue: number, newValue: number) {
+    super(doc);
+    this._instrument.echoSustain = newValue;
+    doc.notifier.changed();
+    if (oldValue !== newValue) {
+      this._didSomething();
+    }
+  }
+}
+
+export class ChangeChorus extends ChangeInstrumentSlider {
+  public constructor(doc: SongDocument, oldValue: number, newValue: number) {
+    super(doc);
+    this._instrument.chorus = newValue;
+    doc.notifier.changed();
+    if (oldValue !== newValue) {
+      this._didSomething();
+    }
+  }
+}
+
+export class ChangeReverb extends ChangeInstrumentSlider {
+  public constructor(doc: SongDocument, oldValue: number, newValue: number) {
+    super(doc);
+    this._instrument.reverb = newValue;
+    doc.notifier.changed();
+    if (oldValue !== newValue) {
+      this._didSomething();
+    }
+  }
+}
+
+class ChangeSplitNotesAtPoint extends UndoableChange {
+  #doc!: SongDocument;
+  #pattern!: Pattern;
+  #note!: Note;
+  #noteIndex!: number;
+  #oldEnd!: number;
+  #oldPins!: NotePin[];
+  #newPins!: NotePin[];
+  #splitNote!: Note;
+
+  public constructor(doc: SongDocument, pattern: Pattern, cutPoint: number) {
+    super(false);
+
+    for (let i: number = pattern.notes.length - 1; i >= 0; i--) {
+      const note: Note = pattern.notes[i]!;
+      if (!(note.start < cutPoint && cutPoint < note.end)) {
+        continue;
+      }
+
+      // Separate the pins left and right of the cut point into two notes, also adjust the times.
+      // Right note pins will need to be normalized by pitch and interval, but that means knowing the
+      // Exact values at the cutpoint.
+      const cutRelativeToNote: number = cutPoint - note.start,
+        cutIndex: number = note.pins.findIndex((pin: NotePin) => pin.time > cutRelativeToNote);
+      if (cutIndex === -1) {
+        break;
+      }
+
+      const newPins: NotePin[] = note.pins
+          .slice(0, cutIndex)
+          .map((pin: NotePin) => makeNotePin(pin.interval, pin.time, pin.size)),
+        splitNote: Note = note.clone();
+      splitNote.continuesLastPattern = false;
+      splitNote.start = cutPoint;
+      splitNote.pins = splitNote.pins.slice(cutIndex);
+      for (const pin of splitNote.pins) {
+        pin.time -= cutRelativeToNote;
+      }
+
+      // Distance from the cutpoint determines interpolation bias for pitch and volume.
+      const leftPin: NotePin = newPins.at(-1)!,
+        rightPin: NotePin = splitNote.pins[0]!,
+        spaceToLeftPin: number = cutRelativeToNote - leftPin.time,
+        spaceBetweenPins: number = spaceToLeftPin + rightPin.time,
+        percentBetweenPins: number = spaceBetweenPins > 0 ? spaceToLeftPin / spaceBetweenPins : 0,
+        // Round the new pin's fractional values to make it legal, snapping to scale (if needed).
+        cutPitch: number =
+          leftPin.interval + percentBetweenPins * (rightPin.interval - leftPin.interval),
+        cutPin: NotePin = makeNotePin(
+          snapPitchToScale(doc, note.pitches[0]! + cutPitch) - note.pitches[0]!,
+          cutRelativeToNote,
+          Math.round(leftPin.size + percentBetweenPins * (rightPin.size - leftPin.size)),
+        );
+
+      // Note pitch must start at zero and pins get adjusted for the difference in starting pitch.
+      splitNote.pitches = splitNote.pitches.map((pitch: number) => pitch + cutPin.interval);
+      for (const pin of splitNote.pins) {
+        pin.interval -= cutPin.interval;
+      }
+
+      // Notes need pins at their exact start/end. We cut the pins left and right earlier, but now
+      // Insert the cut pin as needed to the end of left note and start of right note.
+      if (leftPin.time === cutRelativeToNote) {
+        newPins[newPins.length - 1]!.interval = cutPin.interval; // adjusts to match scale snapping.
+      } else {
+        newPins.push(cutPin);
+      }
+      if (rightPin.time > 0) {
+        splitNote.pins.unshift(makeNotePin(0, 0, cutPin.size));
+      }
+
+      this.#doc = doc;
+      this.#pattern = pattern;
+      this.#note = note;
+      this.#noteIndex = i;
+      this.#oldEnd = note.end;
+      this.#oldPins = note.pins;
+      this.#newPins = newPins;
+      this.#splitNote = splitNote;
+      this._didSomething();
+      this.redo();
+      break;
+    }
+  }
+
+  protected override _doForwards(): void {
+    this.#note.end = this.#splitNote.start;
+    this.#note.pins = this.#newPins;
+    this.#pattern.notes.splice(this.#noteIndex + 1, 0, this.#splitNote);
+    this.#doc.notifier.changed();
+  }
+
+  protected override _doBackwards(): void {
+    this.#pattern.notes.splice(this.#noteIndex + 1, 1);
+    this.#note.end = this.#oldEnd;
+    this.#note.pins = this.#oldPins;
+    this.#doc.notifier.changed();
+  }
+}
+
+class ChangeSplitNotesAtSelection extends ChangeSequence {
+  public constructor(doc: SongDocument, pattern: Pattern) {
+    super();
+    this.append(new ChangeSplitNotesAtPoint(doc, pattern, doc.selection.patternSelectionStart));
+    this.append(new ChangeSplitNotesAtPoint(doc, pattern, doc.selection.patternSelectionEnd));
+  }
+}
+
+class ChangeTransposeNote extends UndoableChange {
+  protected _doc: SongDocument;
+  protected _note: Note;
+  protected _oldStart!: number;
+  protected _newStart!: number;
+  protected _oldEnd!: number;
+  protected _newEnd!: number;
+  protected _oldPins: NotePin[];
+  protected _newPins: NotePin[];
+  protected _oldPitches: number[];
+  protected _newPitches: number[];
+  public constructor(
+    doc: SongDocument,
+    channelIndex: number,
+    note: Note,
+    upward: boolean,
+    ignoreScale = false,
+    octave = false,
+  ) {
+    super(false);
+    this._doc = doc;
+    this._note = note;
+    this._oldPins = note.pins;
+    this._newPins = [];
+    this._oldPitches = note.pitches;
+    this._newPitches = [];
+
+    // I'm disabling pitch transposing for noise channels to avoid
+    // Accidentally messing up noise channels when pitch shifting all
+    // Channels at once.
+    const isNoise: boolean = doc.song.getChannelIsNoise(channelIndex);
+    if (isNoise !== doc.song.getChannelIsNoise(doc.channel)) {
+      return;
+    }
+
+    const maxPitch: number = isNoise ? Config.drumCount - 1 : Config.maxPitch;
+
+    for (let i = 0; i < this._oldPitches.length; i++) {
+      let pitch: number = this._oldPitches[i]!;
+      if (octave && !isNoise) {
+        if (upward) {
+          pitch = Math.min(maxPitch, pitch + 12);
+        } else {
+          pitch = Math.max(0, pitch - 12);
+        }
+      } else if (upward) {
+        for (let j: number = pitch + 1; j <= maxPitch; j++) {
+          if (isNoise || ignoreScale || pitchIsInScale(doc, j)) {
+            pitch = j;
+            break;
+          }
+        }
+      } else {
+        for (let j: number = pitch - 1; j >= 0; j--) {
+          if (isNoise || ignoreScale || pitchIsInScale(doc, j)) {
+            pitch = j;
+            break;
+          }
+        }
+      }
+
+      let foundMatch = false;
+      for (let j = 0; j < this._newPitches.length; j++) {
+        if (this._newPitches[j] === pitch) {
+          foundMatch = true;
+          break;
+        }
+      }
+      if (!foundMatch) {
+        this._newPitches.push(pitch);
+      }
+    }
+
+    let min = 0,
+      max: number = maxPitch;
+
+    for (let i = 1; i < this._newPitches.length; i++) {
+      const diff: number = this._newPitches[0]! - this._newPitches[i]!;
+      if (min < diff) {
+        min = diff;
+      }
+      if (max > diff + maxPitch) {
+        max = diff + maxPitch;
+      }
+    }
+
+    for (const oldPin of this._oldPins) {
+      let interval: number = oldPin.interval + this._oldPitches[0]!;
+
+      if (interval < min) {
+        interval = min;
+      }
+      if (interval > max) {
+        interval = max;
+      }
+      if (octave && !isNoise) {
+        if (upward) {
+          interval = Math.min(max, interval + 12);
+        } else {
+          interval = Math.max(min, interval - 12);
+        }
+      } else if (upward) {
+        for (let i: number = interval + 1; i <= max; i++) {
+          if (isNoise || ignoreScale || pitchIsInScale(doc, i)) {
+            interval = i;
+            break;
+          }
+        }
+      } else {
+        for (let i: number = interval - 1; i >= min; i--) {
+          if (isNoise || ignoreScale || pitchIsInScale(doc, i)) {
+            interval = i;
+            break;
+          }
+        }
+      }
+      interval -= this._newPitches[0]!;
+      this._newPins.push(makeNotePin(interval, oldPin.time, oldPin.size));
+    }
+
+    if (this._newPins[0]!.interval !== 0) {
+      throw new Error("wrong pin start interval");
+    }
+
+    for (let i = 1; i < this._newPins.length - 1;) {
+      if (
+        this._newPins[i - 1]!.interval === this._newPins[i]!.interval &&
+        this._newPins[i]!.interval === this._newPins[i + 1]!.interval &&
+        this._newPins[i - 1]!.size === this._newPins[i]!.size &&
+        this._newPins[i]!.size === this._newPins[i + 1]!.size
+      ) {
+        this._newPins.splice(i, 1);
+      } else {
+        i++;
+      }
+    }
+
+    this._doForwards();
+    this._didSomething();
+  }
+
+  protected override _doForwards(): void {
+    this._note.pins = this._newPins;
+    this._note.pitches = this._newPitches;
+    this._doc.notifier.changed();
+  }
+
+  protected override _doBackwards(): void {
+    this._note.pins = this._oldPins;
+    this._note.pitches = this._oldPitches;
+    this._doc.notifier.changed();
+  }
+}
+
+export class ChangeTranspose extends ChangeSequence {
+  public constructor(
+    doc: SongDocument,
+    channelIndex: number,
+    pattern: Pattern,
+    upward: boolean,
+    ignoreScale = false,
+    octave = false,
+  ) {
+    super();
+    if (doc.selection.patternSelectionActive) {
+      this.append(new ChangeSplitNotesAtSelection(doc, pattern));
+    }
+    for (const note of pattern.notes) {
+      if (
+        doc.selection.patternSelectionActive &&
+        (note.end <= doc.selection.patternSelectionStart ||
+          note.start >= doc.selection.patternSelectionEnd)
+      ) {
+        continue;
+      }
+      this.append(new ChangeTransposeNote(doc, channelIndex, note, upward, ignoreScale, octave));
+    }
+  }
+}
+
+export class ChangeTrackSelection extends Change {
+  public constructor(
+    doc: SongDocument,
+    newX0: number,
+    newX1: number,
+    newY0: number,
+    newY1: number,
+  ) {
+    super();
+    doc.selection.boxSelectionX0 = newX0;
+    doc.selection.boxSelectionX1 = newX1;
+    doc.selection.boxSelectionY0 = newY0;
+    doc.selection.boxSelectionY1 = newY1;
+    doc.notifier.changed();
+    this._didSomething();
+  }
+}
+
+export class ChangeDragSelectedNotes extends ChangeSequence {
+  public constructor(
+    doc: SongDocument,
+    channelIndex: number,
+    pattern: Pattern,
+    parts: number,
+    transpose: number,
+  ) {
+    super();
+
+    if (parts === 0 && transpose === 0) {
+      return;
+    }
+    if (doc.selection.patternSelectionActive) {
+      this.append(new ChangeSplitNotesAtSelection(doc, pattern));
+    }
+
+    const oldStart: number = doc.selection.patternSelectionStart,
+      oldEnd: number = doc.selection.patternSelectionEnd,
+      newStart: number = Math.max(
+        0,
+        Math.min(doc.song.beatsPerBar * Config.partsPerBeat, oldStart + parts),
+      ),
+      newEnd: number = Math.max(
+        0,
+        Math.min(doc.song.beatsPerBar * Config.partsPerBeat, oldEnd + parts),
+      );
+    if (newStart === newEnd) {
+      // Just erase the current contents of the selection:
+      this.append(new ChangeNoteTruncate(doc, pattern, oldStart, oldEnd));
+    } else if (parts < 0) {
+      // Clear space for the dragged notes:
+      this.append(new ChangeNoteTruncate(doc, pattern, newStart, Math.min(oldStart, newEnd)));
+    } else {
+      // Clear space for the dragged notes:
+      this.append(new ChangeNoteTruncate(doc, pattern, Math.max(oldEnd, newStart), newEnd));
+    }
+
+    this.append(new ChangePatternSelection(doc, newStart, newEnd));
+    const draggedNotes = [];
+    let noteInsertionIndex = 0,
+      i = 0;
+    while (i < pattern.notes.length) {
+      const note: Note = pattern.notes[i]!;
+      if (note.end <= oldStart || note.start >= oldEnd) {
+        i++;
+        if (note.end <= newStart) {
+          noteInsertionIndex = i;
+        }
+      } else {
+        draggedNotes.push(note.clone());
+        this.append(new ChangeNoteAdded(doc, pattern, note, i, true));
+      }
+    }
+
+    for (const note of draggedNotes) {
+      note.start += parts;
+      note.end += parts;
+      if (note.end <= newStart) {
+        continue;
+      }
+      if (note.start >= newEnd) {
+        continue;
+      }
+
+      this.append(new ChangeNoteAdded(doc, pattern, note, noteInsertionIndex++, false));
+
+      this.append(
+        new ChangeNoteLength(doc, note, Math.max(note.start, newStart), Math.min(newEnd, note.end)),
+      );
+
+      for (let transposeIndex = 0; transposeIndex < Math.abs(transpose); transposeIndex++) {
+        this.append(
+          new ChangeTransposeNote(
+            doc,
+            channelIndex,
+            note,
+            transpose > 0,
+            doc.prefs.notesOutsideScale,
+          ),
+        );
+      }
+    }
+  }
+}
+
+export class ChangeDuplicateSelectedReusedPatterns extends ChangeGroup {
+  public constructor(
+    doc: SongDocument,
+    barStart: number,
+    barWidth: number,
+    channelStart: number,
+    channelHeight: number,
+  ) {
+    super();
+    for (
+      let channelIndex: number = channelStart;
+      channelIndex < channelStart + channelHeight;
+      channelIndex++
+    ) {
+      const reusablePatterns: Dictionary<number> = {};
+
+      for (let bar: number = barStart; bar < barStart + barWidth; bar++) {
+        const currentPatternIndex: number = doc.song.channels[channelIndex]!.bars[bar]!;
+        if (currentPatternIndex === 0) {
+          continue;
+        }
+
+        if (reusablePatterns[String(currentPatternIndex)] === undefined) {
+          let isUsedElsewhere = false;
+          for (let bar2 = 0; bar2 < doc.song.barCount; bar2++) {
+            if (bar2 < barStart || bar2 >= barStart + barWidth) {
+              if (doc.song.channels[channelIndex]!.bars[bar2] === currentPatternIndex) {
+                isUsedElsewhere = true;
+                break;
+              }
+            }
+          }
+          if (isUsedElsewhere) {
+            // Need to duplicate the pattern.
+            const copiedPattern: Pattern = doc.song.getPattern(channelIndex, bar)!;
+            this.append(new ChangePatternNumbers(doc, 0, bar, channelIndex, 1, 1));
+            this.append(new ChangeEnsurePatternExists(doc, channelIndex, bar));
+            const newPattern: Pattern | null = doc.song.getPattern(channelIndex, bar);
+            if (newPattern == null) {
+              throw new Error("Pattern was not created.");
+            }
+            if (doc.song.getChannelIsAutomation(channelIndex)) {
+              newPattern.ensureAutomationRowCount(
+                doc.song.channels[channelIndex]!.automationRows.length,
+              );
+              for (let rowIndex = 0; rowIndex < newPattern.automationEvents.length; rowIndex++) {
+                this.append(
+                  new ChangeEvents(
+                    doc,
+                    newPattern.automationEvents[rowIndex]!,
+                    copiedPattern.automationEvents[rowIndex] ?? [],
+                  ),
+                );
+              }
+            } else {
+              this.append(
+                new ChangePaste(
+                  doc,
+                  newPattern,
+                  copiedPattern.notes,
+                  0,
+                  Config.partsPerBeat * doc.song.beatsPerBar,
+                  Config.partsPerBeat * doc.song.beatsPerBar,
+                ),
+              );
+            }
+
+            reusablePatterns[String(currentPatternIndex)] =
+              doc.song.channels[channelIndex]!.bars[bar]!;
+          } else {
+            reusablePatterns[String(currentPatternIndex)] = currentPatternIndex;
+          }
+        }
+
+        this.append(
+          new ChangePatternNumbers(
+            doc,
+            reusablePatterns[String(currentPatternIndex)]!,
+            bar,
+            channelIndex,
+            1,
+            1,
+          ),
+        );
+      }
+    }
+  }
+}
+
+export class ChangeVolume extends Change {
+  public constructor(doc: SongDocument, oldValue: number, newValue: number) {
+    super();
+    doc.song.channels[doc.channel]!.instruments[doc.getCurrentInstrument()]!.volume = newValue;
+    doc.notifier.changed();
+    if (oldValue !== newValue) {
+      this._didSomething();
+    }
+  }
+}
+
+export class ChangePan extends Change {
+  public constructor(doc: SongDocument, oldValue: number, newValue: number) {
+    super();
+    doc.song.channels[doc.channel]!.instruments[doc.getCurrentInstrument()]!.pan = newValue;
+    doc.notifier.changed();
+    if (oldValue !== newValue) {
+      this._didSomething();
+    }
+  }
+}
+
+export class ChangeSizeBend extends UndoableChange {
+  #doc: SongDocument;
+  #note: Note;
+  #oldPins: NotePin[];
+  #newPins: NotePin[];
+  public constructor(
+    doc: SongDocument,
+    note: Note,
+    bendPart: number,
+    bendSize: number,
+    bendInterval: number,
+    uniformSize: boolean,
+  ) {
+    super(false);
+    this.#doc = doc;
+    this.#note = note;
+    this.#oldPins = note.pins;
+    const absolutePart: number = note.start + bendPart,
+      replacement: Note = bendEvent(
+        note,
+        absolutePart,
+        bendSize - note.getValueAt(absolutePart),
+        (size: number): number => Math.max(0, Math.min(Config.noteSizeMax, Math.round(size))),
+        uniformSize,
+        Config.automationPointsPerEventMax,
+      );
+    this.#newPins = replacement.pins;
+    const bendPin: NotePin | undefined = this.#newPins.find(
+      (pin: NotePin): boolean => pin.time === bendPart,
+    );
+    if (bendPin !== undefined) {
+      bendPin.interval = bendInterval;
+    }
+
+    removeRedundantPins(this.#newPins);
+
+    this._doForwards();
+    this._didSomething();
+  }
+
+  protected override _doForwards(): void {
+    this.#note.pins = this.#newPins;
+    this.#doc.notifier.changed();
+  }
+
+  protected override _doBackwards(): void {
+    this.#note.pins = this.#oldPins;
+    this.#doc.notifier.changed();
+  }
+}
+
+export class ChangeChipWave extends Change {
+  public constructor(doc: SongDocument, newValue: number) {
+    super();
+    const instrument: Instrument =
+      doc.song.channels[doc.channel]!.instruments[doc.getCurrentInstrument()]!;
+    if (instrument.chipWave !== newValue) {
+      instrument.chipWave = newValue;
+      instrument.preset = instrument.type;
+      doc.notifier.changed();
+      this._didSomething();
+    }
+  }
+}
+
+export class ChangeSoundFont extends Change {
+  public constructor(doc: SongDocument, newValue: string | null) {
+    super();
+    const instrument: Instrument =
+      doc.song.channels[doc.channel]!.instruments[doc.getCurrentInstrument()]!;
+    if (instrument.soundFontId !== newValue) {
+      instrument.soundFontId = newValue;
+      instrument.soundFontPreset = 0;
+      instrument.preset = instrument.type;
+      doc.notifier.changed();
+      this._didSomething();
+    }
+  }
+}
+
+export class ChangeSoundFontPreset extends Change {
+  public constructor(doc: SongDocument, newValue: number) {
+    super();
+    const instrument: Instrument =
+      doc.song.channels[doc.channel]!.instruments[doc.getCurrentInstrument()]!;
+    if (instrument.soundFontPreset !== newValue) {
+      instrument.soundFontPreset = Math.max(0, newValue | 0);
+      instrument.preset = instrument.type;
+      doc.notifier.changed();
+      this._didSomething();
+    }
+  }
+}
+
+export function applySoundFontPreset(
+  instrument: Instrument,
+  soundFontId: string,
+  preset: SoundFontPresetInfo,
+  tempo: number,
+  isNoiseChannel: boolean,
+): void {
+  const volume: number = instrument.volume;
+  instrument.setTypeAndReset(InstrumentType.soundFont, isNoiseChannel);
+  instrument.soundFontId = soundFontId;
+  instrument.soundFontPreset = preset.index;
+  instrument.volume = volume;
+  instrument.pan = preset.settings.pan;
+  instrument.fadeIn = Synth.secondsToFadeInSetting(preset.settings.fadeInSeconds);
+  const releaseTicks: number =
+    (preset.settings.fadeOutSeconds * tempo * Config.ticksPerPart * Config.partsPerBeat) / 60;
+  instrument.fadeOut = Synth.ticksToFadeOutSetting(releaseTicks < 1 ? -1 : releaseTicks);
+  if (preset.settings.vibrato !== "none") {
+    instrument.effects |= 1 << EffectType.vibrato;
+    instrument.vibrato = Config.vibratos.dictionary[preset.settings.vibrato]!.index;
+  }
+  if (preset.settings.filterCutoffHz != null) {
+    instrument.effects |= 1 << EffectType.noteFilter;
+    instrument.noteFilter.addPoint(
+      FilterType.lowPass,
+      FilterControlPoint.getRoundedSettingValueFromHz(preset.settings.filterCutoffHz),
+      FilterControlPoint.getRoundedSettingValueFromLinearGain(preset.settings.filterGain),
+    );
+  }
+  for (const envelope of preset.settings.envelopes) {
+    const target = Config.modulationTargets.dictionary[envelope.target]!;
+    if (!instrument.supportsEnvelopeTarget(target.index, 0)) {
+      continue;
+    }
+    const speed: number =
+      envelope.envelope === "tremolo" ? (envelope.speed * 60) / tempo : envelope.speed;
+    instrument.addEnvelope(
+      target.index,
+      0,
+      Config.envelopes.dictionary[envelope.envelope]!.index,
+      speed,
+      envelope.a,
+      envelope.b,
+    );
+  }
+  instrument.preset = InstrumentType.soundFont;
+}
+
+export class ChangeSoundFontPresetSelection extends Change {
+  public constructor(doc: SongDocument, soundFontId: string, presetIndex: number) {
+    super();
+    const instrument: Instrument =
+        doc.song.channels[doc.channel]!.instruments[doc.getCurrentInstrument()]!,
+      asset = doc.song.assets.find(
+        (candidate) => candidate.type === "soundFont" && candidate.id === soundFontId,
+      );
+    if (asset === undefined) {
+      return;
+    }
+    const nextPreset = Math.max(0, presetIndex | 0),
+      preset = doc.synth
+        .getSoundFontPresets(soundFontId)
+        ?.find((candidate) => candidate.index === nextPreset);
+    if (preset === undefined) {
+      return;
+    }
+    applySoundFontPreset(
+      instrument,
+      soundFontId,
+      preset,
+      doc.song.tempo,
+      doc.song.getChannelIsNoise(doc.channel),
+    );
+    markInvalidAutomationTargetsForCurrentInstrument(doc);
+    doc.notifier.changed();
+    this._didSomething();
+  }
+}
+
+export class ChangeSamplePresetSelection extends Change {
+  public constructor(doc: SongDocument, sampleId: string) {
+    super();
+    const asset = doc.song.assets.find(
+        (candidate) => candidate.type === "sample" && candidate.id === sampleId,
+      ),
+      chipWave = Config.chipWaves.find((candidate) => candidate.sampleId === sampleId);
+    if (asset === undefined || chipWave === undefined) {
+      return;
+    }
+    const instrument: Instrument =
+        doc.song.channels[doc.channel]!.instruments[doc.getCurrentInstrument()]!,
+      volume: number = instrument.volume,
+      pan: number = instrument.pan;
+    instrument.setTypeAndReset(InstrumentType.chip, doc.song.getChannelIsNoise(doc.channel));
+    instrument.chipWave = chipWave.index;
+    instrument.volume = volume;
+    instrument.pan = pan;
+    markInvalidAutomationTargetsForCurrentInstrument(doc);
+    doc.notifier.changed();
+    this._didSomething();
+  }
+}
+
+export class ChangeNoiseWave extends Change {
+  public constructor(doc: SongDocument, newValue: number) {
+    super();
+    const instrument: Instrument =
+      doc.song.channels[doc.channel]!.instruments[doc.getCurrentInstrument()]!;
+    if (instrument.chipNoise !== newValue) {
+      instrument.chipNoise = newValue;
+      instrument.preset = instrument.type;
+      doc.notifier.changed();
+      this._didSomething();
+    }
+  }
+}
+
+export class ChangeAddEnvelope extends Change {
+  public constructor(doc: SongDocument) {
+    super();
+    const instrument: Instrument =
+      doc.song.channels[doc.channel]!.instruments[doc.getCurrentInstrument()]!;
+    instrument.addEnvelope(0, 0, 0);
+    instrument.preset = instrument.type;
+    doc.notifier.changed();
+    this._didSomething();
+  }
+}
+
+export class ChangeRemoveEnvelope extends Change {
+  public constructor(doc: SongDocument, index: number) {
+    super();
+    const instrument: Instrument =
+      doc.song.channels[doc.channel]!.instruments[doc.getCurrentInstrument()]!;
+    instrument.envelopeCount--;
+    for (let i: number = index; i < instrument.envelopeCount; i++) {
+      instrument.envelopes[i]!.target = instrument.envelopes[i + 1]!.target;
+      instrument.envelopes[i]!.index = instrument.envelopes[i + 1]!.index;
+      instrument.envelopes[i]!.envelope = instrument.envelopes[i + 1]!.envelope;
+      instrument.envelopes[i]!.speed = instrument.envelopes[i + 1]!.speed;
+      instrument.envelopes[i]!.a = instrument.envelopes[i + 1]!.a;
+      instrument.envelopes[i]!.b = instrument.envelopes[i + 1]!.b;
+    }
+    // TODO: Shift any envelopes that were targeting other envelope indices after the removed one.
+    instrument.preset = instrument.type;
+    doc.notifier.changed();
+    this._didSomething();
+  }
+}
+
+export class ChangeSetEnvelopeTarget extends Change {
+  public constructor(
+    doc: SongDocument,
+    envelopeIndex: number,
+    target: number,
+    targetIndex: number,
+  ) {
+    super();
+    const instrument: Instrument =
+        doc.song.channels[doc.channel]!.instruments[doc.getCurrentInstrument()]!,
+      oldTarget: number = instrument.envelopes[envelopeIndex]!.target,
+      oldIndex: number = instrument.envelopes[envelopeIndex]!.index;
+    if (oldTarget !== target || oldIndex !== targetIndex) {
+      instrument.envelopes[envelopeIndex]!.target = target;
+      instrument.envelopes[envelopeIndex]!.index = targetIndex;
+      instrument.preset = instrument.type;
+      doc.notifier.changed();
+      this._didSomething();
+    }
+  }
+}
+
+export class ChangeSetEnvelopeType extends Change {
+  public constructor(doc: SongDocument, envelopeIndex: number, newValue: number) {
+    super();
+    const instrument: Instrument =
+        doc.song.channels[doc.channel]!.instruments[doc.getCurrentInstrument()]!,
+      oldValue: number = instrument.envelopes[envelopeIndex]!.envelope;
+    if (oldValue !== newValue) {
+      instrument.envelopes[envelopeIndex]!.envelope = newValue;
+      instrument.envelopes[envelopeIndex]!.speed = Config.envelopes[newValue]!.speed;
+      instrument.envelopes[envelopeIndex]!.a = Config.envelopes[newValue]!.a;
+      instrument.envelopes[envelopeIndex]!.b = Config.envelopes[newValue]!.b;
+      instrument.preset = instrument.type;
+      doc.notifier.changed();
+      this._didSomething();
+    }
+  }
+}
+
+export class ChangeSetEnvelopeParameter extends Change {
+  public constructor(
+    doc: SongDocument,
+    envelopeIndex: number,
+    parameter: "speed" | "a" | "b",
+    oldValue: number,
+    newValue: number,
+  ) {
+    super();
+    const instrument: Instrument =
+      doc.song.channels[doc.channel]!.instruments[doc.getCurrentInstrument()]!;
+    instrument.envelopes[envelopeIndex]![parameter] = newValue;
+    instrument.preset = instrument.type;
+    doc.notifier.changed();
+    if (oldValue !== newValue) {
+      this._didSomething();
+    }
+  }
+
+  public override commit(): void {
+    // Parameter changes are already applied prospectively while dragging.
+  }
+}

@@ -1,0 +1,14 @@
+/*
+
+!/.agents/
+!/src/
+!/synth/
+!/scripts/
+!/test/
+!/LICENSE/
+
+!/.gitignore
+!/.node-version
+!/AGENTS.md
+!/*.json
+!/playwright.config.mjs

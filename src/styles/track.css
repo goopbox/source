@@ -1,0 +1,239 @@
+canvas {
+  overflow: hidden;
+  position: absolute;
+  display: block;
+}
+
+.trackContainer {
+  flex-grow: 1;
+  overflow: visible;
+}
+
+.trackViewport {
+  position: relative;
+  min-height: 0;
+  flex: 1;
+}
+
+.trackAndMuteContainer {
+  align-items: flex-start;
+  width: 100%;
+  min-height: 0;
+  flex: 1;
+  overflow: auto;
+  position: relative;
+}
+
+.trackViewportEdges {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  pointer-events: none;
+}
+
+.trackViewportLeftEdge,
+.trackViewportBottomEdge {
+  position: absolute;
+  background: var(--background);
+}
+
+.trackViewportLeftEdge {
+  top: -2px;
+  bottom: -2px;
+  left: -2px;
+  width: 4px;
+}
+
+.trackViewportBottomEdge {
+  right: -2px;
+  bottom: -2px;
+  left: -2px;
+  height: 4px;
+}
+
+.barNumbers {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  height: 10px;
+  background: var(--background);
+}
+
+.trackCorner,
+.channelNumber,
+.barNumber {
+  color: var(--secondary-text);
+  font-family: sans-serif;
+  font-size: 8px;
+  font-weight: bold;
+}
+
+.trackCorner,
+.channelNumber {
+  position: sticky;
+  left: 32px;
+  z-index: 3;
+  width: 18px;
+  min-width: 18px;
+}
+
+.trackCorner {
+  background: var(--background);
+}
+
+.trackCorner {
+  z-index: 4;
+}
+
+.barNumber {
+  flex: 0 0 auto;
+  line-height: 10px;
+  text-align: center;
+}
+
+.channelNumber {
+  min-height: 28px;
+  line-height: 28px;
+  text-align: center;
+}
+
+.barNumber,
+.channelNumber {
+  cursor: grab;
+  touch-action: none;
+  background: var(--surface);
+  box-shadow: inset 0 0 0 1px var(--background);
+  transition:
+    background-color 30ms,
+    color 30ms;
+}
+
+.barNumber.has-content,
+.channelNumber.has-content {
+  background: var(--ui-widget-background);
+}
+
+.barNumber.selected,
+.channelNumber.selected {
+  color: var(--text);
+}
+
+.barNumber:hover,
+.channelNumber:hover,
+.barNumber.reorder-active,
+.channelNumber.reorder-active {
+  background: var(--button-hover) !important;
+}
+
+.reorder-preview {
+  position: relative;
+  z-index: 7;
+  cursor: grabbing;
+  opacity: 1;
+  background: var(--background) !important;
+}
+
+.reorder-line {
+  display: none;
+  position: absolute;
+  z-index: 6;
+  pointer-events: none;
+  background: var(--text);
+}
+
+.reorder-line.horizontal {
+  left: 0;
+  right: 0;
+  height: 2px;
+}
+
+.reorder-line.vertical {
+  top: 0;
+  bottom: 0;
+  width: 2px;
+}
+
+.channelBox {
+  text-align: center;
+  align-items: center;
+  justify-content: center;
+  padding-top: 1px;
+}
+
+.channelBoxLabel {
+  font-size: 20px;
+  font-family: sans-serif;
+  font-weight: bold;
+  color: transparent;
+  background: var(--pattern-number-gradient);
+  background-clip: text;
+  -webkit-background-clip: text;
+}
+
+.channelBoxLabel.smaller-digits {
+  font-size: 18px;
+}
+
+.muteEditor {
+  width: 32px;
+  flex-shrink: 0;
+  align-items: stretch;
+  position: sticky;
+  left: 0;
+  z-index: 4;
+  background: var(--background);
+}
+
+.muteEditor::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -2px;
+  width: 4px;
+  pointer-events: none;
+  background: var(--background);
+}
+
+.muteHeaderFiller {
+  height: 10px;
+  flex: 0 0 10px;
+}
+
+.mute-button,
+.mute-button:focus {
+  background: none;
+}
+
+.mute-button {
+  height: 24px;
+  margin: 2px;
+}
+
+.loop-toggle {
+  position: sticky;
+  bottom: 0;
+  left: 0;
+  flex: 0 0 28px;
+  height: 28px;
+  margin: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--background);
+}
+
+.loop-toggle::after {
+  content: "";
+  position: absolute;
+  right: 0;
+  bottom: -2px;
+  left: 0;
+  height: 4px;
+  pointer-events: none;
+  background: var(--background);
+}
+
+.barScrollBar {
+  display: none;
+}

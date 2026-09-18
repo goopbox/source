@@ -1,0 +1,276 @@
+.selectRow,
+.instrumentActionRow {
+  height: var(--button-size);
+  align-items: center;
+  justify-content: space-between;
+}
+
+.selectRow > label {
+  color: var(--secondary-text);
+}
+
+.selectRow > :last-child {
+  width: 62.5%;
+  flex-shrink: 0;
+}
+
+.reveal-control {
+  position: relative;
+}
+
+.reveal-control > .reveal-arrow {
+  position: absolute;
+  right: calc(100% + 6px);
+  top: calc(50% - 6px);
+  margin-right: 0;
+}
+
+.reveal-control > select {
+  width: 100%;
+}
+
+.selectRow.instrument-unlabeled-control > :last-child {
+  width: 100%;
+}
+
+.drumset-row > select {
+  width: 5em;
+}
+
+.drumset-row > .spectrum {
+  width: auto;
+  flex: 1;
+}
+
+.selectRow:is(.instrument-symbol-control, .fm-operator-row) > :last-child {
+  width: auto;
+  flex: 1;
+}
+
+.selectRow:is(.instrument-symbol-control, .fm-operator-row, .drumset-row) {
+  gap: 4px;
+}
+
+.selectRow.instrument-symbol-control > span,
+.instrument-pan-slider {
+  flex: 1;
+  min-width: 0;
+}
+
+.instrument-value-input {
+  width: 4em;
+  min-width: 0;
+  flex: 0 0 4em !important;
+}
+
+.slider-with-input {
+  display: flex;
+  width: 100%;
+  gap: 4px;
+}
+
+.slider-with-input > :first-child {
+  flex: 1;
+  min-width: 0;
+}
+
+.instrument-volume-icon {
+  width: 1.25em;
+  height: 1.25em;
+  background-color: var(--secondary-text);
+}
+
+.instrument-pan-slider {
+  align-items: center;
+  gap: 4px;
+}
+
+.instrument-pan-slider > span:not(.pan-label) {
+  flex: 1;
+  min-width: 0;
+}
+
+.pan-label {
+  color: var(--secondary-text);
+  font-size: 0.75em;
+}
+
+.menu-area {
+  gap: 4px;
+}
+.menu-area > button {
+  padding: 0 var(--button-size);
+  white-space: nowrap;
+}
+
+.editor-controls {
+  flex-shrink: 0;
+  gap: 4px;
+}
+
+.instrument-settings-area > .editor-controls {
+  position: absolute;
+  width: 100%;
+}
+
+.settingsGroup {
+  gap: 4px;
+  padding: 5px;
+  border-radius: 7px;
+  background: var(--surface);
+}
+
+.envelopeEditor:empty {
+  display: none;
+}
+
+.settingsGroupTitle {
+  min-height: 1.25em;
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  font-size: 0.85em;
+  color: var(--secondary-text);
+}
+
+.settingsGroupTitle > :first-child {
+  grid-column: 1 / -1;
+  grid-row: 1;
+  justify-self: start;
+  text-align: left;
+}
+
+.settingsGroupTitle.hasAction > :first-child {
+  grid-column: 1;
+}
+
+.settingsGroupTitle > :last-child:not(:first-child) {
+  grid-column: 3;
+  grid-row: 1;
+  justify-self: end;
+}
+
+.settingsGroupActions {
+  display: flex;
+  gap: 4px;
+}
+
+.settingsGroupActions > :is(button, .effects-menu),
+.instrumentSettingsAdd {
+  width: 1.25em;
+  min-width: 1.25em;
+  height: 1.25em;
+  padding: 0;
+}
+
+.settingsGroupTitle .effects-menu::before {
+  content: none;
+}
+
+.settingsGroupTitle .effects-menu select {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+}
+
+.settingsGroupTitle .instrumentSettingsAdd:disabled {
+  visibility: hidden;
+}
+
+.channel-colors .channel-gradient-unit .channel-gradient-text {
+  color: transparent;
+  background: var(--channel-primary-button);
+  background-position: var(--channel-gradient-offset, 0px) 0;
+  background-size: var(--channel-gradient-width) 100%;
+  background-repeat: no-repeat;
+  background-clip: text;
+  -webkit-background-clip: text;
+  pointer-events: none;
+}
+
+.channel-colors .channel-gradient-unit {
+  position: relative;
+}
+
+.channel-colors .channel-gradient-unit .channel-gradient-select {
+  color: var(--channel-primary-button-end);
+  -webkit-text-fill-color: transparent;
+}
+
+.channel-colors .channel-gradient-select-text {
+  position: absolute;
+  z-index: 1;
+  align-items: center;
+  padding: 0 var(--button-size) 0 4px;
+  overflow: hidden;
+  color: transparent;
+  white-space: nowrap;
+  background: var(--channel-primary-button);
+  background-position: var(--channel-gradient-offset, 0px) 0;
+  background-size: var(--channel-gradient-width) 100%;
+  background-repeat: no-repeat;
+  background-clip: text;
+  -webkit-background-clip: text;
+  pointer-events: none;
+}
+
+.channel-colors .channel-gradient-unit :is(button, .effects-menu)::before {
+  background: var(--channel-primary-button);
+  background-position: var(--channel-gradient-offset, 0px) 0;
+  background-size: var(--channel-gradient-width) 100%;
+  background-repeat: no-repeat;
+}
+
+.groupedSettings :is(.fadeInOut, .filterEditor, .spectrum, .harmonics) > svg {
+  background-color: transparent !important;
+}
+
+.automation-settings {
+  width: 100%;
+}
+
+.automation-surface .selectRow {
+  gap: 6px;
+}
+
+.automation-surface .selectRow > select {
+  width: 100%;
+}
+
+.automation-surface select.invalid-reference {
+  color: var(--error);
+  box-shadow: inset 0 0 0 1px var(--error);
+}
+
+.editor-right-side-top > *,
+.editor-right-side-bottom > * {
+  flex-shrink: 0;
+}
+
+.pitchShiftMarkerContainer {
+  display: flex;
+  height: 100%;
+  left: 3px;
+  right: calc(4em + 0.4em + 3px);
+  position: absolute;
+  align-items: center;
+  pointer-events: none;
+}
+
+.pitchShiftMarker {
+  width: 0;
+  height: 0;
+  position: absolute;
+}
+
+.pitchShiftMarker::before {
+  content: "";
+  width: 2px;
+  height: 20px;
+  transform: translate(-50%, -50%);
+  position: absolute;
+  background: currentColor;
+  border-radius: 3px;
+}

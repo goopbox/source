@@ -1,0 +1,47 @@
+:root,
+html[data-layout="long"] {
+  --app-grid-template: "pattern-area settings-area" minmax(6rem, 1fr) "track-area track-area"
+    minmax(9rem, 0.6fr) / minmax(0, 1fr) minmax(22rem, 0.4fr);
+  --settings-grid-template: "instrument-settings-area play-pause-area" auto
+    "instrument-settings-area menu-area" auto "instrument-settings-area song-settings-area"
+    minmax(0, 1fr) / minmax(0, 1fr) minmax(0, 1fr);
+}
+
+html[data-layout="tall"] {
+  --app-grid-template: "track-area pattern-area settings-area" minmax(0, 1fr) / minmax(0, 1fr)
+    minmax(0, 1fr) var(--settings-area-width);
+  --settings-grid-template: "play-pause-area" auto "menu-area" auto "song-settings-area"
+    minmax(0, auto) "instrument-settings-area" minmax(0, 1fr) / minmax(0, 1fr);
+}
+
+.app {
+  padding: 4px 4px 0;
+  grid-template: var(--app-grid-template);
+  gap: 4px;
+}
+
+.settings-area {
+  grid-template: var(--settings-grid-template);
+  gap: 4px;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.pattern-area,
+.track-area,
+.settings-area,
+.song-settings-area,
+.instrument-settings-area {
+  min-width: 0;
+  min-height: 0;
+}
+
+.song-settings-area,
+.instrument-settings-area {
+  overflow-y: auto;
+}
+
+.instrument-settings-area {
+  position: relative;
+}

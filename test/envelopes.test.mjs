@@ -1,0 +1,250 @@
+import { mkdtemp, rm } from "node:fs/promises";
+import assert from "node:assert/strict";
+import { build } from "esbuild";
+import { join } from "node:path";
+import { pathToFileURL } from "node:url";
+import test from "node:test";
+import { tmpdir } from "node:os";
+
+async function loadSynth() {
+  const directory = await mkdtemp(join(tmpdir(), "goopbox-envelope-test-")),
+    outfile = join(directory, "synth.mjs");
+  await build({
+    entryPoints: ["synth/synth.ts"],
+    bundle: true,
+    platform: "node",
+    format: "esm",
+    outfile,
+    logLevel: "silent",
+  });
+  const synth = await import(pathToFileURL(outfile).href);
+  return { synth, cleanup: () => rm(directory, { recursive: true }) };
+}
+
+test("envelope types are unnumbered", async (context) => {
+  const { synth, cleanup } = await loadSynth();
+  context.after(cleanup);
+  assert.deepEqual(
+    synth.Config.envelopes.map((envelope) => envelope.name),
+    ["none", "velocity", "punch", "flare", "twang", "swell", "tremolo", "decay"],
+  );
+});
+
+test("note velocity ranges from 0 to 10", async (context) => {
+  const { synth, cleanup } = await loadSynth();
+  context.after(cleanup);
+  assert.equal(synth.Config.noteSizeMax, 10);
+});
+
+test("velocity envelope defaults from one at maximum note size to zero at minimum note size", async (context) => {
+  const { synth, cleanup } = await loadSynth();
+  context.after(cleanup);
+  const velocity = synth.Config.envelopes.dictionary.velocity;
+  assert.equal(velocity.type, synth.EnvelopeType.noteSize);
+  assert.equal(velocity.a, 1);
+  assert.equal(velocity.b, 0);
+});
+
+test("velocity envelope maps maximum and minimum note sizes to A and B", async (context) => {
+  const { synth, cleanup } = await loadSynth();
+  context.after(cleanup);
+  const envelope = synth.Config.envelopes.dictionary.velocity,
+    { noteSizeMax } = synth.Config;
+
+  assert.equal(
+    synth.EnvelopeComputer.computeEnvelope(envelope, 0, 0, noteSizeMax, 0, 1.75, 0.25),
+    1.75,
+  );
+  assert.equal(synth.EnvelopeComputer.computeEnvelope(envelope, 0, 0, 0, 0, 1.75, 0.25), 0.25);
+  assert.equal(
+    synth.EnvelopeComputer.computeEnvelope(envelope, 0, 0, noteSizeMax / 2, 0, 1.75, 0.25),
+    1,
+  );
+});
+
+test("note velocities survive raw binary serialization", async (context) => {
+  const { synth, cleanup } = await loadSynth();
+  context.after(cleanup);
+  const { Song, Note, makeNotePin } = synth,
+    song = new Song(),
+    pattern = song.channels[0].patterns[0],
+    note = new Note(24, 0, 12, 1);
+  note.pins = [
+    makeNotePin(0, 0, 1),
+    makeNotePin(0, 4, 5),
+    makeNotePin(0, 8, 10),
+    makeNotePin(0, 12, 0),
+  ];
+  pattern.notes.push(note);
+
+  const restored = new Song(song.toBinary());
+  assert.deepEqual(
+    restored.channels[0].patterns[0].notes[0].pins.map((pin) => pin.size),
+    [1, 5, 10, 0],
+  );
+});
+
+test("echo sustain preserves the old curve through 100 and eases to unity at 200", async (context) => {
+  const { synth, cleanup } = await loadSynth();
+  context.after(cleanup);
+  const oldMaximumSetting = synth.Config.echoSustainRange - 1,
+    oldMaximumVolume = (oldMaximumSetting / synth.Config.echoSustainRange) ** 1.1 * 0.9;
+  assert.equal(synth.Synth.echoSustainToVolumeMult(oldMaximumSetting), oldMaximumVolume);
+  assert.ok(synth.Synth.echoSustainToVolumeMult(oldMaximumSetting * 1.5) > oldMaximumVolume);
+  assert.equal(synth.Synth.echoSustainToVolumeMult(oldMaximumSetting * 2), 1);
+});
+
+test("envelope parameters survive raw binary serialization", async (context) => {
+  const { synth, cleanup } = await loadSynth();
+  context.after(cleanup);
+  const { Song, Config } = synth,
+    song = new Song(),
+    instrument = song.channels[0].instruments[0];
+  instrument.addEnvelope(
+    Config.modulationTargets.dictionary.noteVolume.index,
+    0,
+    Config.envelopes.dictionary.twang.index,
+    32.25,
+    -0.5,
+    3.75,
+  );
+
+  const restoredEnvelope = new Song(song.toBinary()).channels[0].instruments[0].envelopes[0];
+  assert.equal(restoredEnvelope.target, Config.modulationTargets.dictionary.noteVolume.index);
+  assert.equal(restoredEnvelope.index, 0);
+  assert.equal(restoredEnvelope.envelope, Config.envelopes.dictionary.twang.index);
+  assert.equal(restoredEnvelope.speed, 32.25);
+  assert.equal(restoredEnvelope.a, -0.5);
+  assert.equal(restoredEnvelope.b, 3.75);
+});
+
+test("instrument effect properties accept and apply envelopes", async (context) => {
+  const { synth, cleanup } = await loadSynth();
+  context.after(cleanup);
+  const { Config, Note, Song } = synth,
+    song = new Song(),
+    instrument = song.channels[0].instruments[0],
+    reverbTarget = Config.modulationTargets.dictionary.reverb;
+  instrument.effects |= 1 << reverbTarget.effect;
+  instrument.reverb = 4;
+  assert.equal(instrument.supportsEnvelopeTarget(reverbTarget.index, 0), true);
+  instrument.addEnvelope(
+    reverbTarget.index,
+    0,
+    Config.envelopes.dictionary.none.index,
+    1,
+    0.25,
+    0.25,
+  );
+  song.channels[0].patterns[0].notes.push(new Note(24, 0, Config.partsPerBeat, Config.noteSizeMax));
+  song.channels[0].bars[0] = 1;
+
+  const restored = new Song(song.toBinary()),
+    restoredInstrument = restored.channels[0].instruments[0];
+  assert.equal(restoredInstrument.envelopes[0].target, reverbTarget.index);
+
+  const engine = new synth.Synth(restored);
+  engine.setSampleRate(8000);
+  engine.synthesize(new Float32Array(256), new Float32Array(256), 256, true);
+  const expected = ((instrument.reverb * 0.25) / Config.reverbRange) ** 0.667 * 0.425;
+  assert.ok(Math.abs(engine.channels[0].instruments[0].reverbMult - expected) < 1e-12);
+});
+
+test("Automation instrument properties are available to envelopes", async (context) => {
+  const { synth, cleanup } = await loadSynth();
+  context.after(cleanup);
+  const instrument = new synth.Song().channels[0].instruments[0];
+  for (const targetName of [
+    "distortion",
+    "bitcrusherQuantization",
+    "bitcrusherFrequency",
+    "chorus",
+    "echoSustain",
+    "echoDelay",
+    "reverb",
+    "vibrato",
+    "eqFilterFreq",
+    "eqFilterGain",
+  ]) {
+    const target = synth.Config.modulationTargets.dictionary[targetName];
+    if (target.effect != null) {
+      instrument.effects |= 1 << target.effect;
+    }
+  }
+  if (instrument.eqFilter.controlPointCount === 0) {
+    instrument.eqFilter.addPoint(0, 10, 7);
+  }
+
+  for (const targetName of [
+    "mixVolume",
+    "pan",
+    "distortion",
+    "bitcrusherQuantization",
+    "bitcrusherFrequency",
+    "chorus",
+    "echoSustain",
+    "echoDelay",
+    "reverb",
+    "vibrato",
+    "eqFilterFreq",
+    "eqFilterGain",
+  ]) {
+    const target = synth.Config.modulationTargets.dictionary[targetName];
+    assert.equal(instrument.supportsEnvelopeTarget(target.index, 0), true, targetName);
+  }
+});
+
+test("drumset envelope parameters survive serialization", async (context) => {
+  const { synth, cleanup } = await loadSynth();
+  context.after(cleanup);
+  const { Song, Config } = synth,
+    song = new Song(),
+    instrument = song.channels[0].instruments[0];
+  instrument.setTypeAndReset(synth.InstrumentType.drumset, true);
+  instrument.drumsetEnvelopes[0] = Config.envelopes.dictionary.flare.index;
+  instrument.drumsetEnvelopeSpeeds[0] = 3.25;
+  instrument.drumsetEnvelopeAs[0] = 0.125;
+  instrument.drumsetEnvelopeBs[0] = 1.75;
+
+  const restoredInstrument = new Song(song.toBinary()).channels[0].instruments[0];
+  assert.equal(restoredInstrument.drumsetEnvelopes[0], Config.envelopes.dictionary.flare.index);
+  assert.equal(restoredInstrument.drumsetEnvelopeSpeeds[0], 3.25);
+  assert.equal(restoredInstrument.drumsetEnvelopeAs[0], 0.125);
+  assert.equal(restoredInstrument.drumsetEnvelopeBs[0], 1.75);
+});
+
+test("fractional and out-of-range effect slider values survive serialization", async (context) => {
+  const { synth, cleanup } = await loadSynth();
+  context.after(cleanup);
+  const { Song, Config } = synth,
+    song = new Song(),
+    instrument = song.channels[0].instruments[0],
+    values = {
+      pitchShift: 1024.25,
+      detune: -512.5,
+      distortion: 128.75,
+      bitcrusherFreq: -256.125,
+      bitcrusherQuantization: 64.5,
+      chorus: 128.375,
+      echoSustain: 256.25,
+      echoDelay: 512.75,
+      reverb: 128.5,
+    };
+  Object.assign(instrument, values);
+  for (const name of [
+    "pitch shift",
+    "detune",
+    "distortion",
+    "bitcrusher",
+    "chorus",
+    "echo",
+    "reverb",
+  ]) {
+    instrument.effects |= 1 << Config.effectNames.indexOf(name);
+  }
+
+  const snapshotInstrument = new Song(song.toBinary()).channels[0].instruments[0];
+  for (const [name, value] of Object.entries(values)) {
+    assert.ok(Math.abs(snapshotInstrument[name] - value) < 0.00001, `${name} should round-trip`);
+  }
+});
