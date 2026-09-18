@@ -34,3 +34,4 @@ GoopBox intentionally trades legacy browser support for faster development and t
 
 - When removing a feature, remove it comprehensively, including its UI, behavior, styles, tests, dead code, and related configuration when applicable.
 - Prefer broad reusable CSS rules, such as `button`, over narrowly targeted rules, such as `.key-transposition-show-button`, when the broader rule correctly represents the intended behavior.
+- Maintain attribution in `LICENSE/LICENSE.md`, and `src/about-prompt.ts` synchronized with current dependencies, bundled assets, or copied source projects.

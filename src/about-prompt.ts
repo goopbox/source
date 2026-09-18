@@ -87,6 +87,28 @@ export class AboutPrompt implements Prompt {
       h2(
         a(
           {
+            href: "https://github.com/johnnesky/imperative-html",
+            target: "_blank",
+            rel: "noopener",
+          },
+          "imperative-html",
+        ),
+      ),
+      p(
+        "HTML and SVG element construction uses imperative-html by John Nesky under the ",
+        a(
+          {
+            href: "https://github.com/johnnesky/imperative-html/blob/master/LICENSE.md",
+            target: "_blank",
+            rel: "noopener",
+          },
+          "MIT License",
+        ),
+        ".",
+      ),
+      h2(
+        a(
+          {
             href: "https://github.com/101arrowz/fflate",
             target: "_blank",
             rel: "noopener",

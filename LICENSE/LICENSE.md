@@ -14,6 +14,11 @@ GoopBox contains source code based upon/from other third-party projects.
   - Copyright (c) 2026 Roman Pronskiy
   - FLP import code
 
+- [imperative-html](https://github.com/johnnesky/imperative-html)
+  - [Licensed MIT](LICENSE/MIT)
+  - Copyright (c) 2020 John Nesky
+  - HTML and SVG element construction
+
 - [fflate](https://github.com/101arrowz/fflate)
   - [Licensed MIT](https://github.com/101arrowz/fflate/blob/master/LICENSE)
   - Copyright (c) 2026 Arjun Barrett
