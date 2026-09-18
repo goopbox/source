@@ -20,12 +20,12 @@ GoopBox contains source code based upon/from other third-party projects.
   - HTML and SVG element construction
 
 - [fflate](https://github.com/101arrowz/fflate)
-  - [Licensed MIT](https://github.com/101arrowz/fflate/blob/master/LICENSE)
+  - [Licensed MIT](LICENSE/MIT)
   - Copyright (c) 2026 Arjun Barrett
   - Song compression and decompression
 
 - [@audio/stretch-transient](https://github.com/audiojs/stretch/tree/main/packages/stretch-transient)
-  - [Licensed MIT](https://github.com/audiojs/stretch/blob/main/packages/stretch-transient/LICENSE)
+  - [Licensed MIT](LICENSE/MIT)
   - Copyright (c) Dmitry Iv
   - Sample time stretching
 
