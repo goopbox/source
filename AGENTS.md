@@ -22,7 +22,7 @@ Do not weaken testing to make verification pass.
 
 If missing browser binaries or host dependencies prevent browser verification, report that explicitly. Do not claim the build passed.
 
-For UI or browser behavior changes, the default smoke screenshots only verify that the application starts and the core editor renders. If the changed behavior is not visible in the default screen, exercise and verify the changed state separately. Use the `browser-check` skill for this workflow.
+`npm run build` creates `.artifacts/smoke-chromium.png` and `.artifacts/smoke-firefox.png`; visually inspect both. These smoke tests only verify startup and core rendering, so if the changed behavior is not visible on startup, use Playwright against `http://127.0.0.1:8080` to exercise the exact changed state and verify its behavior, rendered result, page errors, and failed same-origin requests, capturing screenshots when useful.
 
 # Browser support
 
